@@ -1,8 +1,8 @@
 
 const express = require('express');
 const router = express.Router();
-const { registerSubdomain } = require('../controllers/domain.controller');
+const { registerCustomDomain } = require('../controllers/domain.controller');
 
-router.post('/subdomain', registerSubdomain);
+router.post('/custom-domain', registerCustomDomain);
 
 module.exports = router;
