@@ -1,30 +1,42 @@
 
 const Blog = require('../models/blog.model');
+const { checkDomainAvailability, registerDomain } = require('../utils/domainnameapi');
 
-exports.registerSubdomain = async (req, res) => {
-  const { userId, subdomain, title, description, category, niche, template, logo, monetize } = req.body;
+exports.registerCustomDomain = async (req, res) => {
+  const { userId, domain, title, description, category, niche, template, logo, monetize } = req.body;
 
-  if (!subdomain || !userId) {
+  if (!domain || !userId) {
     return res.status(400).json({ error: 'Missing required fields' });
   }
 
-  const existing = await Blog.findOne({ subdomain });
-  if (existing) {
-    return res.status(409).json({ error: 'Subdomain already taken' });
+  try {
+    const availability = await checkDomainAvailability(domain);
+    if (!availability.IsAvailable) {
+      return res.status(409).json({ error: 'Domain not available' });
+    }
+
+    const purchaseResult = await registerDomain(domain);
+    if (!purchaseResult.Success) {
+      return res.status(500).json({ error: 'Failed to register domain' });
+    }
+
+    const blog = new Blog({
+      userId,
+      subdomain: null,
+      domain,
+      title,
+      description,
+      category,
+      niche,
+      template,
+      logo,
+      monetize,
+      type: 'custom'
+    });
+
+    await blog.save();
+    res.status(201).json({ message: 'Custom domain registered successfully', blog });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
-
-  const blog = new Blog({
-    userId,
-    subdomain,
-    title,
-    description,
-    category,
-    niche,
-    template,
-    logo,
-    monetize
-  });
-
-  await blog.save();
-  return res.status(201).json({ message: 'Subdomain registered successfully', blog });
 };
