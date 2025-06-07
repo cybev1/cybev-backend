@@ -1,0 +1,23 @@
+
+// Inside your domain registration controller (subdomain or custom):
+const previewUrl = subdomain
+  ? `https://${subdomain}.cybev.io`
+  : `https://${domain}`;
+
+const blog = new Blog({
+  userId,
+  subdomain,
+  domain,
+  title,
+  description,
+  category,
+  niche,
+  template,
+  logo,
+  monetize,
+  type: subdomain ? 'subdomain' : 'custom',
+  previewUrl,
+  status: 'published'
+});
+
+await blog.save();
