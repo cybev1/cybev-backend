@@ -18,7 +18,6 @@ exports.mintContentNFT = async (req, res) => {
       image: mediaUrl
     };
 
-    // Upload metadata to IPFS via Pinata (or replace with web3.storage)
     const ipfsRes = await axios.post('https://api.pinata.cloud/pinning/pinJSONToIPFS', metadata, {
       headers: {
         'pinata_api_key': process.env.PINATA_API_KEY,
