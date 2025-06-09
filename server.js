@@ -6,8 +6,9 @@ const app = express();
 
 const domainRoutes = require('./routes/domain.routes');
 const stakeRoutes = require('./routes/stake.routes');
-const mintRoutes = require('./routes/mint.routes'); // ✅ previously added
-const mintBadgeRoutes = require('./routes/mint-badge.routes'); // ✅ newly added
+const mintRoutes = require('./routes/mint.routes');
+const mintBadgeRoutes = require('./routes/mint-badge.routes');
+const boostRoutes = require('./routes/boost.routes'); // ✅ newly added
 
 app.use(cors());
 app.use(express.json());
@@ -17,8 +18,9 @@ app.get('/health', (_, res) => res.status(200).send('OK'));
 
 app.use('/api/domains', domainRoutes);
 app.use('/api', stakeRoutes);
-app.use('/api', mintRoutes); // ✅ previously added
-app.use('/api', mintBadgeRoutes); // ✅ newly added
+app.use('/api', mintRoutes);
+app.use('/api', mintBadgeRoutes);
+app.use('/api', boostRoutes); // ✅ newly added
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
