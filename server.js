@@ -8,7 +8,8 @@ const domainRoutes = require('./routes/domain.routes');
 const stakeRoutes = require('./routes/stake.routes');
 const mintRoutes = require('./routes/mint.routes');
 const mintBadgeRoutes = require('./routes/mint-badge.routes');
-const boostRoutes = require('./routes/boost.routes'); // ✅ newly added
+const boostRoutes = require('./routes/boost.routes');
+const boostedRoutes = require('./routes/boosted.routes'); // ✅ newly added
 
 app.use(cors());
 app.use(express.json());
@@ -20,7 +21,8 @@ app.use('/api/domains', domainRoutes);
 app.use('/api', stakeRoutes);
 app.use('/api', mintRoutes);
 app.use('/api', mintBadgeRoutes);
-app.use('/api', boostRoutes); // ✅ newly added
+app.use('/api', boostRoutes);
+app.use('/api', boostedRoutes); // ✅ newly added
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
