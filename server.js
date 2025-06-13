@@ -13,6 +13,7 @@ const boostedRoutes = require('./routes/boosted.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
 const postsRoutes = require('./routes/posts.routes');
 const feedRoutes = require('./routes/feed.routes');
+const storyRoutes = require('./routes/story.routes'); // newly added
 
 app.use(cors());
 app.use(express.json());
@@ -29,6 +30,7 @@ app.use('/api', boostedRoutes);
 app.use('/api', analyticsRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/posts', feedRoutes);
+app.use('/api/stories', storyRoutes); // newly added
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
