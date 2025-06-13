@@ -13,7 +13,10 @@ const boostedRoutes = require('./routes/boosted.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
 const postsRoutes = require('./routes/posts.routes');
 const feedRoutes = require('./routes/feed.routes');
-const storyRoutes = require('./routes/story.routes'); // newly added
+const storyRoutes = require('./routes/story.routes');
+const liveRoutes = require('./routes/live.routes');
+const earningsRoutes = require('./routes/earnings.routes');
+const notificationsRoutes = require('./routes/notifications.routes');
 
 app.use(cors());
 app.use(express.json());
@@ -27,10 +30,13 @@ app.use('/api', mintRoutes);
 app.use('/api', mintBadgeRoutes);
 app.use('/api', boostRoutes);
 app.use('/api', boostedRoutes);
-app.use('/api', analyticsRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api/posts', postsRoutes);
 app.use('/api/posts', feedRoutes);
-app.use('/api/stories', storyRoutes); // newly added
+app.use('/api/stories', storyRoutes);
+app.use('/api/live', liveRoutes);
+app.use('/api/earnings', earningsRoutes);
+app.use('/api/notifications', notificationsRoutes);
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
