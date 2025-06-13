@@ -1,7 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { getPostAnalytics } = require('../controllers/analytics.controller');
+const { getPostAnalytics, getPostsSummary } = require('../controllers/analytics.controller');
 
-router.get('/analytics/post/:postId', getPostAnalytics);
+// GET /api/analytics/post/:postId
+router.get('/post/:postId', getPostAnalytics);
+
+// GET /api/analytics/posts-summary
+router.get('/posts-summary', getPostsSummary);
 
 module.exports = router;
