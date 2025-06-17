@@ -8,13 +8,13 @@ const AUTH = {
 };
 
 exports.checkDomainAvailability = async (domain) => {
-  const url = \`\${DOMAIN_API_BASE}/whois/domain/check?domainName=\${domain}\`;
+  const url = `${DOMAIN_API_BASE}/whois/domain/check?domainName=${domain}`;
   const response = await axios.get(url, { auth: AUTH });
   return response.data;
 };
 
 exports.registerDomain = async (domain) => {
-  const url = \`\${DOMAIN_API_BASE}/domain/purchase\`;
+  const url = `${DOMAIN_API_BASE}/domain/purchase`;
   const response = await axios.post(url, { DomainName: domain, RegisterYears: 1 }, { auth: AUTH });
   return response.data;
 };
