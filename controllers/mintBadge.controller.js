@@ -1,10 +1,14 @@
+
 const { ethers } = require('ethers');
 const axios = require('axios');
 
 const provider = new ethers.JsonRpcProvider(process.env.MUMBAI_RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY, provider);
 const contractABI = require('../abis/CYBEVContentNFT.json');
-const contractAddress = process.env.NFT_CONTRACT_ADDRESS;
+const contractAddress = process.env.CONTRACT_ADDRESS;
+
+console.log("📦 Using contract address for badges:", contractAddress);
+
 const contract = new ethers.Contract(contractAddress, contractABI, wallet);
 
 const badgeImages = {
