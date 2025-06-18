@@ -1,24 +1,17 @@
 
 const fs = require('fs');
 const path = require('path');
-const puppeteer = require('puppeteer');
+const pdf = require('html-pdf');
 
-async function generateAnalyticsPDF(htmlContent, outputPath) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+const generateAnalyticsPDF = (htmlContent, outputPath) => {
+  const options = { format: 'A4', border: '10mm' };
+
+  return new Promise((resolve, reject) => {
+    pdf.create(htmlContent, options).toFile(outputPath, (err, res) => {
+      if (err) return reject(err);
+      resolve(res);
+    });
   });
-  const page = await browser.newPage();
-  await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
-
-  await page.pdf({
-    path: outputPath,
-    format: 'A4',
-    printBackground: true,
-  });
-
-  await browser.close();
-  return outputPath;
-}
+};
 
 module.exports = generateAnalyticsPDF;
