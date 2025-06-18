@@ -1,24 +1,30 @@
 
 const fs = require('fs');
-const path = require('path');
-const puppeteer = require('puppeteer');
+const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 
-async function generateAuditPDF(htmlContent, outputPath) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-  const page = await browser.newPage();
-  await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+const generateAuditPDF = async (textContent, outputPath) => {
+  const pdfDoc = await PDFDocument.create();
+  const page = pdfDoc.addPage([595, 842]); // A4 size
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const { width, height } = page.getSize();
 
-  await page.pdf({
-    path: outputPath,
-    format: 'A4',
-    printBackground: true
-  });
+  const lines = textContent.split('\n');
+  let y = height - 50;
 
-  await browser.close();
-  return outputPath;
-}
+  for (const line of lines) {
+    page.drawText(line, {
+      x: 50,
+      y,
+      size: 12,
+      font,
+      color: rgb(0, 0, 0)
+    });
+    y -= 20;
+    if (y < 40) break;
+  }
+
+  const pdfBytes = await pdfDoc.save();
+  fs.writeFileSync(outputPath, pdfBytes);
+};
 
 module.exports = generateAuditPDF;
