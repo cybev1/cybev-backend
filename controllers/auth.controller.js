@@ -13,7 +13,7 @@ exports.registerUser = async (req, res) => {
     if (existing) return res.status(400).json({ message: 'Email already registered' });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = await User.create({ name, username, email, password: hashedPassword, referralCode });
+    const newUser = await User.create({ name, username, email: email.toLowerCase(), password: hashedPassword, referralCode });
 
     const token = jwt.sign({ id: newUser._id }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, username: newUser.username });
@@ -24,9 +24,15 @@ exports.registerUser = async (req, res) => {
 
 exports.loginUser = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { identifier, password } = req.body;
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({
+      $or: [
+        { email: identifier.toLowerCase() },
+        { username: identifier }
+      ]
+    });
+
     if (!user) return res.status(400).json({ message: 'User not found' });
 
     const isMatch = await bcrypt.compare(password, user.password);
