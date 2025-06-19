@@ -7,7 +7,6 @@ const app = express();
 
 console.log("🔧 Starting CYBEV Backend...");
 
-// Safe dynamic CORS
 const allowedOrigins = ['http://localhost:3000', 'https://app.cybev.io'];
 app.use(cors({
   origin: function (origin, callback) {
