@@ -1,21 +1,12 @@
 
-import fs from 'fs';
-import path from 'path';
+const fs = require('fs');
+const path = require('path');
 
-export async function logAdminActivity(action, meta = {}) {
-  const logPath = path.resolve('./public/admin-logs.json');
-  const log = {
-    timestamp: new Date().toISOString(),
-    action,
-    meta,
-  };
-
-  let data = [];
-  if (fs.existsSync(logPath)) {
-    const raw = fs.readFileSync(logPath);
-    data = JSON.parse(raw);
-  }
-
-  data.unshift(log); // latest first
-  fs.writeFileSync(logPath, JSON.stringify(data, null, 2));
+function logActivity(type, detail) {
+  const logPath = path.join(__dirname, '../logs/admin-activity.log');
+  const timestamp = new Date().toISOString();
+  const entry = `[${timestamp}] [${type}] ${detail}\n`;
+  fs.appendFileSync(logPath, entry);
 }
+
+module.exports = logActivity;
