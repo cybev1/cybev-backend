@@ -4,10 +4,10 @@ const authController = require('../controllers/auth.controller');
 const verifyToken = require('../middleware/verifyToken');
 const User = require('../models/user.model');
 
-router.post('/auth/register', authController.register);
-router.post('/auth/login', authController.login);
+router.post('/register', authController.register);
+router.post('/login', authController.login);
 
-router.get('/auth/me', verifyToken, async (req, res) => {
+router.get('/me', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
     res.json(user);
@@ -16,7 +16,7 @@ router.get('/auth/me', verifyToken, async (req, res) => {
   }
 });
 
-router.post('/auth/update-profile', verifyToken, async (req, res) => {
+router.post('/update-profile', verifyToken, async (req, res) => {
   try {
     const { name, referral } = req.body;
     const user = await User.findByIdAndUpdate(
