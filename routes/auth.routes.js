@@ -4,8 +4,8 @@ const authController = require('../controllers/auth.controller');
 const verifyToken = require('../middleware/verifyToken');
 const User = require('../models/user.model');
 
-router.post('/register', authController.register);
-router.post('/login', authController.login);
+router.post('/register', authController.register);  // ✅ /api/auth/register
+router.post('/login', authController.login);        // ✅ /api/auth/login
 
 router.get('/me', verifyToken, async (req, res) => {
   try {
