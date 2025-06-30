@@ -28,9 +28,9 @@ app.get('/check-cors', (_, res) => {
 app.get('/', (_, res) => res.send('CYBEV Backend is live ✅'));
 app.get('/health', (_, res) => res.status(200).send('OK'));
 
-// Routes
+// Auth route
 const authRoutes = require('./routes/auth.routes');
-app.use('/api/auth', authRoutes);
+app.use('/api/auth', authRoutes);  // ✅ This ensures /api/auth/login and /api/auth/register work
 
 mongoose.connect(process.env.MONGO_URI)
   .then(() => {
