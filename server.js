@@ -10,6 +10,8 @@ console.log('🔧 Starting CYBEV Backend...');
 // ---------- CORS (env-driven with wildcard support) ----------
 const defaultWhitelist = [
   'http://localhost:3000',
+  'https://cybev.io',
+  'https://www.cybev.io',
   'https://*.vercel.app',
   'https://api.cybev.io',
   'https://app.cybev.io',
@@ -40,7 +42,12 @@ function isOriginAllowed(origin) {
 app.use(
   cors({
     origin(origin, cb) {
-      if (isOriginAllowed(origin)) return cb(null, true);
+      console.log('🌐 CORS Check - Origin:', origin);
+      if (isOriginAllowed(origin)) {
+        console.log('✅ Origin allowed');
+        return cb(null, true);
+      }
+      console.log('❌ Origin blocked');
       return cb(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
@@ -79,12 +86,18 @@ app.use('/api/auth', authRoutes); // /api/auth/login, /api/auth/register
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI; // ensure this is set in Railway
 
+if (!MONGO_URI) {
+  console.error('❌ ERROR: MONGO_URI not found in environment variables');
+  process.exit(1);
+}
+
 mongoose
   .connect(MONGO_URI)
   .then(() => {
     console.log('✅ MongoDB connected');
     app.listen(PORT, () => {
       console.log('🚀 CYBEV Server running on PORT', PORT);
+      console.log('🌐 Allowed origins:', whitelist);
     });
   })
   .catch(err => {
