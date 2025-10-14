@@ -4,9 +4,18 @@ const authController = require('../controllers/auth.controller');
 const verifyToken = require('../middleware/verifyToken');
 const User = require('../models/user.model');
 
-// Authentication
-router.post('/register', authController.register);  // ✅ /api/auth/register
-router.post('/login', authController.login);        // ✅ /api/auth/login
+// Handle OPTIONS preflight for all routes
+router.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin);
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
+
+// Authentication routes
+router.post('/register', authController.register);
+router.post('/login', authController.login);
 
 // User Profile
 router.get('/me', verifyToken, async (req, res) => {
@@ -18,7 +27,7 @@ router.get('/me', verifyToken, async (req, res) => {
   }
 });
 
-// ✨ NEW: Profile endpoint (used by login to check onboarding status)
+// Profile endpoint (used by login to check onboarding status)
 router.get('/profile', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
@@ -49,12 +58,11 @@ router.post('/update-profile', verifyToken, async (req, res) => {
   }
 });
 
-// ✨ NEW: Onboarding completion endpoint
+// Onboarding completion endpoint
 router.post('/onboarding', verifyToken, async (req, res) => {
   try {
     const { contentType } = req.body;
     
-    // Validate contentType
     if (!['blog', 'social', 'both'].includes(contentType)) {
       return res.status(400).json({ 
         error: 'Invalid content type. Must be: blog, social, or both' 
@@ -66,7 +74,6 @@ router.post('/onboarding', verifyToken, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Update user preferences
     user.contentType = contentType;
     user.hasCompletedOnboarding = true;
     await user.save();
