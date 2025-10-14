@@ -65,6 +65,13 @@ app.use((err, req, res, next) => {
 
 // ---------- Body parsing ----------
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
 
 // ---------- Diagnostics ----------
 app.get('/check-cors', (req, res) => {
@@ -83,7 +90,8 @@ app.get('/', (req, res) => {
   res.json({ 
     ok: true, 
     message: 'CYBEV Backend is live ✅',
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    features: ['auth', 'blogs', 'rewards', 'domains']
   });
 });
 
@@ -96,20 +104,48 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, ts: Date.now() });
+  res.json({ 
+    ok: true, 
+    ts: Date.now(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
 });
 
 // ---------- Routes ----------
 const authRoutes = require('./routes/auth.routes');
+const blogRoutes = require('./routes/blog.routes');
+const rewardRoutes = require('./routes/reward.routes');
+const domainRoutes = require('./routes/domain.routes');
+
 app.use('/api/auth', authRoutes);
+app.use('/api/blogs', blogRoutes);
+app.use('/api/rewards', rewardRoutes);
+app.use('/api/domain', domainRoutes);
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ 
+    ok: false,
+    error: 'Route not found',
+    path: req.path,
+    method: req.method,
+    availableEndpoints: [
+      '/api/auth',
+      '/api/blogs',
+      '/api/rewards',
+      '/api/domain',
+      '/health'
+    ]
+  });
+});
 
 // ---------- Error Handler ----------
 app.use((err, req, res, next) => {
   console.error('💥 Error:', err);
-  res.status(500).json({ 
+  res.status(err.status || 500).json({ 
     ok: false, 
-    error: 'Internal Server Error',
-    message: err.message 
+    error: err.message || 'Internal Server Error',
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
 
@@ -127,7 +163,23 @@ mongoose
   .then(() => {
     console.log('✅ MongoDB connected');
     app.listen(PORT, () => {
-      console.log('🚀 CYBEV Server running on PORT', PORT);
+      console.log(`
+  ╔══════════════════════════════════════════╗
+  ║   🚀 CYBEV Server Running               ║
+  ║                                          ║
+  ║   Port: ${PORT}                         ║
+  ║   Environment: ${process.env.NODE_ENV || 'development'}              ║
+  ║   MongoDB: Connected                     ║
+  ║                                          ║
+  ║   API Endpoints:                         ║
+  ║   • Auth: /api/auth                      ║
+  ║   • Blogs: /api/blogs                    ║
+  ║   • Rewards: /api/rewards                ║
+  ║   • Domain: /api/domain                  ║
+  ║                                          ║
+  ║   Ready to accept requests! ✨           ║
+  ╚══════════════════════════════════════════╝
+      `);
       console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
     });
   })
@@ -135,3 +187,10 @@ mongoose
     console.error('❌ MongoDB connection failed:', err);
     process.exit(1);
   });
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  mongoose.connection.close();
+  process.exit(0);
+});
