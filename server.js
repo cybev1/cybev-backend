@@ -7,59 +7,60 @@ const cors = require('cors');
 const app = express();
 console.log('🔧 Starting CYBEV Backend...');
 
-// ---------- CORS (env-driven with wildcard support) ----------
-const defaultWhitelist = [
+// ---------- CORS Configuration ----------
+const allowedOrigins = [
   'http://localhost:3000',
   'https://cybev.io',
   'https://www.cybev.io',
-  'https://*.vercel.app',
   'https://api.cybev.io',
-  'https://app.cybev.io',
+  /https:\/\/.*\.vercel\.app$/  // Allow all Vercel preview deployments
 ];
 
-const whitelist = (process.env.CORS_WHITELIST || defaultWhitelist.join(','))
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
-
-function isOriginAllowed(origin) {
-  if (!origin) return true; // allow curl/Postman/no-origin requests
-  return whitelist.some(rule => {
-    if (rule.includes('*')) {
-      // allow subdomain wildcard like https://*.vercel.app
-      const normalized = rule.replace(/^https?:\/\//, '').replace('*.', '');
-      try {
-        const oHost = new URL(origin).host;
-        return oHost.endsWith(normalized);
-      } catch {
-        return false;
-      }
+app.use(cors({
+  origin: function (origin, callback) {
+    console.log('🌐 CORS Check - Origin:', origin);
+    
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) {
+      console.log('✅ No origin - allowing');
+      return callback(null, true);
     }
-    return origin === rule;
-  });
-}
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      console.log('🌐 CORS Check - Origin:', origin);
-      if (isOriginAllowed(origin)) {
-        console.log('✅ Origin allowed');
-        return cb(null, true);
+    // Check if origin is in allowed list or matches Vercel pattern
+    const isAllowed = allowedOrigins.some(allowed => {
+      if (allowed instanceof RegExp) {
+        return allowed.test(origin);
       }
-      console.log('❌ Origin blocked');
-      return cb(new Error(`Not allowed by CORS: ${origin}`));
-    },
-    credentials: true,
-  })
-);
+      return allowed === origin;
+    });
 
-// helpful CORS error response (so you see JSON instead of a crash)
-app.use((err, _req, res, next) => {
+    if (isAllowed) {
+      console.log('✅ Origin allowed:', origin);
+      callback(null, true);
+    } else {
+      console.log('❌ Origin blocked:', origin);
+      callback(new Error(`CORS: Origin ${origin} not allowed`));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Handle preflight requests
+app.options('*', cors());
+
+// CORS error handler
+app.use((err, req, res, next) => {
   if (err && /CORS/i.test(err.message)) {
-    return res.status(403).json({ ok: false, error: 'CORS blocked', detail: err.message });
+    console.error('❌ CORS Error:', err.message);
+    return res.status(403).json({ 
+      ok: false, 
+      error: 'CORS blocked', 
+      detail: err.message 
+    });
   }
-  return next(err);
+  next(err);
 });
 
 // ---------- Body parsing ----------
@@ -67,24 +68,54 @@ app.use(express.json());
 
 // ---------- Diagnostics ----------
 app.get('/check-cors', (req, res) => {
-  const origin = req.headers.origin || '*';
-  res.set('Access-Control-Allow-Origin', origin);
-  res.set('Vary', 'Origin');
-  res.send('✅ CORS working from backend');
+  const origin = req.headers.origin || 'no-origin';
+  console.log('🔍 CORS Check endpoint hit from:', origin);
+  res.json({ 
+    ok: true, 
+    message: 'CORS is working',
+    origin: origin,
+    allowedOrigins: allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o)
+  });
 });
 
 // Root + health
-app.get('/', (_req, res) => res.send('CYBEV Backend is live ✅'));
-app.get('/health', (_req, res) => res.status(200).send('OK'));
-app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/', (req, res) => {
+  res.json({ 
+    ok: true, 
+    message: 'CYBEV Backend is live ✅',
+    timestamp: Date.now()
+  });
+});
+
+app.get('/health', (req, res) => {
+  res.status(200).json({ 
+    ok: true, 
+    status: 'healthy',
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, ts: Date.now() });
+});
 
 // ---------- Routes ----------
 const authRoutes = require('./routes/auth.routes');
-app.use('/api/auth', authRoutes); // /api/auth/login, /api/auth/register
+app.use('/api/auth', authRoutes);
+
+// ---------- Error Handler ----------
+app.use((err, req, res, next) => {
+  console.error('💥 Error:', err);
+  res.status(500).json({ 
+    ok: false, 
+    error: 'Internal Server Error',
+    message: err.message 
+  });
+});
 
 // ---------- Mongo + Start ----------
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI; // ensure this is set in Railway
+const MONGO_URI = process.env.MONGO_URI;
 
 if (!MONGO_URI) {
   console.error('❌ ERROR: MONGO_URI not found in environment variables');
@@ -97,7 +128,7 @@ mongoose
     console.log('✅ MongoDB connected');
     app.listen(PORT, () => {
       console.log('🚀 CYBEV Server running on PORT', PORT);
-      console.log('🌐 Allowed origins:', whitelist);
+      console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
     });
   })
   .catch(err => {
