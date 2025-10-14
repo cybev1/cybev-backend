@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 
 const app = express();
-console.log('🔧 Starting CYBEV Backend...');
+console.log('ðŸ”§ Starting CYBEV Backend...');
 
 // ---------- CORS Configuration ----------
 const allowedOrigins = [
@@ -18,11 +18,11 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: function (origin, callback) {
-    console.log('🌐 CORS Check - Origin:', origin);
+    console.log('ðŸŒ CORS Check - Origin:', origin);
     
     // Allow requests with no origin (like mobile apps or curl)
     if (!origin) {
-      console.log('✅ No origin - allowing');
+      console.log('âœ… No origin - allowing');
       return callback(null, true);
     }
 
@@ -35,10 +35,10 @@ app.use(cors({
     });
 
     if (isAllowed) {
-      console.log('✅ Origin allowed:', origin);
+      console.log('âœ… Origin allowed:', origin);
       callback(null, true);
     } else {
-      console.log('❌ Origin blocked:', origin);
+      console.log('âŒ Origin blocked:', origin);
       callback(new Error(`CORS: Origin ${origin} not allowed`));
     }
   },
@@ -53,7 +53,7 @@ app.options('*', cors());
 // CORS error handler
 app.use((err, req, res, next) => {
   if (err && /CORS/i.test(err.message)) {
-    console.error('❌ CORS Error:', err.message);
+    console.error('âŒ CORS Error:', err.message);
     return res.status(403).json({ 
       ok: false, 
       error: 'CORS blocked', 
@@ -65,18 +65,11 @@ app.use((err, req, res, next) => {
 
 // ---------- Body parsing ----------
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// Request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
-  next();
-});
 
 // ---------- Diagnostics ----------
 app.get('/check-cors', (req, res) => {
   const origin = req.headers.origin || 'no-origin';
-  console.log('🔍 CORS Check endpoint hit from:', origin);
+  console.log('ðŸ” CORS Check endpoint hit from:', origin);
   res.json({ 
     ok: true, 
     message: 'CORS is working',
@@ -89,9 +82,8 @@ app.get('/check-cors', (req, res) => {
 app.get('/', (req, res) => {
   res.json({ 
     ok: true, 
-    message: 'CYBEV Backend is live ✅',
-    timestamp: Date.now(),
-    features: ['auth', 'blogs', 'rewards', 'domains']
+    message: 'CYBEV Backend is live âœ…',
+    timestamp: Date.now()
   });
 });
 
@@ -104,48 +96,20 @@ app.get('/health', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    ok: true, 
-    ts: Date.now(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-  });
+  res.json({ ok: true, ts: Date.now() });
 });
 
 // ---------- Routes ----------
 const authRoutes = require('./routes/auth.routes');
-const blogRoutes = require('./routes/blog.routes');
-const rewardRoutes = require('./routes/reward.routes');
-const domainRoutes = require('./routes/domain.routes');
-
 app.use('/api/auth', authRoutes);
-app.use('/api/blogs', blogRoutes);
-app.use('/api/rewards', rewardRoutes);
-app.use('/api/domain', domainRoutes);
-
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ 
-    ok: false,
-    error: 'Route not found',
-    path: req.path,
-    method: req.method,
-    availableEndpoints: [
-      '/api/auth',
-      '/api/blogs',
-      '/api/rewards',
-      '/api/domain',
-      '/health'
-    ]
-  });
-});
 
 // ---------- Error Handler ----------
 app.use((err, req, res, next) => {
-  console.error('💥 Error:', err);
-  res.status(err.status || 500).json({ 
+  console.error('ðŸ’¥ Error:', err);
+  res.status(500).json({ 
     ok: false, 
-    error: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    error: 'Internal Server Error',
+    message: err.message 
   });
 });
 
@@ -154,43 +118,20 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
 if (!MONGO_URI) {
-  console.error('❌ ERROR: MONGO_URI not found in environment variables');
+  console.error('âŒ ERROR: MONGO_URI not found in environment variables');
   process.exit(1);
 }
 
 mongoose
   .connect(MONGO_URI)
   .then(() => {
-    console.log('✅ MongoDB connected');
+    console.log('âœ… MongoDB connected');
     app.listen(PORT, () => {
-      console.log(`
-  ╔══════════════════════════════════════════╗
-  ║   🚀 CYBEV Server Running               ║
-  ║                                          ║
-  ║   Port: ${PORT}                         ║
-  ║   Environment: ${process.env.NODE_ENV || 'development'}              ║
-  ║   MongoDB: Connected                     ║
-  ║                                          ║
-  ║   API Endpoints:                         ║
-  ║   • Auth: /api/auth                      ║
-  ║   • Blogs: /api/blogs                    ║
-  ║   • Rewards: /api/rewards                ║
-  ║   • Domain: /api/domain                  ║
-  ║                                          ║
-  ║   Ready to accept requests! ✨           ║
-  ╚══════════════════════════════════════════╝
-      `);
-      console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
+      console.log('ðŸš€ CYBEV Server running on PORT', PORT);
+      console.log('ðŸŒ Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
     });
   })
   .catch(err => {
-    console.error('❌ MongoDB connection failed:', err);
+    console.error('âŒ MongoDB connection failed:', err);
     process.exit(1);
   });
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
-  mongoose.connection.close();
-  process.exit(0);
-});
