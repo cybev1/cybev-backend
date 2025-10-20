@@ -12,12 +12,12 @@ router.post('/check', authenticateToken, async (req, res) => {
     
     if (!domain || !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]\.[a-zA-Z]{2,}$/.test(domain)) {
       return res.status(400).json({ 
+        ok: false,
         error: 'Invalid domain format',
         available: false
       });
     }
     
-    // Check if domain already taken by another user
     const existingUser = await User.findOne({ 
       customDomain: domain,
       _id: { $ne: req.user.id }
@@ -25,33 +25,35 @@ router.post('/check', authenticateToken, async (req, res) => {
     
     if (existingUser) {
       return res.json({
+        ok: false,
         available: false,
         error: 'Domain already connected to another account'
       });
     }
     
-    // Check DNS records
     try {
       const records = await dns.resolve4(domain);
       
       res.json({
+        ok: true,
         available: true,
         dnsConfigured: records && records.length > 0,
         currentIPs: records,
         requiredConfig: {
           type: 'A',
           name: '@',
-          value: '76.76.21.21', // Your server IP
+          value: '76.76.21.21',
           instructions: [
             'Go to your domain registrar DNS settings',
             'Add an A record pointing to 76.76.21.21',
-            'Or add a CNAME record pointing to yourblog.com',
+            'Or add a CNAME record pointing to cybev.io',
             'Wait 5-10 minutes for DNS propagation'
           ]
         }
       });
     } catch (dnsError) {
       res.json({
+        ok: true,
         available: true,
         dnsConfigured: false,
         error: 'DNS not configured yet',
@@ -62,7 +64,7 @@ router.post('/check', authenticateToken, async (req, res) => {
           instructions: [
             'Go to your domain registrar DNS settings',
             'Add an A record pointing to 76.76.21.21',
-            'Or add a CNAME record pointing to yourblog.com',
+            'Or add a CNAME record pointing to cybev.io',
             'Wait 5-10 minutes for DNS propagation'
           ]
         }
@@ -70,6 +72,7 @@ router.post('/check', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ 
+      ok: false,
       error: error.message,
       available: false
     });
@@ -81,13 +84,13 @@ router.post('/verify', authenticateToken, async (req, res) => {
   try {
     const { domain } = req.body;
     
-    // Verify DNS is properly configured
     try {
       const records = await dns.resolve4(domain);
       const expectedIP = '76.76.21.21';
       
       if (!records.includes(expectedIP)) {
         return res.status(400).json({
+          ok: false,
           verified: false,
           error: 'DNS records do not point to our server',
           currentIPs: records,
@@ -95,31 +98,25 @@ router.post('/verify', authenticateToken, async (req, res) => {
         });
       }
       
-      // Update user with custom domain
       const user = await User.findById(req.user.id);
       user.customDomain = domain;
       user.domainVerified = true;
       await user.save();
       
-      // Reward tokens for domain setup
       let wallet = await Wallet.findOne({ user: req.user.id });
       if (!wallet) {
         wallet = new Wallet({ user: req.user.id });
       }
       
-      await wallet.addTokens(
-        200,
-        'DOMAIN_SETUP',
-        `Connected custom domain: ${domain}`
-      );
+      await wallet.addTokens(200, 'DOMAIN_SETUP', `Connected custom domain: ${domain}`);
       
-      // Add achievement
       if (!wallet.achievements.includes('DOMAIN_MASTER')) {
         wallet.achievements.push('DOMAIN_MASTER');
         await wallet.save();
       }
       
       res.json({
+        ok: true,
         verified: true,
         message: 'Domain successfully connected!',
         tokensEarned: 200,
@@ -128,6 +125,7 @@ router.post('/verify', authenticateToken, async (req, res) => {
       
     } catch (dnsError) {
       res.status(400).json({
+        ok: false,
         verified: false,
         error: 'Unable to verify DNS records. Please check your configuration.',
         details: dnsError.message
@@ -135,6 +133,7 @@ router.post('/verify', authenticateToken, async (req, res) => {
     }
   } catch (error) {
     res.status(500).json({ 
+      ok: false,
       verified: false,
       error: error.message 
     });
@@ -148,18 +147,19 @@ router.get('/status', authenticateToken, async (req, res) => {
     
     if (!user.customDomain) {
       return res.json({
+        ok: true,
         hasCustomDomain: false,
         domain: null,
         verified: false
       });
     }
     
-    // Check if domain is still pointing correctly
     try {
       const records = await dns.resolve4(user.customDomain);
       const isValid = records.includes('76.76.21.21');
       
       res.json({
+        ok: true,
         hasCustomDomain: true,
         domain: user.customDomain,
         verified: user.domainVerified && isValid,
@@ -168,6 +168,7 @@ router.get('/status', authenticateToken, async (req, res) => {
       });
     } catch (dnsError) {
       res.json({
+        ok: true,
         hasCustomDomain: true,
         domain: user.customDomain,
         verified: false,
@@ -176,7 +177,7 @@ router.get('/status', authenticateToken, async (req, res) => {
       });
     }
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -186,7 +187,7 @@ router.delete('/remove', authenticateToken, async (req, res) => {
     const user = await User.findById(req.user.id);
     
     if (!user.customDomain) {
-      return res.status(400).json({ error: 'No custom domain configured' });
+      return res.status(400).json({ ok: false, error: 'No custom domain configured' });
     }
     
     user.customDomain = null;
@@ -194,11 +195,12 @@ router.delete('/remove', authenticateToken, async (req, res) => {
     await user.save();
     
     res.json({ 
+      ok: true,
       message: 'Custom domain removed successfully',
-      defaultUrl: `${process.env.APP_URL}/blog/${user.username}`
+      defaultUrl: `https://cybev.io/blog/${user.username}`
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
