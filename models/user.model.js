@@ -82,7 +82,6 @@ const userSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Hash password before saving
 userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   
@@ -95,7 +94,6 @@ userSchema.pre('save', async function(next) {
   }
 });
 
-// Generate username from email if not provided
 userSchema.pre('save', async function(next) {
   if (!this.username && this.email) {
     const baseUsername = this.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -112,27 +110,23 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
-// Method to compare password
 userSchema.methods.comparePassword = async function(candidatePassword) {
   return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Remove password from JSON response
 userSchema.methods.toJSON = function() {
   const obj = this.toObject();
   delete obj.password;
   return obj;
 };
 
-// Virtual for profile URL
 userSchema.virtual('profileUrl').get(function() {
   if (this.customDomain && this.domainVerified) {
     return `https://${this.customDomain}`;
   }
-  return `${process.env.APP_URL}/blog/${this.username}`;
+  return `${process.env.APP_URL || 'https://cybev.io'}/blog/${this.username}`;
 });
 
-// Indexes
 userSchema.index({ email: 1 });
 userSchema.index({ username: 1 });
 userSchema.index({ customDomain: 1 });
