@@ -75,7 +75,6 @@ const walletSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Method to add tokens
 walletSchema.methods.addTokens = function(amount, type, description, relatedBlog = null) {
   this.balance += amount;
   this.totalEarned += amount;
@@ -88,7 +87,6 @@ walletSchema.methods.addTokens = function(amount, type, description, relatedBlog
   return this.save();
 };
 
-// Method to check and update streak
 walletSchema.methods.updateStreak = function() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -114,7 +112,6 @@ walletSchema.methods.updateStreak = function() {
   return this.save();
 };
 
-// Indexes
 walletSchema.index({ user: 1 });
 walletSchema.index({ 'transactions.timestamp': -1 });
 
