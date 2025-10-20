@@ -38,6 +38,7 @@ router.get('/', async (req, res) => {
     const total = await Blog.countDocuments(query);
     
     res.json({
+      ok: true,
       blogs,
       pagination: {
         total,
@@ -47,7 +48,7 @@ router.get('/', async (req, res) => {
       }
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -58,16 +59,15 @@ router.get('/:id', async (req, res) => {
       .populate('author', 'name email');
     
     if (!blog) {
-      return res.status(404).json({ error: 'Blog not found' });
+      return res.status(404).json({ ok: false, error: 'Blog not found' });
     }
     
-    // Increment view count
     blog.views += 1;
     await blog.save();
     
-    res.json(blog);
+    res.json({ ok: true, blog });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -87,23 +87,14 @@ router.post('/', authenticateToken, async (req, res) => {
     
     await blog.save();
     
-    // Reward user with tokens
     let wallet = await Wallet.findOne({ user: req.user.id });
     if (!wallet) {
       wallet = new Wallet({ user: req.user.id });
     }
     
-    await wallet.addTokens(
-      50, 
-      'BLOG_POST', 
-      `Published: ${title}`,
-      blog._id
-    );
-    
-    // Update streak
+    await wallet.addTokens(50, 'BLOG_POST', `Published: ${title}`, blog._id);
     await wallet.updateStreak();
     
-    // Check for achievements
     if (!wallet.achievements.includes('FIRST_POST')) {
       wallet.achievements.push('FIRST_POST');
       await wallet.addTokens(25, 'BONUS', 'First post achievement!');
@@ -117,12 +108,13 @@ router.post('/', authenticateToken, async (req, res) => {
     await wallet.save();
     
     res.status(201).json({ 
+      ok: true,
       blog, 
       tokensEarned: 50,
       currentStreak: wallet.streaks.current
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -132,11 +124,11 @@ router.put('/:id', authenticateToken, async (req, res) => {
     const blog = await Blog.findById(req.params.id);
     
     if (!blog) {
-      return res.status(404).json({ error: 'Blog not found' });
+      return res.status(404).json({ ok: false, error: 'Blog not found' });
     }
     
     if (blog.author.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Not authorized' });
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
     
     const { title, content, category, tags, status } = req.body;
@@ -149,9 +141,9 @@ router.put('/:id', authenticateToken, async (req, res) => {
     
     await blog.save();
     
-    res.json(blog);
+    res.json({ ok: true, blog });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -161,18 +153,18 @@ router.delete('/:id', authenticateToken, async (req, res) => {
     const blog = await Blog.findById(req.params.id);
     
     if (!blog) {
-      return res.status(404).json({ error: 'Blog not found' });
+      return res.status(404).json({ ok: false, error: 'Blog not found' });
     }
     
     if (blog.author.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Not authorized' });
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
     
     await blog.deleteOne();
     
-    res.json({ message: 'Blog deleted successfully' });
+    res.json({ ok: true, message: 'Blog deleted successfully' });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -182,45 +174,38 @@ router.post('/:id/like', authenticateToken, async (req, res) => {
     const blog = await Blog.findById(req.params.id);
     
     if (!blog) {
-      return res.status(404).json({ error: 'Blog not found' });
+      return res.status(404).json({ ok: false, error: 'Blog not found' });
     }
     
     const userIndex = blog.likes.indexOf(req.user.id);
     let liked = false;
     
     if (userIndex > -1) {
-      // Unlike
       blog.likes.splice(userIndex, 1);
       liked = false;
     } else {
-      // Like
       blog.likes.push(req.user.id);
       liked = true;
       
-      // Reward blog author with tokens (not self-likes)
       if (blog.author.toString() !== req.user.id) {
         let authorWallet = await Wallet.findOne({ user: blog.author });
         if (!authorWallet) {
           authorWallet = new Wallet({ user: blog.author });
         }
         
-        await authorWallet.addTokens(
-          5,
-          'BLOG_LIKE',
-          `Like received on: ${blog.title}`,
-          blog._id
-        );
+        await authorWallet.addTokens(5, 'BLOG_LIKE', `Like received on: ${blog.title}`, blog._id);
       }
     }
     
     await blog.save();
     
     res.json({ 
+      ok: true,
       liked, 
       likeCount: blog.likes.length 
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -230,9 +215,9 @@ router.get('/user/my-blogs', authenticateToken, async (req, res) => {
     const blogs = await Blog.find({ author: req.user.id })
       .sort({ createdAt: -1 });
     
-    res.json(blogs);
+    res.json({ ok: true, blogs });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -250,9 +235,9 @@ router.get('/trending/top', async (req, res) => {
       .sort({ views: -1, likes: -1 })
       .limit(6);
     
-    res.json(blogs);
+    res.json({ ok: true, blogs });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
