@@ -49,7 +49,7 @@ const blogSchema = new mongoose.Schema({
     default: 0
   },
   readTime: {
-    type: Number, // in minutes
+    type: Number,
     default: 5
   },
   featured: {
@@ -69,18 +69,15 @@ const blogSchema = new mongoose.Schema({
   timestamps: true
 });
 
-// Indexes for better query performance
 blogSchema.index({ category: 1, createdAt: -1 });
 blogSchema.index({ author: 1 });
 blogSchema.index({ featured: 1 });
 blogSchema.index({ status: 1 });
 
-// Virtual for like count
 blogSchema.virtual('likeCount').get(function() {
   return this.likes.length;
 });
 
-// Calculate read time based on content length
 blogSchema.pre('save', function(next) {
   if (this.isModified('content')) {
     const wordsPerMinute = 200;
