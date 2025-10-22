@@ -1,5 +1,8 @@
-```javascript
+// ============================================
+// FILE: server/utils/notifications.js
+// ============================================
 const Notification = require('../models/notification.model');
+const { emitNotification } = require('../socket');
 
 async function createNotification({
   recipient,
@@ -10,18 +13,16 @@ async function createNotification({
   message
 }) {
   try {
-    // Don't notify if sender is the same as recipient
     if (recipient.toString() === sender.toString()) {
       return null;
     }
 
-    // Check if similar notification already exists (to prevent spam)
     const existingNotification = await Notification.findOne({
       recipient,
       sender,
       type,
       target,
-      createdAt: { $gte: new Date(Date.now() - 60000) } // Last minute
+      createdAt: { $gte: new Date(Date.now() - 60000) }
     });
 
     if (existingNotification) {
@@ -38,6 +39,12 @@ async function createNotification({
     });
 
     await notification.save();
+
+    const populatedNotification = await Notification.findById(notification._id)
+      .populate('sender', 'username name avatar');
+
+    emitNotification(recipient, populatedNotification);
+
     return notification;
   } catch (error) {
     console.error('Create notification error:', error);
@@ -46,6 +53,3 @@ async function createNotification({
 }
 
 module.exports = { createNotification };
-```
-
----
