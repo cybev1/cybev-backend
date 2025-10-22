@@ -1,13 +1,16 @@
+// ============================================
+// FILE: server/routes/blog.routes.js
+// ============================================
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
 const Wallet = require('../models/wallet.model');
 const { authenticateToken } = require('../middleware/auth');
+const { createNotification } = require('../utils/notifications');
 
-// Get all blogs with filtering and pagination
 router.get('/', async (req, res) => {
   try {
-    const { category, search, page = 1, limit = 12, featured } = req.query;
+    const { category, search, page = 1, limit = 12, featured, author } = req.query;
     
     const query = { status: 'published' };
     
@@ -17,6 +20,14 @@ router.get('/', async (req, res) => {
     
     if (featured === 'true') {
       query.featured = true;
+    }
+    
+    if (author) {
+      const User = require('../models/user.model');
+      const user = await User.findOne({ username: author });
+      if (user) {
+        query.author = user._id;
+      }
     }
     
     if (search) {
@@ -30,7 +41,7 @@ router.get('/', async (req, res) => {
     const skip = (page - 1) * limit;
     
     const blogs = await Blog.find(query)
-      .populate('author', 'name email')
+      .populate('author', 'name username email avatar')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -52,11 +63,10 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get single blog by ID
 router.get('/:id', async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id)
-      .populate('author', 'name email');
+      .populate('author', 'name username email avatar');
     
     if (!blog) {
       return res.status(404).json({ ok: false, error: 'Blog not found' });
@@ -71,7 +81,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// Create new blog (protected)
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const { title, content, category, tags } = req.body;
@@ -118,7 +127,6 @@ router.post('/', authenticateToken, async (req, res) => {
   }
 });
 
-// Update blog (protected)
 router.put('/:id', authenticateToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
@@ -147,7 +155,6 @@ router.put('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete blog (protected)
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
@@ -168,7 +175,6 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Like/Unlike blog (protected)
 router.post('/:id/like', authenticateToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
@@ -194,6 +200,16 @@ router.post('/:id/like', authenticateToken, async (req, res) => {
         }
         
         await authorWallet.addTokens(5, 'BLOG_LIKE', `Like received on: ${blog.title}`, blog._id);
+        
+        // NEW: Create notification for like
+        await createNotification({
+          recipient: blog.author,
+          sender: req.user.id,
+          type: 'like',
+          targetModel: 'Blog',
+          target: blog._id,
+          message: `liked your post "${blog.title}"`
+        });
       }
     }
     
@@ -209,7 +225,6 @@ router.post('/:id/like', authenticateToken, async (req, res) => {
   }
 });
 
-// Get user's blogs (protected)
 router.get('/user/my-blogs', authenticateToken, async (req, res) => {
   try {
     const blogs = await Blog.find({ author: req.user.id })
@@ -221,7 +236,6 @@ router.get('/user/my-blogs', authenticateToken, async (req, res) => {
   }
 });
 
-// Get trending blogs
 router.get('/trending/top', async (req, res) => {
   try {
     const threeDaysAgo = new Date();
@@ -231,11 +245,28 @@ router.get('/trending/top', async (req, res) => {
       status: 'published',
       createdAt: { $gte: threeDaysAgo }
     })
-      .populate('author', 'name email')
+      .populate('author', 'name username email avatar')
       .sort({ views: -1, likes: -1 })
       .limit(6);
     
     res.json({ ok: true, blogs });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// NEW: Get trending tags
+router.get('/trending-tags', async (req, res) => {
+  try {
+    const tags = await Blog.aggregate([
+      { $match: { status: 'published' } },
+      { $unwind: '$tags' },
+      { $group: { _id: '$tags', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 20 }
+    ]);
+
+    res.json({ ok: true, tags: tags.map(t => t._id) });
   } catch (error) {
     res.status(500).json({ ok: false, error: error.message });
   }
