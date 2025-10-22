@@ -46,6 +46,15 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // NEW: Follow system counts
+  followerCount: {
+    type: Number,
+    default: 0
+  },
+  followingCount: {
+    type: Number,
+    default: 0
+  },
   socialLinks: {
     twitter: String,
     linkedin: String,
