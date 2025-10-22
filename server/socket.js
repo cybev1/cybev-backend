@@ -1,4 +1,6 @@
-```javascript
+// ============================================
+// FILE: server/socket.js
+// ============================================
 const socketIo = require('socket.io');
 
 let io;
@@ -7,21 +9,21 @@ function initializeSocket(server) {
   io = socketIo(server, {
     cors: {
       origin: process.env.CLIENT_URL || 'http://localhost:3000',
-      credentials: true
+      credentials: true,
+      methods: ['GET', 'POST']
     }
   });
 
   io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+    console.log('✅ User connected:', socket.id);
 
-    // Join user's personal room
     socket.on('join', (userId) => {
       socket.join(`user:${userId}`);
-      console.log(`User ${userId} joined their room`);
+      console.log(`👤 User ${userId} joined their room`);
     });
 
     socket.on('disconnect', () => {
-      console.log('User disconnected:', socket.id);
+      console.log('👋 User disconnected:', socket.id);
     });
   });
 
@@ -35,7 +37,6 @@ function getIO() {
   return io;
 }
 
-// Emit notification to user
 function emitNotification(userId, notification) {
   if (io) {
     io.to(`user:${userId}`).emit('notification', notification);
@@ -43,4 +44,3 @@ function emitNotification(userId, notification) {
 }
 
 module.exports = { initializeSocket, getIO, emitNotification };
-```
