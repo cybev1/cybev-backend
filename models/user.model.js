@@ -55,6 +55,18 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // NEW: Onboarding fields
+  hasCompletedOnboarding: {
+    type: Boolean,
+    default: false
+  },
+  onboardingData: {
+    fullName: String,
+    role: String,
+    goals: [String],
+    experience: String,
+    completedAt: Date
+  },
   socialLinks: {
     twitter: String,
     linkedin: String,
