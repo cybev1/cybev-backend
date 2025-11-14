@@ -30,15 +30,34 @@ router.get('/me', verifyToken, async (req, res) => {
 // Profile endpoint (used by login to check onboarding status)
 router.get('/profile', verifyToken, async (req, res) => {
   try {
+    console.log('📋 Fetching profile for user:', req.user.id);
+    
     const user = await User.findById(req.user.id).select('-password');
-    res.json({
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const profile = {
       id: user._id,
       name: user.name,
       email: user.email,
+      username: user.username,
       hasCompletedOnboarding: user.hasCompletedOnboarding || false,
-      contentType: user.contentType || null
+      onboardingData: user.onboardingData || null,
+      avatar: user.avatar,
+      bio: user.bio
+    };
+
+    console.log('✅ Profile data:', {
+      id: profile.id,
+      hasCompletedOnboarding: profile.hasCompletedOnboarding,
+      hasOnboardingData: !!profile.onboardingData
     });
-  } catch {
+
+    res.json(profile);
+  } catch (error) {
+    console.error('❌ Profile fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch profile' });
   }
 });
@@ -58,7 +77,64 @@ router.post('/update-profile', verifyToken, async (req, res) => {
   }
 });
 
-// Onboarding completion endpoint
+// Complete Onboarding endpoint
+router.put('/complete-onboarding', verifyToken, async (req, res) => {
+  try {
+    const { fullName, role, goals, experience } = req.body;
+    
+    console.log('💾 Saving onboarding data for user:', req.user.id);
+    console.log('📋 Onboarding data:', { fullName, role, goals, experience });
+    
+    // Validation
+    if (!role || !goals || !experience) {
+      console.log('❌ Missing required fields');
+      return res.status(400).json({ 
+        error: 'Missing required fields: role, goals, experience' 
+      });
+    }
+    
+    // Find user
+    const user = await User.findById(req.user.id);
+    
+    if (!user) {
+      console.log('❌ User not found');
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Update onboarding data
+    user.hasCompletedOnboarding = true;
+    user.onboardingData = {
+      fullName: fullName || user.name,
+      role,
+      goals,
+      experience,
+      completedAt: new Date()
+    };
+    
+    await user.save();
+    
+    console.log('✅ Onboarding completed successfully for:', user.email);
+    
+    res.json({
+      success: true,
+      message: 'Onboarding completed successfully',
+      user: {
+        id: user._id,
+        hasCompletedOnboarding: user.hasCompletedOnboarding,
+        onboardingData: user.onboardingData
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Onboarding save error:', error);
+    res.status(500).json({ 
+      error: 'Failed to save onboarding data',
+      message: error.message 
+    });
+  }
+});
+
+// Legacy onboarding endpoint (keep for backward compatibility)
 router.post('/onboarding', verifyToken, async (req, res) => {
   try {
     const { contentType } = req.body;
