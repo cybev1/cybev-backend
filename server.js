@@ -1,5 +1,6 @@
 // ============================================
 // FILE: server/server.js
+// CYBEV Backend with AI Content Engine
 // ============================================
 require('dotenv').config();
 const express = require('express');
@@ -84,7 +85,23 @@ app.get('/', (req, res) => {
     ok: true, 
     message: 'CYBEV Backend is live ✅',
     timestamp: Date.now(),
-    features: ['auth', 'blogs', 'rewards', 'domains', 'comments', 'bookmarks', 'follow', 'notifications']
+    features: [
+      'auth', 
+      'blogs', 
+      'rewards', 
+      'domains', 
+      'comments', 
+      'bookmarks', 
+      'follow', 
+      'notifications',
+      'ai-generation',
+      'content-engine',
+      'seo-optimization',
+      'image-generation',
+      'viral-hashtags',
+      'nft-minting',
+      'token-staking'
+    ]
   });
 });
 
@@ -92,7 +109,13 @@ app.get('/health', (req, res) => {
   res.status(200).json({ 
     ok: true, 
     status: 'healthy',
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    ai: {
+      claude: !!process.env.ANTHROPIC_API_KEY,
+      deepseek: !!process.env.DEEPSEEK_API_KEY,
+      unsplash: !!process.env.UNSPLASH_ACCESS_KEY,
+      pexels: !!process.env.PEXELS_API_KEY
+    }
   });
 });
 
@@ -100,7 +123,11 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     ts: Date.now(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    services: {
+      ai: !!process.env.ANTHROPIC_API_KEY || !!process.env.DEEPSEEK_API_KEY,
+      images: !!process.env.UNSPLASH_ACCESS_KEY || !!process.env.PEXELS_API_KEY
+    }
   });
 });
 
@@ -129,6 +156,10 @@ try {
   const feedRoutes = require('./routes/feed.routes');
   const notificationRoutes = require('./routes/notification.routes');
   
+  // 🤖 AI & Content Engine Routes
+  const aiRoutes = require('./routes/ai.routes');
+  const contentRoutes = require('./routes/content.routes');
+  
   app.use('/api/blogs', blogRoutes);
   app.use('/api/rewards', rewardRoutes);
   app.use('/api/domain', domainRoutes);
@@ -138,9 +169,15 @@ try {
   app.use('/api/feed', feedRoutes);
   app.use('/api/notifications', notificationRoutes);
   
-  console.log('✅ All routes loaded');
+  // 🚀 AI & Content Engine
+  app.use('/api/ai', aiRoutes);
+  app.use('/api/content', contentRoutes);
+  
+  console.log('✅ All routes loaded successfully!');
+  console.log('🤖 AI routes: /api/ai');
+  console.log('📝 Content routes: /api/content');
 } catch (error) {
-  console.log('⚠️  Some routes not loaded:', error.message);
+  console.log('⚠️ Some routes not loaded:', error.message);
 }
 
 // 404 handler
@@ -172,6 +209,15 @@ if (!MONGO_URI) {
   process.exit(1);
 }
 
+// Log API key status (without revealing keys)
+console.log('\n🔑 API Keys Status:');
+console.log('  MongoDB:', MONGO_URI ? '✅' : '❌');
+console.log('  Claude AI:', process.env.ANTHROPIC_API_KEY ? '✅' : '❌');
+console.log('  DeepSeek AI:', process.env.DEEPSEEK_API_KEY ? '✅' : '❌');
+console.log('  Unsplash Images:', process.env.UNSPLASH_ACCESS_KEY ? '✅' : '⚠️ (using fallback)');
+console.log('  Pexels Images:', process.env.PEXELS_API_KEY ? '✅' : '⚠️ (optional)');
+console.log('');
+
 mongoose
   .connect(MONGO_URI)
   .then(() => {
@@ -179,7 +225,16 @@ mongoose
     server.listen(PORT, () => {
       console.log(`🚀 CYBEV Server running on PORT ${PORT}`);
       console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
-      console.log('✨ Server ready!');
+      console.log('✨ Content Engine Ready!');
+      console.log('   🤖 AI Blog Generation: /api/content/create-blog');
+      console.log('   🏗️ Website Templates: /api/content/create-template');
+      console.log('   🔍 SEO Generation: /api/content/generate-seo');
+      console.log('   🔥 Viral Hashtags: /api/content/generate-hashtags');
+      console.log('   🖼️ Featured Images: /api/content/get-featured-image');
+      console.log('   💎 NFT Minting: /api/content/mint-nft');
+      console.log('   💰 Token Staking: /api/content/stake');
+      console.log('');
+      console.log('🎉 Server ready to create amazing content!');
     });
   })
   .catch(err => {
