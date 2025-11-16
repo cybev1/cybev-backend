@@ -120,6 +120,20 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
       });
     }
 
+    // Map niche to valid category enum
+    const categoryMap = {
+      'technology': 'Tech',
+      'business': 'Business',
+      'health': 'Health',
+      'lifestyle': 'Lifestyle',
+      'education': 'Education',
+      'finance': 'Finance',
+      'entertainment': 'Entertainment',
+      'food': 'Food'
+    };
+    
+    const validCategory = categoryMap[blogData.niche?.toLowerCase()] || 'Tech';
+
     // Create blog in database
     const newBlog = await Blog.create({
       title: blogData.title,
@@ -127,7 +141,7 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
       summary: blogData.summary || blogData.content?.substring(0, 200),
       author: req.user.id,
       authorName: req.user.name || req.user.username || 'Anonymous', // Add author name
-      category: blogData.category || 'Technology', // Use proper enum value
+      category: validCategory, // Use mapped category
       tags: blogData.seo?.keywords?.slice(0, 10) || [],
       
       // SEO fields
