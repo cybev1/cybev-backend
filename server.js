@@ -146,64 +146,101 @@ app.get('/check-cors', (req, res) => {
 const authRoutes = require('./routes/auth.routes');
 app.use('/api/auth', authRoutes);
 
+console.log('📦 Loading routes...');
+
+// Load each route individually with try-catch
+// This way, one broken model won't crash everything!
+
 try {
-  console.log('📦 Loading routes...');
-  
   const blogRoutes = require('./routes/blog.routes');
-  console.log('  ✅ blog.routes loaded');
-  
-  const rewardRoutes = require('./routes/reward.routes');
-  console.log('  ✅ reward.routes loaded');
-  
-  const domainRoutes = require('./routes/domain.routes');
-  console.log('  ✅ domain.routes loaded');
-  
-  const commentRoutes = require('./routes/comment.routes');
-  console.log('  ✅ comment.routes loaded');
-  
-  const bookmarkRoutes = require('./routes/bookmark.routes');
-  console.log('  ✅ bookmark.routes loaded');
-  
-  const followRoutes = require('./routes/follow.routes');
-  console.log('  ✅ follow.routes loaded');
-  
-  const feedRoutes = require('./routes/feed.routes');
-  console.log('  ✅ feed.routes loaded');
-  
-  // TEMPORARILY DISABLED - notification.model.js has syntax error on line 57
-  // const notificationRoutes = require('./routes/notification.routes');
-  // console.log('  ✅ notification.routes loaded');
-  
-  // 🤖 AI & Content Engine Routes
-  console.log('  📡 Loading AI routes...');
-  const aiRoutes = require('./routes/ai.routes');
-  console.log('  ✅ ai.routes loaded');
-  
-  console.log('  📡 Loading Content routes...');
-  const contentRoutes = require('./routes/content.routes');
-  console.log('  ✅ content.routes loaded');
-  
   app.use('/api/blogs', blogRoutes);
-  app.use('/api/rewards', rewardRoutes);
-  app.use('/api/domain', domainRoutes);
-  app.use('/api/comments', commentRoutes);
-  app.use('/api/bookmarks', bookmarkRoutes);
-  app.use('/api/follow', followRoutes);
-  app.use('/api/feed', feedRoutes);
-  // app.use('/api/notifications', notificationRoutes); // TEMPORARILY DISABLED
-  
-  // 🚀 AI & Content Engine
-  app.use('/api/ai', aiRoutes);
-  app.use('/api/content', contentRoutes);
-  
-  console.log('✅ All routes loaded successfully!');
-  console.log('🤖 AI routes: /api/ai');
-  console.log('📝 Content routes: /api/content');
-  console.log('⚠️ Notification routes temporarily disabled (model syntax error)');
+  console.log('  ✅ blog.routes loaded');
 } catch (error) {
-  console.log('❌ Route loading error:', error.message);
-  console.log('📍 Error stack:', error.stack);
+  console.log('  ❌ blog.routes failed:', error.message);
 }
+
+try {
+  const rewardRoutes = require('./routes/reward.routes');
+  app.use('/api/rewards', rewardRoutes);
+  console.log('  ✅ reward.routes loaded');
+} catch (error) {
+  console.log('  ❌ reward.routes failed:', error.message);
+}
+
+try {
+  const domainRoutes = require('./routes/domain.routes');
+  app.use('/api/domain', domainRoutes);
+  console.log('  ✅ domain.routes loaded');
+} catch (error) {
+  console.log('  ❌ domain.routes failed:', error.message);
+}
+
+try {
+  const commentRoutes = require('./routes/comment.routes');
+  app.use('/api/comments', commentRoutes);
+  console.log('  ✅ comment.routes loaded');
+} catch (error) {
+  console.log('  ❌ comment.routes failed:', error.message);
+}
+
+try {
+  const bookmarkRoutes = require('./routes/bookmark.routes');
+  app.use('/api/bookmarks', bookmarkRoutes);
+  console.log('  ✅ bookmark.routes loaded');
+} catch (error) {
+  console.log('  ❌ bookmark.routes failed:', error.message);
+}
+
+try {
+  const followRoutes = require('./routes/follow.routes');
+  app.use('/api/follow', followRoutes);
+  console.log('  ✅ follow.routes loaded');
+} catch (error) {
+  console.log('  ❌ follow.routes failed:', error.message);
+  console.log('  ⚠️ Follow routes skipped - model syntax error');
+}
+
+try {
+  const feedRoutes = require('./routes/feed.routes');
+  app.use('/api/feed', feedRoutes);
+  console.log('  ✅ feed.routes loaded');
+} catch (error) {
+  console.log('  ❌ feed.routes failed:', error.message);
+}
+
+try {
+  const notificationRoutes = require('./routes/notification.routes');
+  app.use('/api/notifications', notificationRoutes);
+  console.log('  ✅ notification.routes loaded');
+} catch (error) {
+  console.log('  ❌ notification.routes failed:', error.message);
+  console.log('  ⚠️ Notification routes skipped - using mock functions');
+}
+
+// 🤖 AI & Content Engine Routes - CRITICAL!
+console.log('  📡 Loading AI routes...');
+try {
+  const aiRoutes = require('./routes/ai.routes');
+  app.use('/api/ai', aiRoutes);
+  console.log('  ✅ ai.routes loaded');
+} catch (error) {
+  console.log('  ❌ ai.routes FAILED:', error.message);
+  console.log('  📍 Stack:', error.stack);
+}
+
+console.log('  📡 Loading Content routes...');
+try {
+  const contentRoutes = require('./routes/content.routes');
+  app.use('/api/content', contentRoutes);
+  console.log('  ✅ content.routes loaded');
+} catch (error) {
+  console.log('  ❌ content.routes FAILED:', error.message);
+  console.log('  📍 Stack:', error.stack);
+}
+
+console.log('✅ Route loading complete!');
+console.log('🤖 AI routes: /api/ai');
+console.log('📝 Content routes: /api/content');
 
 // 404 handler
 app.use((req, res) => {
