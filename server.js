@@ -147,18 +147,40 @@ const authRoutes = require('./routes/auth.routes');
 app.use('/api/auth', authRoutes);
 
 try {
+  console.log('📦 Loading routes...');
+  
   const blogRoutes = require('./routes/blog.routes');
+  console.log('  ✅ blog.routes loaded');
+  
   const rewardRoutes = require('./routes/reward.routes');
+  console.log('  ✅ reward.routes loaded');
+  
   const domainRoutes = require('./routes/domain.routes');
+  console.log('  ✅ domain.routes loaded');
+  
   const commentRoutes = require('./routes/comment.routes');
+  console.log('  ✅ comment.routes loaded');
+  
   const bookmarkRoutes = require('./routes/bookmark.routes');
+  console.log('  ✅ bookmark.routes loaded');
+  
   const followRoutes = require('./routes/follow.routes');
+  console.log('  ✅ follow.routes loaded');
+  
   const feedRoutes = require('./routes/feed.routes');
+  console.log('  ✅ feed.routes loaded');
+  
   const notificationRoutes = require('./routes/notification.routes');
+  console.log('  ✅ notification.routes loaded');
   
   // 🤖 AI & Content Engine Routes
+  console.log('  📡 Loading AI routes...');
   const aiRoutes = require('./routes/ai.routes');
+  console.log('  ✅ ai.routes loaded');
+  
+  console.log('  📡 Loading Content routes...');
   const contentRoutes = require('./routes/content.routes');
+  console.log('  ✅ content.routes loaded');
   
   app.use('/api/blogs', blogRoutes);
   app.use('/api/rewards', rewardRoutes);
@@ -177,7 +199,8 @@ try {
   console.log('🤖 AI routes: /api/ai');
   console.log('📝 Content routes: /api/content');
 } catch (error) {
-  console.log('⚠️ Some routes not loaded:', error.message);
+  console.log('❌ Route loading error:', error.message);
+  console.log('📍 Error stack:', error.stack);
 }
 
 // 404 handler
