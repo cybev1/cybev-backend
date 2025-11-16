@@ -120,47 +120,39 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
       });
     }
 
-    // Map niche to valid category enum
+    // Map niche to valid category enum from Blog model
     const categoryMap = {
-      'technology': 'Tech',
-      'business': 'Business',
-      'health': 'Health',
+      'technology': 'Technology',
+      'business': 'Business & Finance',
+      'health': 'Health & Wellness',
       'lifestyle': 'Lifestyle',
       'education': 'Education',
-      'finance': 'Finance',
+      'finance': 'Business & Finance',
       'entertainment': 'Entertainment',
-      'food': 'Food'
+      'food': 'Food & Cooking',
+      'travel': 'Travel',
+      'science': 'Science',
+      'sports': 'Sports',
+      'fashion': 'Fashion & Beauty',
+      'personal-development': 'Personal Development',
+      'news': 'News & Politics',
+      'environment': 'Environment'
     };
     
-    const validCategory = categoryMap[blogData.niche?.toLowerCase()] || 'Tech';
+    const validCategory = categoryMap[blogData.niche?.toLowerCase()] || 'Other';
 
-    // Create blog in database
+    // Create blog in database - ONLY use fields that exist in the model!
     const newBlog = await Blog.create({
       title: blogData.title,
       content: blogData.content,
-      summary: blogData.summary || blogData.content?.substring(0, 200),
       author: req.user.id,
-      authorName: req.user.name || req.user.username || 'Anonymous', // Add author name
-      category: validCategory, // Use mapped category
+      authorName: req.user.name || req.user.username || 'Anonymous',
+      category: validCategory,
       tags: blogData.seo?.keywords?.slice(0, 10) || [],
-      
-      // SEO fields
-      seoTitle: blogData.seo?.title || blogData.title,
-      seoDescription: blogData.seo?.description,
-      slug: blogData.seo?.slug || blogData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-      
-      // Images
-      featuredImage: blogData.featuredImage?.url || '',
-      
-      // Metadata - Convert readTime to number
-      readTime: parseInt(blogData.readTime) || 5, // Convert "8 min" to 8
-      
-      // Status
-      status: 'published',
-      publishedAt: new Date(),
-      
-      // Analytics - Don't set these, let model defaults handle it
-      // The model will initialize likes/views/etc as empty arrays or 0
+      readTime: parseInt(blogData.readTime) || 5,
+      status: 'published'
+      // Note: Model will auto-calculate readTime in pre-save hook
+      // Note: likes, views, featured, timestamps are handled by model defaults
     });
 
     console.log(`✅ Blog published with ID: ${newBlog._id}`);
