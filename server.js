@@ -170,8 +170,9 @@ try {
   const feedRoutes = require('./routes/feed.routes');
   console.log('  ✅ feed.routes loaded');
   
-  const notificationRoutes = require('./routes/notification.routes');
-  console.log('  ✅ notification.routes loaded');
+  // TEMPORARILY DISABLED - notification.model.js has syntax error on line 57
+  // const notificationRoutes = require('./routes/notification.routes');
+  // console.log('  ✅ notification.routes loaded');
   
   // 🤖 AI & Content Engine Routes
   console.log('  📡 Loading AI routes...');
@@ -189,7 +190,7 @@ try {
   app.use('/api/bookmarks', bookmarkRoutes);
   app.use('/api/follow', followRoutes);
   app.use('/api/feed', feedRoutes);
-  app.use('/api/notifications', notificationRoutes);
+  // app.use('/api/notifications', notificationRoutes); // TEMPORARILY DISABLED
   
   // 🚀 AI & Content Engine
   app.use('/api/ai', aiRoutes);
@@ -198,6 +199,7 @@ try {
   console.log('✅ All routes loaded successfully!');
   console.log('🤖 AI routes: /api/ai');
   console.log('📝 Content routes: /api/content');
+  console.log('⚠️ Notification routes temporarily disabled (model syntax error)');
 } catch (error) {
   console.log('❌ Route loading error:', error.message);
   console.log('📍 Error stack:', error.stack);
