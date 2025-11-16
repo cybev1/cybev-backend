@@ -94,6 +94,88 @@ router.post('/create-blog', verifyToken, async (req, res) => {
 });
 
 /**
+ * POST /api/content/publish-blog
+ * Publish AI-generated blog to database
+ */
+router.post('/publish-blog', verifyToken, async (req, res) => {
+  try {
+    const { blogData } = req.body;
+    
+    if (!blogData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Blog data is required'
+      });
+    }
+
+    console.log('📤 Publishing blog...');
+    console.log(`   User: ${req.user.id}`);
+    console.log(`   Title: ${blogData.title}`);
+    
+    // Check if Blog model exists
+    if (!Blog) {
+      return res.status(503).json({
+        success: false,
+        error: 'Blog model not available - contact support'
+      });
+    }
+
+    // Create blog in database
+    const newBlog = await Blog.create({
+      title: blogData.title,
+      content: blogData.content,
+      summary: blogData.summary || blogData.content?.substring(0, 200),
+      author: req.user.id,
+      category: blogData.niche || 'general',
+      tags: blogData.seo?.keywords || [],
+      
+      // SEO fields
+      seoTitle: blogData.seo?.title || blogData.title,
+      seoDescription: blogData.seo?.description,
+      slug: blogData.seo?.slug,
+      
+      // Images
+      featuredImage: blogData.featuredImage?.url,
+      
+      // Metadata
+      readTime: blogData.readTime || '5 min',
+      tokensEarned: blogData.initialTokens || 50,
+      viralityScore: blogData.viralityScore || 0,
+      
+      // Status
+      status: 'published',
+      publishedAt: new Date(),
+      
+      // Analytics
+      views: 0,
+      likes: 0,
+      shares: 0,
+      comments: 0
+    });
+
+    console.log(`✅ Blog published with ID: ${newBlog._id}`);
+
+    res.json({
+      success: true,
+      message: '🎉 Blog published successfully!',
+      data: {
+        blogId: newBlog._id,
+        slug: newBlog.slug,
+        url: `/blog/${newBlog.slug}`,
+        tokensEarned: blogData.initialTokens || 50
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Blog publish error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to publish blog'
+    });
+  }
+});
+
+/**
  * POST /api/content/create-template
  * Generate website template with demo content
  * 
