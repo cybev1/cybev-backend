@@ -141,7 +141,7 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
     
     const validCategory = categoryMap[blogData.niche?.toLowerCase()] || 'Other';
 
-    // Create blog in database - ONLY use fields that exist in the model!
+    // Create blog in database
     const newBlog = await Blog.create({
       title: blogData.title,
       content: blogData.content,
@@ -150,6 +150,7 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
       category: validCategory,
       tags: blogData.seo?.keywords?.slice(0, 10) || [],
       readTime: parseInt(blogData.readTime) || 5,
+      featuredImage: blogData.featuredImage?.url || blogData.featuredImage || '',
       status: 'published'
       // Note: Model will auto-calculate readTime in pre-save hook
       // Note: likes, views, featured, timestamps are handled by model defaults
