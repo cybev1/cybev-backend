@@ -7,7 +7,14 @@ const express = require('express');
 const router = express.Router();
 const contentCreator = require('../services/content-creator.service');
 const verifyToken = require('../middleware/verifyToken');
-const Blog = require('../models/blog.model'); // You'll need to create this
+
+// Blog model - optional for now
+let Blog;
+try {
+  Blog = require('../models/blog.model');
+} catch (error) {
+  console.log('⚠️ Blog model not found - publish feature will be limited');
+}
 
 // Handle OPTIONS
 router.options('*', (req, res) => {
