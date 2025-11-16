@@ -126,31 +126,27 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
       content: blogData.content,
       summary: blogData.summary || blogData.content?.substring(0, 200),
       author: req.user.id,
-      category: blogData.niche || 'general',
-      tags: blogData.seo?.keywords || [],
+      authorName: req.user.name || req.user.username || 'Anonymous', // Add author name
+      category: blogData.category || 'Technology', // Use proper enum value
+      tags: blogData.seo?.keywords?.slice(0, 10) || [],
       
       // SEO fields
       seoTitle: blogData.seo?.title || blogData.title,
       seoDescription: blogData.seo?.description,
-      slug: blogData.seo?.slug,
+      slug: blogData.seo?.slug || blogData.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
       
       // Images
-      featuredImage: blogData.featuredImage?.url,
+      featuredImage: blogData.featuredImage?.url || '',
       
-      // Metadata
-      readTime: blogData.readTime || '5 min',
-      tokensEarned: blogData.initialTokens || 50,
-      viralityScore: blogData.viralityScore || 0,
+      // Metadata - Convert readTime to number
+      readTime: parseInt(blogData.readTime) || 5, // Convert "8 min" to 8
       
       // Status
       status: 'published',
       publishedAt: new Date(),
       
-      // Analytics
-      views: 0,
-      likes: 0,
-      shares: 0,
-      comments: 0
+      // Analytics - Don't set these, let model defaults handle it
+      // The model will initialize likes/views/etc as empty arrays or 0
     });
 
     console.log(`✅ Blog published with ID: ${newBlog._id}`);
