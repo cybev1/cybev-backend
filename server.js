@@ -231,7 +231,7 @@ try {
 console.log('  📡 Loading Content routes...');
 try {
   const contentRoutes = require('./routes/content.routes');
-  app.use('/api/content', contentRoutes);
+  app.use('/api', contentRoutes);  // Changed from /api/content to /api
   console.log('  ✅ content.routes loaded');
 } catch (error) {
   console.log('  ❌ content.routes FAILED:', error.message);
@@ -240,7 +240,7 @@ try {
 
 console.log('✅ Route loading complete!');
 console.log('🤖 AI routes: /api/ai');
-console.log('📝 Content routes: /api/content');
+console.log('📝 Content routes: /api');
 
 // 404 handler
 app.use((req, res) => {
