@@ -529,7 +529,9 @@ router.get('/blogs/:id', async (req, res) => {
     console.log(`✅ Blog found: ${blog.title}`);
     
     res.json({
+      ok: true,
       success: true,
+      blog: blog,
       data: blog
     });
     
