@@ -498,4 +498,48 @@ router.get('/viral-score/:blogId', verifyToken, async (req, res) => {
   }
 });
 
+/**
+ * GET /api/blogs/:id - Get single blog by ID or slug
+ */
+router.get('/blogs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log(`📖 Fetching blog: ${id}`);
+    
+    // Try to find by MongoDB ID first, then by slug
+    let blog = await Blog.findById(id).populate('author', 'name username email');
+    
+    if (!blog) {
+      // Try finding by slug (title-based)
+      blog = await Blog.findOne({ slug: id }).populate('author', 'name username email');
+    }
+    
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        error: 'Blog not found'
+      });
+    }
+    
+    // Increment view count
+    blog.views = (blog.views || 0) + 1;
+    await blog.save();
+    
+    console.log(`✅ Blog found: ${blog.title}`);
+    
+    res.json({
+      success: true,
+      data: blog
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching blog:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 module.exports = router;
