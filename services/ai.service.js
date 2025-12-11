@@ -1,25 +1,32 @@
 // ============================================
 // FILE: services/ai.service.js
-// AI Service with Claude primary, DeepSeek fallback
+// AI Service with DeepSeek PRIMARY, Claude fallback
+// Optimized for cost savings
 // ============================================
 
 const axios = require('axios');
 
 class AIService {
   constructor() {
-    this.claudeKey = process.env.ANTHROPIC_API_KEY;
     this.deepseekKey = process.env.DEEPSEEK_API_KEY;
+    this.claudeKey = process.env.ANTHROPIC_API_KEY;
     
     // Track which API is being used
     this.stats = {
-      claudeSuccess: 0,
-      claudeFails: 0,
-      deepseekUsed: 0
+      deepseekSuccess: 0,
+      deepseekFails: 0,
+      claudeUsed: 0,
+      totalCost: 0
     };
+
+    console.log('🤖 AI Service initialized');
+    console.log(`   DeepSeek: ${this.deepseekKey ? '✅ Configured' : '❌ Missing'}`);
+    console.log(`   Claude: ${this.claudeKey ? '✅ Configured (Fallback)' : '❌ Missing'}`);
   }
 
   /**
-   * Main generation method - tries Claude first, falls back to DeepSeek
+   * Main generation method - DeepSeek PRIMARY, Claude fallback
+   * DeepSeek is much cheaper and you have balance!
    */
   async generateWebsite(data) {
     const { websiteType, businessName, description, style, colors } = data;
@@ -36,36 +43,36 @@ class AIService {
     });
 
     try {
-      // Try Claude first (best quality)
-      console.log('🧠 Trying Claude AI (primary)...');
-      const result = await this.callClaude(prompt);
-      this.stats.claudeSuccess++;
-      console.log('✅ Claude generation successful!');
+      // Try DeepSeek FIRST (cheaper & you have balance!)
+      console.log('⚡ Using DeepSeek AI (primary - cheaper)...');
+      const result = await this.callDeepSeek(prompt);
+      this.stats.deepseekSuccess++;
+      console.log('✅ DeepSeek generation successful!');
       return this.parseResponse(result);
       
-    } catch (claudeError) {
-      console.warn('⚠️ Claude failed:', claudeError.message);
-      this.stats.claudeFails++;
+    } catch (deepseekError) {
+      console.warn('⚠️ DeepSeek failed:', deepseekError.message);
+      this.stats.deepseekFails++;
       
-      // Fallback to DeepSeek
+      // Fallback to Claude (expensive but reliable)
       try {
-        console.log('⚡ Falling back to DeepSeek...');
-        const result = await this.callDeepSeek(prompt);
-        this.stats.deepseekUsed++;
-        console.log('✅ DeepSeek generation successful!');
+        console.log('🧠 Falling back to Claude (expensive fallback)...');
+        const result = await this.callClaude(prompt);
+        this.stats.claudeUsed++;
+        console.log('✅ Claude generation successful!');
         return this.parseResponse(result);
         
-      } catch (deepseekError) {
+      } catch (claudeError) {
         console.error('❌ Both AI services failed!');
-        console.error('Claude error:', claudeError.message);
         console.error('DeepSeek error:', deepseekError.message);
+        console.error('Claude error:', claudeError.message);
         throw new Error('AI generation failed. Please try again.');
       }
     }
   }
 
   /**
-   * Generate blog post content
+   * Generate blog post content - DeepSeek primary
    */
   async generateBlogPost(data) {
     const { topic, tone, length, keywords } = data;
@@ -76,24 +83,24 @@ class AIService {
     const prompt = this.buildBlogPrompt({ topic, tone, length, keywords });
 
     try {
-      // Try Claude first
-      console.log('🧠 Using Claude for blog generation...');
-      const result = await this.callClaude(prompt);
-      this.stats.claudeSuccess++;
+      // Try DeepSeek first (cheaper!)
+      console.log('⚡ Using DeepSeek for blog generation...');
+      const result = await this.callDeepSeek(prompt);
+      this.stats.deepseekSuccess++;
       return this.parseResponse(result);
       
-    } catch (claudeError) {
-      console.warn('⚠️ Claude failed, using DeepSeek...');
-      this.stats.claudeFails++;
+    } catch (deepseekError) {
+      console.warn('⚠️ DeepSeek failed, using Claude (expensive)...');
+      this.stats.deepseekFails++;
       
-      const result = await this.callDeepSeek(prompt);
-      this.stats.deepseekUsed++;
+      const result = await this.callClaude(prompt);
+      this.stats.claudeUsed++;
       return this.parseResponse(result);
     }
   }
 
   /**
-   * Generate SEO metadata
+   * Generate SEO metadata - DeepSeek primary
    */
   async generateSEO(content) {
     const prompt = `Analyze this content and generate SEO metadata:
@@ -109,16 +116,75 @@ Return as JSON:
 }`;
 
     try {
-      const result = await this.callClaude(prompt);
+      const result = await this.callDeepSeek(prompt);
+      this.stats.deepseekSuccess++;
       return this.parseResponse(result);
     } catch (error) {
-      const result = await this.callDeepSeek(prompt);
+      console.warn('⚠️ DeepSeek failed for SEO, using Claude...');
+      const result = await this.callClaude(prompt);
+      this.stats.claudeUsed++;
       return this.parseResponse(result);
     }
   }
 
   /**
-   * Call Claude API
+   * Call DeepSeek API (PRIMARY - Cheaper!)
+   */
+  async callDeepSeek(prompt) {
+    if (!this.deepseekKey) {
+      throw new Error('DeepSeek API key not configured');
+    }
+
+    try {
+      const response = await axios.post(
+        'https://api.deepseek.com/v1/chat/completions',
+        {
+          model: 'deepseek-chat',
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an expert web developer and content creator. Generate professional, high-quality content in valid JSON format.'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 4096
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.deepseekKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 90000 // 90 second timeout
+        }
+      );
+
+      // Estimate cost (DeepSeek is ~$0.14 per 1M input tokens, $0.28 per 1M output tokens)
+      const inputCost = (response.data.usage?.prompt_tokens || 0) * 0.14 / 1000000;
+      const outputCost = (response.data.usage?.completion_tokens || 0) * 0.28 / 1000000;
+      this.stats.totalCost += (inputCost + outputCost);
+      
+      console.log(`💰 DeepSeek cost: $${(inputCost + outputCost).toFixed(6)}`);
+
+      return response.data.choices[0].message.content;
+      
+    } catch (error) {
+      if (error.response) {
+        console.error('DeepSeek API error:', error.response.status, error.response.data);
+        throw new Error(`DeepSeek API error: ${error.response.status}`);
+      } else if (error.code === 'ECONNABORTED') {
+        throw new Error('DeepSeek request timeout');
+      } else {
+        throw new Error(`DeepSeek error: ${error.message}`);
+      }
+    }
+  }
+
+  /**
+   * Call Claude API (FALLBACK - Expensive!)
    */
   async callClaude(prompt) {
     if (!this.claudeKey) {
@@ -145,9 +211,16 @@ Return as JSON:
             'anthropic-version': '2023-06-01',
             'Content-Type': 'application/json'
           },
-          timeout: 60000 // 60 second timeout
+          timeout: 90000 // 90 second timeout
         }
       );
+
+      // Estimate cost (Claude Sonnet 4 is ~$3 per 1M input tokens, $15 per 1M output tokens)
+      const inputCost = (response.data.usage?.input_tokens || 0) * 3 / 1000000;
+      const outputCost = (response.data.usage?.output_tokens || 0) * 15 / 1000000;
+      this.stats.totalCost += (inputCost + outputCost);
+      
+      console.log(`💰 Claude cost: $${(inputCost + outputCost).toFixed(6)} (EXPENSIVE!)`);
 
       return response.data.content[0].text;
       
@@ -159,55 +232,6 @@ Return as JSON:
         throw new Error('Claude request timeout');
       } else {
         throw new Error(`Claude error: ${error.message}`);
-      }
-    }
-  }
-
-  /**
-   * Call DeepSeek API (fallback)
-   */
-  async callDeepSeek(prompt) {
-    if (!this.deepseekKey) {
-      throw new Error('DeepSeek API key not configured');
-    }
-
-    try {
-      const response = await axios.post(
-        'https://api.deepseek.com/v1/chat/completions',
-        {
-          model: 'deepseek-chat',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an expert web developer and content creator. Generate professional, high-quality content.'
-            },
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
-          temperature: 0.7,
-          max_tokens: 4096
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${this.deepseekKey}`,
-            'Content-Type': 'application/json'
-          },
-          timeout: 60000
-        }
-      );
-
-      return response.data.choices[0].message.content;
-      
-    } catch (error) {
-      if (error.response) {
-        console.error('DeepSeek API error:', error.response.status, error.response.data);
-        throw new Error(`DeepSeek API error: ${error.response.status}`);
-      } else if (error.code === 'ECONNABORTED') {
-        throw new Error('DeepSeek request timeout');
-      } else {
-        throw new Error(`DeepSeek error: ${error.message}`);
       }
     }
   }
@@ -259,7 +283,7 @@ Generate the following pages:
 - Mobile-first responsive design
 - Modern typography
 
-Return ONLY valid JSON in this exact format (no markdown, no code blocks):
+CRITICAL: Return ONLY valid JSON in this exact format (no markdown, no code blocks, no extra text):
 {
   "pages": {
     "home": "<!DOCTYPE html><html>...</html>",
@@ -314,7 +338,7 @@ Format:
 - Use <ul>/<ol> for lists
 - Keep paragraphs concise (3-4 sentences)
 
-Return ONLY valid JSON (no markdown, no code blocks):
+CRITICAL: Return ONLY valid JSON (no markdown, no code blocks, no extra text):
 {
   "title": "Blog Post Title",
   "content": "<article>HTML formatted content</article>",
@@ -344,8 +368,8 @@ Return ONLY valid JSON (no markdown, no code blocks):
       
     } catch (error) {
       console.error('Failed to parse AI response:', error);
-      console.error('Raw response:', response.substring(0, 200));
-      throw new Error('Invalid AI response format');
+      console.error('Raw response (first 500 chars):', response.substring(0, 500));
+      throw new Error('Invalid AI response format - please try again');
     }
   }
 
@@ -355,8 +379,9 @@ Return ONLY valid JSON (no markdown, no code blocks):
   getStats() {
     return {
       ...this.stats,
-      claudeSuccessRate: this.stats.claudeSuccess / (this.stats.claudeSuccess + this.stats.claudeFails) * 100 || 0,
-      fallbackUsageRate: this.stats.deepseekUsed / (this.stats.claudeSuccess + this.stats.deepseekUsed) * 100 || 0
+      deepseekSuccessRate: this.stats.deepseekSuccess / (this.stats.deepseekSuccess + this.stats.deepseekFails) * 100 || 0,
+      fallbackUsageRate: this.stats.claudeUsed / (this.stats.deepseekSuccess + this.stats.claudeUsed) * 100 || 0,
+      totalCostUSD: this.stats.totalCost.toFixed(4)
     };
   }
 
@@ -364,20 +389,45 @@ Return ONLY valid JSON (no markdown, no code blocks):
    * Test AI connection
    */
   async testConnection() {
-    const testPrompt = 'Respond with: "AI service is working perfectly!" in a creative way.';
+    const testPrompt = 'Respond with valid JSON: {"status": "working", "message": "AI service is ready!"}';
     
+    const results = {
+      deepseek: { status: 'not_tested' },
+      claude: { status: 'not_tested' },
+      stats: this.getStats()
+    };
+
+    // Test DeepSeek
     try {
-      const claudeResult = await this.callClaude(testPrompt);
       const deepseekResult = await this.callDeepSeek(testPrompt);
-      
-      return {
-        claude: { status: 'working', response: claudeResult },
-        deepseek: { status: 'working', response: deepseekResult },
-        stats: this.getStats()
+      results.deepseek = { 
+        status: 'working', 
+        response: deepseekResult,
+        priority: 'PRIMARY (Cheaper)'
       };
     } catch (error) {
-      throw new Error(`Connection test failed: ${error.message}`);
+      results.deepseek = { 
+        status: 'error', 
+        error: error.message 
+      };
     }
+
+    // Test Claude
+    try {
+      const claudeResult = await this.callClaude(testPrompt);
+      results.claude = { 
+        status: 'working', 
+        response: claudeResult,
+        priority: 'FALLBACK (Expensive)'
+      };
+    } catch (error) {
+      results.claude = { 
+        status: 'error', 
+        error: error.message 
+      };
+    }
+
+    return results;
   }
 }
 
