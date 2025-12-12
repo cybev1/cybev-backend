@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Post = require('../models/post.model');
+const User = require('../models/user.model');
 const verifyToken = require('../middleware/verifyToken');
 
 // Import existing controller if it exists
@@ -67,9 +68,15 @@ router.post('/', verifyToken, async (req, res) => {
       });
     }
 
+    // Fetch full user data to get name
+    const user = await User.findById(req.user.id).select('name username email');
+    const authorName = user?.name || user?.username || user?.email?.split('@')[0] || 'Anonymous';
+
+    console.log(`📝 Creating post for user: ${authorName} (${req.user.id})`);
+
     const post = await Post.create({
       authorId: req.user.id,
-      authorName: req.user.name || req.user.username || 'Anonymous',
+      authorName: authorName,
       title: title || undefined,
       content,
       images: images || [],
@@ -80,12 +87,15 @@ router.post('/', verifyToken, async (req, res) => {
       tokensEarned: 10 // Base reward for creating post
     });
 
-    console.log(`✅ Post created by ${req.user.name}: ${post._id}`);
+    console.log(`✅ Post created by ${authorName}: ${post._id}`);
+
+    // Populate author data for response
+    const populatedPost = await Post.findById(post._id).populate('authorId', 'name username avatar email');
 
     res.status(201).json({
       success: true,
       message: '🎉 Post created! You earned 10 tokens!',
-      post: await post.populate('authorId', 'name username avatar'),
+      post: populatedPost,
       tokensEarned: 10
     });
 
@@ -111,14 +121,20 @@ router.get('/feed', verifyToken, async (req, res) => {
       .sort({ isPinned: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .populate('authorId', 'name username avatar')
+      .populate('authorId', 'name username avatar email')
       .lean();
+
+    // Ensure authorName is populated
+    const postsWithAuthor = posts.map(post => ({
+      ...post,
+      authorName: post.authorName || post.authorId?.name || post.authorId?.username || 'Anonymous'
+    }));
 
     const total = await Post.countDocuments(query);
 
     res.json({
       success: true,
-      posts,
+      posts: postsWithAuthor,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -140,7 +156,7 @@ router.get('/feed', verifyToken, async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const post = await Post.findById(req.params.id)
-      .populate('authorId', 'name username avatar')
+      .populate('authorId', 'name username avatar email')
       .populate('comments.user', 'name username avatar');
 
     if (!post) {
@@ -181,7 +197,7 @@ router.get('/user/:userId', async (req, res) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))
-      .populate('authorId', 'name username avatar')
+      .populate('authorId', 'name username avatar email')
       .lean();
 
     const total = await Post.countDocuments({ 
@@ -242,7 +258,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     res.json({
       success: true,
       message: 'Post updated successfully',
-      post: await post.populate('authorId', 'name username avatar')
+      post: await post.populate('authorId', 'name username avatar email')
     });
 
   } catch (error) {
@@ -373,9 +389,12 @@ router.post('/:id/comment', verifyToken, async (req, res) => {
       });
     }
 
+    // Get user data for comment
+    const user = await User.findById(req.user.id).select('name username');
+
     post.comments.push({
       user: req.user.id,
-      userName: req.user.name || req.user.username,
+      userName: user?.name || user?.username || 'Anonymous',
       content,
       createdAt: new Date()
     });
