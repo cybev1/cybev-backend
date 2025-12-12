@@ -238,9 +238,19 @@ try {
   console.log('  📍 Stack:', error.stack);
 }
 
+console.log('  📡 Loading Posts routes...');
+try {
+  const postsRoutes = require('./routes/posts.routes');
+  app.use('/api/posts', postsRoutes);
+  console.log('  ✅ posts.routes loaded');
+} catch (error) {
+  console.log('  ❌ posts.routes failed:', error.message);
+}
+
 console.log('✅ Route loading complete!');
 console.log('🤖 AI routes: /api/ai');
 console.log('📝 Content routes: /api/content');
+console.log('💬 Posts routes: /api/posts');
 
 // 404 handler
 app.use((req, res) => {
