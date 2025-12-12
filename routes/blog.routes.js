@@ -1,274 +1,260 @@
-// ============================================
-// FILE: server/routes/blog.routes.js
-// ============================================
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
-const Wallet = require('../models/wallet.model');
-const { authenticateToken } = require('../middleware/auth');
-const { createNotification } = require('../utils/notifications');
+const User = require('../models/user.model');
+const verifyToken = require('../middleware/verifyToken');
 
-router.get('/', async (req, res) => {
+// ========== CREATE BLOG ==========
+router.post('/', verifyToken, async (req, res) => {
   try {
-    const { category, search, page = 1, limit = 12, featured, author } = req.query;
-    
-    const query = { status: 'published' };
-    
-    if (category && category !== 'All') {
-      query.category = category;
+    const { 
+      title, 
+      content, 
+      excerpt,
+      featuredImage, 
+      category, 
+      tags, 
+      status,
+      readTime 
+    } = req.body;
+
+    // Validate required fields
+    if (!title || !content) {
+      return res.status(400).json({
+        success: false,
+        error: 'Title and content are required'
+      });
     }
-    
-    if (featured === 'true') {
-      query.featured = true;
-    }
-    
-    if (author) {
-      const User = require('../models/user.model');
-      const user = await User.findOne({ username: author });
-      if (user) {
-        query.author = user._id;
-      }
-    }
-    
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { content: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } }
-      ];
-    }
-    
-    const skip = (page - 1) * limit;
-    
-    const blogs = await Blog.find(query)
-      .populate('author', 'name username email avatar')
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-    
-    const total = await Blog.countDocuments(query);
-    
-    res.json({
-      ok: true,
-      blogs,
-      pagination: {
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit),
-        hasMore: skip + blogs.length < total
-      }
+
+    // Fetch user data for authorName
+    const user = await User.findById(req.user.id).select('name username email');
+    const authorName = user?.name || user?.username || user?.email?.split('@')[0] || 'Anonymous';
+
+    console.log(`📝 Creating blog for user: ${authorName} (${req.user.id})`);
+
+    // Create blog with all fields
+    const blog = await Blog.create({
+      title,
+      content,
+      excerpt: excerpt || content.substring(0, 200), // Use excerpt or auto-generate
+      featuredImage: featuredImage || '',
+      author: req.user.id,
+      authorName: authorName, // ADD THIS!
+      category: category || 'general', // Default category
+      tags: tags || [],
+      status: status || 'draft',
+      readTime: readTime || Math.ceil(content.split(' ').length / 200)
     });
+
+    console.log(`✅ Blog created by ${authorName}: ${blog._id}`);
+
+    res.status(201).json({
+      success: true,
+      message: status === 'published' ? '✅ Blog published!' : '✅ Blog saved as draft!',
+      blog
+    });
+
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error('❌ Create blog error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create blog'
+    });
   }
 });
 
+// ========== GET ALL BLOGS ==========
+router.get('/', async (req, res) => {
+  try {
+    const { status, category, limit = 20, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const query = {};
+    if (status) query.status = status;
+    if (category) query.category = category;
+
+    const blogs = await Blog.find(query)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('author', 'name username avatar email')
+      .lean();
+
+    // Ensure authorName is populated
+    const blogsWithAuthor = blogs.map(blog => ({
+      ...blog,
+      authorName: blog.authorName || blog.author?.name || blog.author?.username || 'Anonymous'
+    }));
+
+    const total = await Blog.countDocuments(query);
+
+    res.json({
+      success: true,
+      data: {
+        blogs: blogsWithAuthor,
+        pagination: {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total,
+          pages: Math.ceil(total / limit)
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Get blogs error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch blogs'
+    });
+  }
+});
+
+// ========== GET SINGLE BLOG ==========
 router.get('/:id', async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id)
-      .populate('author', 'name username email avatar');
-    
+      .populate('author', 'name username avatar email');
+
     if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog not found' });
+      return res.status(404).json({
+        success: false,
+        error: 'Blog not found'
+      });
     }
-    
-    blog.views += 1;
+
+    // Increment views
+    blog.views = (blog.views || 0) + 1;
     await blog.save();
-    
-    res.json({ ok: true, blog });
+
+    res.json({
+      success: true,
+      blog
+    });
+
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error('❌ Get blog error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch blog'
+    });
   }
 });
 
-router.post('/', authenticateToken, async (req, res) => {
-  try {
-    const { title, content, category, tags } = req.body;
-    
-    const blog = new Blog({
-      title,
-      content,
-      category,
-      tags: tags || [],
-      author: req.user.id,
-      authorName: req.user.name
-    });
-    
-    await blog.save();
-    
-    let wallet = await Wallet.findOne({ user: req.user.id });
-    if (!wallet) {
-      wallet = new Wallet({ user: req.user.id });
-    }
-    
-    await wallet.addTokens(50, 'BLOG_POST', `Published: ${title}`, blog._id);
-    await wallet.updateStreak();
-    
-    if (!wallet.achievements.includes('FIRST_POST')) {
-      wallet.achievements.push('FIRST_POST');
-      await wallet.addTokens(25, 'BONUS', 'First post achievement!');
-    }
-    
-    if (wallet.streaks.current === 7 && !wallet.achievements.includes('WEEK_STREAK')) {
-      wallet.achievements.push('WEEK_STREAK');
-      await wallet.addTokens(100, 'BONUS', '7-day streak bonus!');
-    }
-    
-    await wallet.save();
-    
-    res.status(201).json({ 
-      ok: true,
-      blog, 
-      tokensEarned: 50,
-      currentStreak: wallet.streaks.current
-    });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-router.put('/:id', authenticateToken, async (req, res) => {
+// ========== UPDATE BLOG ==========
+router.put('/:id', verifyToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
-    
+
     if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog not found' });
+      return res.status(404).json({
+        success: false,
+        error: 'Blog not found'
+      });
     }
-    
+
+    // Check ownership
     if (blog.author.toString() !== req.user.id) {
-      return res.status(403).json({ ok: false, error: 'Not authorized' });
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to edit this blog'
+      });
     }
-    
-    const { title, content, category, tags, status } = req.body;
-    
+
+    const { title, content, excerpt, featuredImage, category, tags, status } = req.body;
+
     if (title) blog.title = title;
     if (content) blog.content = content;
+    if (excerpt !== undefined) blog.excerpt = excerpt;
+    if (featuredImage !== undefined) blog.featuredImage = featuredImage;
     if (category) blog.category = category;
     if (tags) blog.tags = tags;
     if (status) blog.status = status;
-    
-    await blog.save();
-    
-    res.json({ ok: true, blog });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
 
-router.delete('/:id', authenticateToken, async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
-    
-    if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog not found' });
-    }
-    
-    if (blog.author.toString() !== req.user.id) {
-      return res.status(403).json({ ok: false, error: 'Not authorized' });
-    }
-    
-    await blog.deleteOne();
-    
-    res.json({ ok: true, message: 'Blog deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-router.post('/:id/like', authenticateToken, async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
-    
-    if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog not found' });
-    }
-    
-    const userIndex = blog.likes.indexOf(req.user.id);
-    let liked = false;
-    
-    if (userIndex > -1) {
-      blog.likes.splice(userIndex, 1);
-      liked = false;
-    } else {
-      blog.likes.push(req.user.id);
-      liked = true;
-      
-      if (blog.author.toString() !== req.user.id) {
-        let authorWallet = await Wallet.findOne({ user: blog.author });
-        if (!authorWallet) {
-          authorWallet = new Wallet({ user: blog.author });
-        }
-        
-        await authorWallet.addTokens(5, 'BLOG_LIKE', `Like received on: ${blog.title}`, blog._id);
-        
-        // NEW: Create notification for like
-        await createNotification({
-          recipient: blog.author,
-          sender: req.user.id,
-          type: 'like',
-          targetModel: 'Blog',
-          target: blog._id,
-          message: `liked your post "${blog.title}"`
-        });
-      }
-    }
-    
     await blog.save();
-    
-    res.json({ 
-      ok: true,
-      liked, 
-      likeCount: blog.likes.length 
+
+    res.json({
+      success: true,
+      message: 'Blog updated successfully',
+      blog
     });
+
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error('❌ Update blog error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to update blog'
+    });
   }
 });
 
-router.get('/user/my-blogs', authenticateToken, async (req, res) => {
+// ========== DELETE BLOG ==========
+router.delete('/:id', verifyToken, async (req, res) => {
   try {
-    const blogs = await Blog.find({ author: req.user.id })
-      .sort({ createdAt: -1 });
-    
-    res.json({ ok: true, blogs });
+    const blog = await Blog.findById(req.params.id);
+
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        error: 'Blog not found'
+      });
+    }
+
+    // Check ownership
+    if (blog.author.toString() !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        error: 'Not authorized to delete this blog'
+      });
+    }
+
+    await Blog.findByIdAndDelete(req.params.id);
+
+    res.json({
+      success: true,
+      message: 'Blog deleted successfully'
+    });
+
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error('❌ Delete blog error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete blog'
+    });
   }
 });
 
-router.get('/trending/top', async (req, res) => {
+// ========== GET USER'S BLOGS ==========
+router.get('/user/:userId/blogs', async (req, res) => {
   try {
-    const threeDaysAgo = new Date();
-    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
-    
-    const blogs = await Blog.find({
-      status: 'published',
-      createdAt: { $gte: threeDaysAgo }
-    })
-      .populate('author', 'name username email avatar')
-      .sort({ views: -1, likes: -1 })
-      .limit(6);
-    
-    res.json({ ok: true, blogs });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
+    const { limit = 20, page = 1 } = req.query;
+    const skip = (page - 1) * limit;
 
-// NEW: Get trending tags
-router.get('/trending-tags', async (req, res) => {
-  try {
-    const tags = await Blog.aggregate([
-      { $match: { status: 'published' } },
-      { $unwind: '$tags' },
-      { $group: { _id: '$tags', count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 20 }
-    ]);
+    const blogs = await Blog.find({ author: req.params.userId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .populate('author', 'name username avatar');
 
-    res.json({ ok: true, tags: tags.map(t => t._id) });
+    const total = await Blog.countDocuments({ author: req.params.userId });
+
+    res.json({
+      success: true,
+      blogs,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+
   } catch (error) {
-    res.status(500).json({ ok: false, error: error.message });
+    console.error('❌ Get user blogs error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch user blogs'
+    });
   }
 });
 
