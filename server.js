@@ -248,10 +248,21 @@ try {
   console.log('  ❌ posts.routes failed:', error.message);
 }
 
+console.log('  📸 Loading Upload routes...');
+try {
+  const uploadRoutes = require('./routes/upload.routes');
+  app.use('/api/upload', uploadRoutes);
+  console.log('  ✅ upload.routes loaded');
+} catch (error) {
+  console.log('  ❌ upload.routes failed:', error.message);
+  console.log('  ⚠️ Image upload will not work without upload.routes');
+}
+
 console.log('✅ Route loading complete!');
 console.log('🤖 AI routes: /api/ai');
 console.log('📝 Content routes: /api/content');
 console.log('💬 Posts routes: /api/posts');
+console.log('📸 Upload routes: /api/upload');
 
 // 404 handler
 app.use((req, res) => {
@@ -289,6 +300,7 @@ console.log('  Claude AI:', process.env.ANTHROPIC_API_KEY ? '✅' : '❌');
 console.log('  DeepSeek AI:', process.env.DEEPSEEK_API_KEY ? '✅' : '❌');
 console.log('  Unsplash Images:', process.env.UNSPLASH_ACCESS_KEY ? '✅' : '⚠️ (using fallback)');
 console.log('  Pexels Images:', process.env.PEXELS_API_KEY ? '✅' : '⚠️ (optional)');
+console.log('  Cloudinary Upload:', process.env.CLOUDINARY_CLOUD_NAME ? '✅' : '⚠️ (image upload disabled)');
 console.log('');
 
 mongoose
