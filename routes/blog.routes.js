@@ -1,259 +1,265 @@
+// routes/blog.routes.js - FIXED VERSION
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
-const User = require('../models/user.model');
-const verifyToken = require('../middleware/verifyToken');
+const { verifyToken } = require('../middleware/auth');
 
-// ========== CREATE BLOG ==========
-router.post('/', verifyToken, async (req, res) => {
+// ========================================
+// IMPORTANT: Specific routes MUST come BEFORE :id routes!
+// ========================================
+
+// GET /api/blogs/my-blogs - Get current user's blogs
+router.get('/my-blogs', verifyToken, async (req, res) => {
   try {
-    const { 
-      title, 
-      content, 
-      excerpt,
-      featuredImage, 
-      category, 
-      tags, 
-      status,
-      readTime 
-    } = req.body;
-
-    // Validate required fields
-    if (!title || !content) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title and content are required'
-      });
-    }
-
-    // Fetch user data for authorName
-    const user = await User.findById(req.user.id).select('name username email');
-    const authorName = user?.name || user?.username || user?.email?.split('@')[0] || 'Anonymous';
-
-    console.log(`📝 Creating blog for user: ${authorName} (${req.user.id})`);
-
-    // Create blog with all fields
-    const blog = await Blog.create({
-      title,
-      content,
-      excerpt: excerpt || content.substring(0, 200), // Use excerpt or auto-generate
-      featuredImage: featuredImage || '',
-      author: req.user.id,
-      authorName: authorName, // ADD THIS!
-      category: category || 'general', // Default category
-      tags: tags || [],
-      status: status || 'draft',
-      readTime: readTime || Math.ceil(content.split(' ').length / 200)
-    });
-
-    console.log(`✅ Blog created by ${authorName}: ${blog._id}`);
-
-    res.status(201).json({
-      success: true,
-      message: status === 'published' ? '✅ Blog published!' : '✅ Blog saved as draft!',
-      blog
-    });
-
-  } catch (error) {
-    console.error('❌ Create blog error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to create blog'
-    });
-  }
-});
-
-// ========== GET ALL BLOGS ==========
-router.get('/', async (req, res) => {
-  try {
-    const { status, category, limit = 20, page = 1 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const query = {};
-    if (status) query.status = status;
-    if (category) query.category = category;
-
-    const blogs = await Blog.find(query)
+    const blogs = await Blog.find({ author: req.user.id })
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .populate('author', 'name username avatar email')
-      .lean();
-
-    // Ensure authorName is populated
-    const blogsWithAuthor = blogs.map(blog => ({
-      ...blog,
-      authorName: blog.authorName || blog.author?.name || blog.author?.username || 'Anonymous'
-    }));
-
-    const total = await Blog.countDocuments(query);
-
+      .populate('author', 'name username profilePicture');
+    
     res.json({
       success: true,
-      data: {
-        blogs: blogsWithAuthor,
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total,
-          pages: Math.ceil(total / limit)
-        }
-      }
+      blogs,
+      count: blogs.length
     });
-
   } catch (error) {
-    console.error('❌ Get blogs error:', error);
+    console.error('❌ Error fetching user blogs:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch blogs'
+      message: 'Failed to fetch blogs'
     });
   }
 });
 
-// ========== GET SINGLE BLOG ==========
+// GET /api/blogs/stats - Get user's blog statistics
+router.get('/stats', verifyToken, async (req, res) => {
+  try {
+    const blogs = await Blog.find({ author: req.user.id });
+    
+    const stats = {
+      totalPosts: blogs.length,
+      totalViews: blogs.reduce((sum, blog) => sum + (blog.views || 0), 0),
+      totalLikes: blogs.reduce((sum, blog) => sum + (blog.likes?.length || 0), 0),
+      totalComments: blogs.reduce((sum, blog) => sum + (blog.comments?.length || 0), 0),
+      totalEarnings: blogs.reduce((sum, blog) => sum + (blog.earnings || 0), 0)
+    };
+    
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('❌ Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch statistics'
+    });
+  }
+});
+
+// GET /api/blogs/trending - Get trending blogs
+router.get('/trending', async (req, res) => {
+  try {
+    const blogs = await Blog.find({ status: 'published' })
+      .sort({ views: -1, likes: -1 })
+      .limit(10)
+      .populate('author', 'name username profilePicture');
+    
+    res.json({
+      success: true,
+      blogs
+    });
+  } catch (error) {
+    console.error('❌ Error fetching trending blogs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch trending blogs'
+    });
+  }
+});
+
+// GET /api/blogs - Get all published blogs (with pagination)
+router.get('/', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    
+    const blogs = await Blog.find({ status: 'published' })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('author', 'name username profilePicture');
+    
+    const total = await Blog.countDocuments({ status: 'published' });
+    
+    res.json({
+      success: true,
+      blogs,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('❌ Error fetching blogs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch blogs'
+    });
+  }
+});
+
+// POST /api/blogs - Create new blog
+router.post('/', verifyToken, async (req, res) => {
+  try {
+    const blog = new Blog({
+      ...req.body,
+      author: req.user.id
+    });
+    
+    await blog.save();
+    await blog.populate('author', 'name username profilePicture');
+    
+    res.status(201).json({
+      success: true,
+      message: 'Blog created successfully',
+      blog
+    });
+  } catch (error) {
+    console.error('❌ Error creating blog:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create blog'
+    });
+  }
+});
+
+// GET /api/blogs/:id - Get single blog by ID
 router.get('/:id', async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id)
-      .populate('author', 'name username avatar email');
-
+      .populate('author', 'name username profilePicture');
+    
     if (!blog) {
       return res.status(404).json({
         success: false,
-        error: 'Blog not found'
+        message: 'Blog not found'
       });
     }
-
-    // Increment views
+    
+    // Increment view count
     blog.views = (blog.views || 0) + 1;
     await blog.save();
-
+    
     res.json({
       success: true,
       blog
     });
-
   } catch (error) {
     console.error('❌ Get blog error:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch blog'
+      message: 'Failed to fetch blog'
     });
   }
 });
 
-// ========== UPDATE BLOG ==========
+// PUT /api/blogs/:id - Update blog
 router.put('/:id', verifyToken, async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
-
+    const blog = await Blog.findOne({
+      _id: req.params.id,
+      author: req.user.id
+    });
+    
     if (!blog) {
       return res.status(404).json({
         success: false,
-        error: 'Blog not found'
+        message: 'Blog not found or unauthorized'
       });
     }
-
-    // Check ownership
-    if (blog.author.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to edit this blog'
-      });
-    }
-
-    const { title, content, excerpt, featuredImage, category, tags, status } = req.body;
-
-    if (title) blog.title = title;
-    if (content) blog.content = content;
-    if (excerpt !== undefined) blog.excerpt = excerpt;
-    if (featuredImage !== undefined) blog.featuredImage = featuredImage;
-    if (category) blog.category = category;
-    if (tags) blog.tags = tags;
-    if (status) blog.status = status;
-
+    
+    Object.assign(blog, req.body);
     await blog.save();
-
+    await blog.populate('author', 'name username profilePicture');
+    
     res.json({
       success: true,
       message: 'Blog updated successfully',
       blog
     });
-
   } catch (error) {
-    console.error('❌ Update blog error:', error);
+    console.error('❌ Error updating blog:', error);
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to update blog'
+      message: 'Failed to update blog'
     });
   }
 });
 
-// ========== DELETE BLOG ==========
+// DELETE /api/blogs/:id - Delete blog
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
-
+    const blog = await Blog.findOneAndDelete({
+      _id: req.params.id,
+      author: req.user.id
+    });
+    
     if (!blog) {
       return res.status(404).json({
         success: false,
-        error: 'Blog not found'
+        message: 'Blog not found or unauthorized'
       });
     }
-
-    // Check ownership
-    if (blog.author.toString() !== req.user.id) {
-      return res.status(403).json({
-        success: false,
-        error: 'Not authorized to delete this blog'
-      });
-    }
-
-    await Blog.findByIdAndDelete(req.params.id);
-
+    
     res.json({
       success: true,
       message: 'Blog deleted successfully'
     });
-
   } catch (error) {
-    console.error('❌ Delete blog error:', error);
+    console.error('❌ Error deleting blog:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to delete blog'
+      message: 'Failed to delete blog'
     });
   }
 });
 
-// ========== GET USER'S BLOGS ==========
-router.get('/user/:userId/blogs', async (req, res) => {
+// POST /api/blogs/:id/like - Toggle like
+router.post('/:id/like', verifyToken, async (req, res) => {
   try {
-    const { limit = 20, page = 1 } = req.query;
-    const skip = (page - 1) * limit;
-
-    const blogs = await Blog.find({ author: req.params.userId })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .populate('author', 'name username avatar');
-
-    const total = await Blog.countDocuments({ author: req.params.userId });
-
+    const blog = await Blog.findById(req.params.id);
+    
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        message: 'Blog not found'
+      });
+    }
+    
+    const likes = blog.likes || [];
+    const userIndex = likes.indexOf(req.user.id);
+    
+    if (userIndex > -1) {
+      likes.splice(userIndex, 1);
+    } else {
+      likes.push(req.user.id);
+    }
+    
+    blog.likes = likes;
+    await blog.save();
+    
     res.json({
       success: true,
-      blogs,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      liked: userIndex === -1,
+      likeCount: likes.length
     });
-
   } catch (error) {
-    console.error('❌ Get user blogs error:', error);
+    console.error('❌ Error toggling like:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch user blogs'
+      message: 'Failed to toggle like'
     });
   }
 });
