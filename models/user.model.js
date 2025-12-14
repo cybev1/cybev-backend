@@ -98,6 +98,53 @@ const userSchema = new mongoose.Schema({
   },
   lastLogin: {
     type: Date
+  },
+  // Password Reset Fields
+  resetPasswordToken: {
+    type: String,
+    default: undefined
+  },
+  resetPasswordExpires: {
+    type: Date,
+    default: undefined
+  },
+  // Email Verification Fields
+  isEmailVerified: {
+    type: Boolean,
+    default: false
+  },
+  emailVerificationToken: {
+    type: String,
+    default: undefined
+  },
+  emailVerificationExpires: {
+    type: Date,
+    default: undefined
+  },
+  // Security & IP Tracking
+  loginHistory: [{
+    ip: String,
+    userAgent: String,
+    timestamp: {
+      type: Date,
+      default: Date.now
+    },
+    location: String
+  }],
+  trustedIPs: [{
+    ip: String,
+    addedAt: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  lastKnownIP: {
+    type: String,
+    default: ''
+  },
+  suspiciousLoginAttempts: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true
