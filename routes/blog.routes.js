@@ -2,7 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
-const { verifyToken } = require('../middleware/auth');
+const verifyToken = require('../middleware/verifyToken'); // ✅ Use verifyToken.js directly!
 
 // ========================================
 // IMPORTANT: Specific routes MUST come BEFORE :id routes!
