@@ -1,7 +1,7 @@
 const nodemailer = require('nodemailer');
 
 /**
- * Send email using nodemailer
+ * Send email with dual provider support (Brevo primary, Gmail fallback)
  * @param {Object} options - Email options
  * @param {string} options.to - Recipient email
  * @param {string} options.subject - Email subject
@@ -9,53 +9,120 @@ const nodemailer = require('nodemailer');
  */
 const sendEmail = async ({ to, subject, html }) => {
   try {
-    // Create transporter
-    let transporter;
+    // Try Brevo first
+    if (process.env.BREVO_USER && process.env.BREVO_PASSWORD) {
+      try {
+        console.log('📤 Attempting to send via Brevo SMTP...');
+        
+        const brevoTransporter = nodemailer.createTransport({
+          host: 'smtp-relay.brevo.com',
+          port: 587,
+          secure: false,
+          auth: {
+            user: process.env.BREVO_USER,
+            pass: process.env.BREVO_PASSWORD
+          },
+          connectionTimeout: 10000,
+          greetingTimeout: 10000,
+          socketTimeout: 10000
+        });
 
-    if (process.env.EMAIL_SERVICE === 'gmail') {
-      // Gmail configuration
-      transporter = nodemailer.createTransporter({
-        service: 'gmail',
-        auth: {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASSWORD // Use App Password, not regular password
+        const info = await brevoTransporter.sendMail({
+          from: `CYBEV <${process.env.BREVO_USER}>`,
+          to,
+          subject,
+          html
+        });
+
+        console.log('✅ Email sent via Brevo:', info.messageId);
+        return { success: true, provider: 'Brevo', messageId: info.messageId };
+        
+      } catch (brevoError) {
+        console.warn('⚠️ Brevo SMTP failed:', brevoError.message);
+        
+        // Try Gmail fallback
+        if (process.env.GMAIL_USER && process.env.GMAIL_PASSWORD) {
+          console.log('📤 Falling back to Gmail SMTP...');
+          
+          try {
+            const gmailTransporter = nodemailer.createTransport({
+              host: 'smtp.gmail.com',
+              port: 587,
+              secure: false,
+              auth: {
+                user: process.env.GMAIL_USER,
+                pass: process.env.GMAIL_PASSWORD
+              },
+              connectionTimeout: 10000,
+              greetingTimeout: 10000,
+              socketTimeout: 10000
+            });
+
+            const info = await gmailTransporter.sendMail({
+              from: `CYBEV <${process.env.GMAIL_USER}>`,
+              to,
+              subject,
+              html
+            });
+
+            console.log('✅ Email sent via Gmail (fallback):', info.messageId);
+            return { success: true, provider: 'Gmail', messageId: info.messageId };
+            
+          } catch (gmailError) {
+            console.error('❌ Gmail SMTP also failed:', gmailError.message);
+            throw new Error(`Both email providers failed. Brevo: ${brevoError.message}, Gmail: ${gmailError.message}`);
+          }
+        } else {
+          // No Gmail fallback configured
+          throw brevoError;
         }
-      });
-    } else if (process.env.SMTP_HOST) {
-      // Custom SMTP configuration
-      transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: process.env.SMTP_PORT || 587,
-        secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASSWORD
-        }
-      });
-    } else {
-      // Development mode - log to console
-      console.log('📧 Email would be sent (no email configured):');
-      console.log('To:', to);
-      console.log('Subject:', subject);
-      console.log('HTML:', html.substring(0, 200) + '...');
-      return { success: true, dev: true };
+      }
     }
 
-    // Send email
-    const info = await transporter.sendMail({
-      from: `"CYBEV" <${process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@cybev.io'}>`,
-      to,
-      subject,
-      html
-    });
+    // If Brevo not configured, try Gmail only
+    if (process.env.GMAIL_USER && process.env.GMAIL_PASSWORD) {
+      console.log('📤 Sending via Gmail (Brevo not configured)...');
+      
+      const gmailTransporter = nodemailer.createTransport({
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false,
+        auth: {
+          user: process.env.GMAIL_USER,
+          pass: process.env.GMAIL_PASSWORD
+        },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 10000
+      });
 
-    console.log('✅ Email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
+      const info = await gmailTransporter.sendMail({
+        from: `CYBEV <${process.env.GMAIL_USER}>`,
+        to,
+        subject,
+        html
+      });
+
+      console.log('✅ Email sent via Gmail:', info.messageId);
+      return { success: true, provider: 'Gmail', messageId: info.messageId };
+    }
+
+    // No email provider configured - development mode
+    console.log('📧 No email provider configured. Email content:');
+    console.log('To:', to);
+    console.log('Subject:', subject);
+    console.log('HTML:', html.substring(0, 200) + '...');
+    
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('No email provider configured');
+    }
+    
+    return { success: true, dev: true };
 
   } catch (error) {
-    console.error('❌ Email sending failed:', error);
+    console.error('❌ Email sending failed:', error.message);
     
-    // Don't throw error in development
+    // In development, don't throw
     if (process.env.NODE_ENV === 'development') {
       console.log('📧 Email content (dev mode):');
       console.log('To:', to);
