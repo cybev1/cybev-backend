@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const verifyToken = require('../middleware/verifyToken');
+const requireEmailVerification = require('../middleware/requireEmailVerification');
 const User = require('../models/user.model');
 
 // Handle OPTIONS preflight for all routes
@@ -13,7 +14,7 @@ router.options('*', (req, res) => {
   res.sendStatus(200);
 });
 
-// Authentication routes
+// ========== PUBLIC ROUTES (No auth required) ==========
 router.post('/register', authController.register);
 router.post('/login', authController.login);
 router.post('/verify-email', authController.verifyEmail);
@@ -21,17 +22,8 @@ router.post('/resend-verification', authController.resendVerification);
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 
-// User Profile
-router.get('/me', verifyToken, async (req, res) => {
-  try {
-    const user = await User.findById(req.user.id).select('-password');
-    res.json(user);
-  } catch {
-    res.status(500).json({ error: 'Failed to fetch user' });
-  }
-});
-
-// Profile endpoint (used by login to check onboarding status)
+// ========== AUTHENTICATED ROUTES (Token required, NO email verification) ==========
+// Profile endpoint - can access even without verification
 router.get('/profile', verifyToken, async (req, res) => {
   try {
     console.log('📋 Fetching profile for user:', req.user.id);
@@ -57,7 +49,8 @@ router.get('/profile', verifyToken, async (req, res) => {
     console.log('✅ Profile data:', {
       id: profile.id,
       hasCompletedOnboarding: profile.hasCompletedOnboarding,
-      hasOnboardingData: !!profile.onboardingData
+      hasOnboardingData: !!profile.onboardingData,
+      isEmailVerified: profile.isEmailVerified
     });
 
     res.json(profile);
@@ -67,23 +60,20 @@ router.get('/profile', verifyToken, async (req, res) => {
   }
 });
 
-// Update Profile
-router.post('/update-profile', verifyToken, async (req, res) => {
+// User basic info - no verification required
+router.get('/me', verifyToken, async (req, res) => {
   try {
-    const { name, referral } = req.body;
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { name, referral },
-      { new: true, select: '-password' }
-    );
+    const user = await User.findById(req.user.id).select('-password');
     res.json(user);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to update profile' });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
 
-// Complete Onboarding endpoint
-router.put('/complete-onboarding', verifyToken, async (req, res) => {
+// ========== PROTECTED ROUTES (Token + Email Verification Required) ==========
+
+// Complete Onboarding - REQUIRES EMAIL VERIFICATION
+router.put('/complete-onboarding', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     const { fullName, role, goals, experience } = req.body;
     
@@ -139,8 +129,23 @@ router.put('/complete-onboarding', verifyToken, async (req, res) => {
   }
 });
 
+// Update Profile - REQUIRES EMAIL VERIFICATION
+router.post('/update-profile', verifyToken, requireEmailVerification, async (req, res) => {
+  try {
+    const { name, referral } = req.body;
+    const user = await User.findByIdAndUpdate(
+      req.user.id,
+      { name, referral },
+      { new: true, select: '-password' }
+    );
+    res.json(user);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
 // Legacy onboarding endpoint (keep for backward compatibility)
-router.post('/onboarding', verifyToken, async (req, res) => {
+router.post('/onboarding', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     const { contentType } = req.body;
     
