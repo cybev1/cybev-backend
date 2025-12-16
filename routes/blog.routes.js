@@ -1,59 +1,15 @@
-// routes/blog.routes.js - FIXED VERSION
+// routes/blog.routes.js - WITH EMAIL VERIFICATION
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
-const verifyToken = require('../middleware/verifyToken'); // ✅ Use verifyToken.js directly!
+const verifyToken = require('../middleware/verifyToken');
+const requireEmailVerification = require('../middleware/requireEmailVerification');
 
 // ========================================
 // IMPORTANT: Specific routes MUST come BEFORE :id routes!
 // ========================================
 
-// GET /api/blogs/my-blogs - Get current user's blogs
-router.get('/my-blogs', verifyToken, async (req, res) => {
-  try {
-    const blogs = await Blog.find({ author: req.user.id })
-      .sort({ createdAt: -1 })
-      .populate('author', 'name username profilePicture');
-    
-    res.json({
-      success: true,
-      blogs,
-      count: blogs.length
-    });
-  } catch (error) {
-    console.error('❌ Error fetching user blogs:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch blogs'
-    });
-  }
-});
-
-// GET /api/blogs/stats - Get user's blog statistics
-router.get('/stats', verifyToken, async (req, res) => {
-  try {
-    const blogs = await Blog.find({ author: req.user.id });
-    
-    const stats = {
-      totalPosts: blogs.length,
-      totalViews: blogs.reduce((sum, blog) => sum + (blog.views || 0), 0),
-      totalLikes: blogs.reduce((sum, blog) => sum + (blog.likes?.length || 0), 0),
-      totalComments: blogs.reduce((sum, blog) => sum + (blog.comments?.length || 0), 0),
-      totalEarnings: blogs.reduce((sum, blog) => sum + (blog.earnings || 0), 0)
-    };
-    
-    res.json({
-      success: true,
-      stats
-    });
-  } catch (error) {
-    console.error('❌ Error fetching stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch statistics'
-    });
-  }
-});
+// ========== PUBLIC ROUTES (No auth) ==========
 
 // GET /api/blogs/trending - Get trending blogs
 router.get('/trending', async (req, res) => {
@@ -110,32 +66,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST /api/blogs - Create new blog
-router.post('/', verifyToken, async (req, res) => {
-  try {
-    const blog = new Blog({
-      ...req.body,
-      author: req.user.id
-    });
-    
-    await blog.save();
-    await blog.populate('author', 'name username profilePicture');
-    
-    res.status(201).json({
-      success: true,
-      message: 'Blog created successfully',
-      blog
-    });
-  } catch (error) {
-    console.error('❌ Error creating blog:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create blog'
-    });
-  }
-});
-
-// GET /api/blogs/:id - Get single blog by ID
+// GET /api/blogs/:id - Get single blog by ID (public)
 router.get('/:id', async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id)
@@ -165,8 +96,82 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// PUT /api/blogs/:id - Update blog
-router.put('/:id', verifyToken, async (req, res) => {
+// ========== PROTECTED ROUTES (Require email verification) ==========
+
+// GET /api/blogs/my-blogs - Get current user's blogs (VERIFIED ONLY)
+router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) => {
+  try {
+    const blogs = await Blog.find({ author: req.user.id })
+      .sort({ createdAt: -1 })
+      .populate('author', 'name username profilePicture');
+    
+    res.json({
+      success: true,
+      blogs,
+      count: blogs.length
+    });
+  } catch (error) {
+    console.error('❌ Error fetching user blogs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch blogs'
+    });
+  }
+});
+
+// GET /api/blogs/stats - Get user's blog statistics (VERIFIED ONLY)
+router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => {
+  try {
+    const blogs = await Blog.find({ author: req.user.id });
+    
+    const stats = {
+      totalPosts: blogs.length,
+      totalViews: blogs.reduce((sum, blog) => sum + (blog.views || 0), 0),
+      totalLikes: blogs.reduce((sum, blog) => sum + (blog.likes?.length || 0), 0),
+      totalComments: blogs.reduce((sum, blog) => sum + (blog.comments?.length || 0), 0),
+      totalEarnings: blogs.reduce((sum, blog) => sum + (blog.earnings || 0), 0)
+    };
+    
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('❌ Error fetching stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch statistics'
+    });
+  }
+});
+
+// POST /api/blogs - Create new blog (VERIFIED ONLY)
+router.post('/', verifyToken, requireEmailVerification, async (req, res) => {
+  try {
+    const blog = new Blog({
+      ...req.body,
+      author: req.user.id
+    });
+    
+    await blog.save();
+    await blog.populate('author', 'name username profilePicture');
+    
+    res.status(201).json({
+      success: true,
+      message: 'Blog created successfully',
+      blog
+    });
+  } catch (error) {
+    console.error('❌ Error creating blog:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create blog'
+    });
+  }
+});
+
+// PUT /api/blogs/:id - Update blog (VERIFIED ONLY)
+router.put('/:id', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     const blog = await Blog.findOne({
       _id: req.params.id,
@@ -198,8 +203,8 @@ router.put('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// DELETE /api/blogs/:id - Delete blog
-router.delete('/:id', verifyToken, async (req, res) => {
+// DELETE /api/blogs/:id - Delete blog (VERIFIED ONLY)
+router.delete('/:id', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     const blog = await Blog.findOneAndDelete({
       _id: req.params.id,
@@ -226,8 +231,8 @@ router.delete('/:id', verifyToken, async (req, res) => {
   }
 });
 
-// POST /api/blogs/:id/like - Toggle like
-router.post('/:id/like', verifyToken, async (req, res) => {
+// POST /api/blogs/:id/like - Toggle like (VERIFIED ONLY)
+router.post('/:id/like', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
     
