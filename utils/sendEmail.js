@@ -1,7 +1,8 @@
-const nodemailer = require('nodemailer');
+const SibApiV3Sdk = require('@sendinblue/client');
 
 /**
- * Send email with dual provider support (Brevo primary, Gmail fallback)
+ * Send email using Brevo (Sendinblue) API
+ * Uses HTTPS (port 443) instead of SMTP - works on Railway!
  * @param {Object} options - Email options
  * @param {string} options.to - Recipient email
  * @param {string} options.subject - Email subject
@@ -9,125 +10,72 @@ const nodemailer = require('nodemailer');
  */
 const sendEmail = async ({ to, subject, html }) => {
   try {
-    // Try Brevo first
-    if (process.env.BREVO_USER && process.env.BREVO_PASSWORD) {
-      try {
-        console.log('📤 Attempting to send via Brevo SMTP...');
-        
-        const brevoTransporter = nodemailer.createTransport({
-          host: 'smtp-relay.brevo.com',
-          port: 587,
-          secure: false,
-          auth: {
-            user: process.env.BREVO_USER,
-            pass: process.env.BREVO_PASSWORD
-          },
-          connectionTimeout: 10000,
-          greetingTimeout: 10000,
-          socketTimeout: 10000
-        });
-
-        const info = await brevoTransporter.sendMail({
-          from: `CYBEV <${process.env.BREVO_USER}>`,
-          to,
-          subject,
-          html
-        });
-
-        console.log('✅ Email sent via Brevo:', info.messageId);
-        return { success: true, provider: 'Brevo', messageId: info.messageId };
-        
-      } catch (brevoError) {
-        console.warn('⚠️ Brevo SMTP failed:', brevoError.message);
-        
-        // Try Gmail fallback
-        if (process.env.GMAIL_USER && process.env.GMAIL_PASSWORD) {
-          console.log('📤 Falling back to Gmail SMTP...');
-          
-          try {
-            const gmailTransporter = nodemailer.createTransport({
-              host: 'smtp.gmail.com',
-              port: 587,
-              secure: false,
-              auth: {
-                user: process.env.GMAIL_USER,
-                pass: process.env.GMAIL_PASSWORD
-              },
-              connectionTimeout: 10000,
-              greetingTimeout: 10000,
-              socketTimeout: 10000
-            });
-
-            const info = await gmailTransporter.sendMail({
-              from: `CYBEV <${process.env.GMAIL_USER}>`,
-              to,
-              subject,
-              html
-            });
-
-            console.log('✅ Email sent via Gmail (fallback):', info.messageId);
-            return { success: true, provider: 'Gmail', messageId: info.messageId };
-            
-          } catch (gmailError) {
-            console.error('❌ Gmail SMTP also failed:', gmailError.message);
-            throw new Error(`Both email providers failed. Brevo: ${brevoError.message}, Gmail: ${gmailError.message}`);
-          }
-        } else {
-          // No Gmail fallback configured
-          throw brevoError;
-        }
-      }
+    // Check if API key is configured
+    if (!process.env.BREVO_API_KEY) {
+      throw new Error('BREVO_API_KEY not configured in environment variables');
     }
 
-    // If Brevo not configured, try Gmail only
-    if (process.env.GMAIL_USER && process.env.GMAIL_PASSWORD) {
-      console.log('📤 Sending via Gmail (Brevo not configured)...');
-      
-      const gmailTransporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 587,
-        secure: false,
-        auth: {
-          user: process.env.GMAIL_USER,
-          pass: process.env.GMAIL_PASSWORD
-        },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 10000
-      });
+    console.log('📤 Sending email via Brevo API (HTTPS)...');
+    console.log('📧 To:', to);
+    console.log('📋 Subject:', subject);
 
-      const info = await gmailTransporter.sendMail({
-        from: `CYBEV <${process.env.GMAIL_USER}>`,
-        to,
-        subject,
-        html
-      });
-
-      console.log('✅ Email sent via Gmail:', info.messageId);
-      return { success: true, provider: 'Gmail', messageId: info.messageId };
-    }
-
-    // No email provider configured - development mode
-    console.log('📧 No email provider configured. Email content:');
-    console.log('To:', to);
-    console.log('Subject:', subject);
-    console.log('HTML:', html.substring(0, 200) + '...');
+    // Initialize Brevo API client
+    const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
     
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('No email provider configured');
-    }
+    // Set API key
+    apiInstance.setApiKey(
+      SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey,
+      process.env.BREVO_API_KEY
+    );
+
+    // Create email object
+    const sendSmtpEmail = new SibApiV3Sdk.SendSmtpEmail();
     
-    return { success: true, dev: true };
+    // Set sender
+    sendSmtpEmail.sender = {
+      name: 'CYBEV',
+      email: process.env.BREVO_SENDER_EMAIL || 'info@cybev.io'
+    };
+    
+    // Set recipient
+    sendSmtpEmail.to = [{ email: to }];
+    
+    // Set subject and content
+    sendSmtpEmail.subject = subject;
+    sendSmtpEmail.htmlContent = html;
+
+    // Send email via API
+    const result = await apiInstance.sendTransacEmail(sendSmtpEmail);
+    
+    console.log('✅ Email sent successfully via Brevo API');
+    console.log('📬 Message ID:', result.messageId);
+    
+    return {
+      success: true,
+      provider: 'Brevo-API',
+      messageId: result.messageId
+    };
 
   } catch (error) {
-    console.error('❌ Email sending failed:', error.message);
+    console.error('❌ Brevo API error:', error.message);
     
-    // In development, don't throw
+    // Log more details if available
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response body:', error.response.body);
+    }
+
+    // In development, don't throw - just log
     if (process.env.NODE_ENV === 'development') {
       console.log('📧 Email content (dev mode):');
       console.log('To:', to);
       console.log('Subject:', subject);
-      return { success: false, error: error.message };
+      console.log('HTML preview:', html.substring(0, 200) + '...');
+      return {
+        success: false,
+        error: error.message,
+        dev: true
+      };
     }
     
     throw error;
