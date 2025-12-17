@@ -56,9 +56,6 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     // Generate email verification token
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationTokenHash = crypto
@@ -69,12 +66,12 @@ exports.register = async (req, res) => {
     // Get IP for security tracking
     const clientIP = getClientIP(req);
 
-    // Create user
+    // Create user - pre-save hook will hash the password
     const user = await User.create({
       name: name || username || email.split('@')[0],
       email,
       username: username || email.split('@')[0],
-      password: hashedPassword,
+      password: password, // Pre-save hook will hash this
       emailVerificationToken: verificationTokenHash,
       emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
       lastKnownIP: clientIP,
@@ -520,12 +517,12 @@ exports.resetPassword = async (req, res) => {
     }
 
     // Hash new password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    user.password = hashedPassword;
+    // Update password - pre-save hook will hash it
+    user.password = password; // Pre-save hook will hash this
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
-    await user.save();
+    await user.save(); // Pre-save hook hashes the password here
+
 
     // Send confirmation email
     try {
