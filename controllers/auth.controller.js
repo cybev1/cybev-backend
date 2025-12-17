@@ -312,6 +312,29 @@ exports.login = async (req, res) => {
       });
     }
 
+    // ✅ AUTO-FIX FOR EXISTING USERS - Mark old accounts as onboarded
+    if (!user.hasCompletedOnboarding && user.createdAt) {
+      const accountAge = Date.now() - new Date(user.createdAt).getTime();
+      const oneDayInMs = 24 * 60 * 60 * 1000; // 24 hours
+      
+      // If account is older than 1 day, mark as onboarded
+      if (accountAge > oneDayInMs) {
+        console.log(`✅ Auto-marking existing user as onboarded: ${user.email}`);
+        user.hasCompletedOnboarding = true;
+        
+        // Add basic onboarding data if missing
+        if (!user.onboardingData) {
+          user.onboardingData = {
+            fullName: user.name,
+            role: 'content_creator',
+            goals: ['create_content'],
+            experience: 'intermediate',
+            completedAt: new Date()
+          };
+        }
+      }
+    }
+
     // Get client IP
     const clientIP = getClientIP(req);
     const userAgent = req.headers['user-agent'];
@@ -401,7 +424,9 @@ exports.login = async (req, res) => {
         email: user.email,
         username: user.username,
         avatar: user.avatar,
-        isEmailVerified: user.isEmailVerified
+        isEmailVerified: user.isEmailVerified,
+        hasCompletedOnboarding: user.hasCompletedOnboarding,
+        onboardingData: user.onboardingData
       }
     });
 
