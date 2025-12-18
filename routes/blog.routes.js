@@ -36,7 +36,7 @@ router.get('/trending', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = parseInt(req.query.limit) || 50; // Increased to 50
     const skip = (page - 1) * limit;
     
     const blogs = await Blog.find({ status: 'published' })
@@ -49,7 +49,12 @@ router.get('/', async (req, res) => {
     
     res.json({
       success: true,
-      blogs,
+      data: {
+        blogs,
+        total,
+        limit,
+        skip
+      },
       pagination: {
         page,
         limit,
@@ -66,44 +71,19 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/blogs/:id - Get single blog by ID (public)
-router.get('/:id', async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id)
-      .populate('author', 'name username profilePicture');
-    
-    if (!blog) {
-      return res.status(404).json({
-        success: false,
-        message: 'Blog not found'
-      });
-    }
-    
-    // Increment view count
-    blog.views = (blog.views || 0) + 1;
-    await blog.save();
-    
-    res.json({
-      success: true,
-      blog
-    });
-  } catch (error) {
-    console.error('❌ Get blog error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch blog'
-    });
-  }
-});
-
 // ========== PROTECTED ROUTES (Require email verification) ==========
 
 // GET /api/blogs/my-blogs - Get current user's blogs (VERIFIED ONLY)
+// ⭐ MUST BE BEFORE /:id ROUTE!
 router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) => {
   try {
+    console.log('📚 Fetching my blogs for user:', req.user.id);
+    
     const blogs = await Blog.find({ author: req.user.id })
       .sort({ createdAt: -1 })
       .populate('author', 'name username profilePicture');
+    
+    console.log(`✅ Found ${blogs.length} blogs for user`);
     
     res.json({
       success: true,
@@ -120,8 +100,11 @@ router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) 
 });
 
 // GET /api/blogs/stats - Get user's blog statistics (VERIFIED ONLY)
+// ⭐ MUST BE BEFORE /:id ROUTE!
 router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => {
   try {
+    console.log('📊 Fetching blog stats for user:', req.user.id);
+    
     const blogs = await Blog.find({ author: req.user.id });
     
     const stats = {
@@ -132,6 +115,8 @@ router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => 
       totalEarnings: blogs.reduce((sum, blog) => sum + (blog.earnings || 0), 0)
     };
     
+    console.log('✅ Blog stats:', stats);
+    
     res.json({
       success: true,
       stats
@@ -141,6 +126,42 @@ router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => 
     res.status(500).json({
       success: false,
       message: 'Failed to fetch statistics'
+    });
+  }
+});
+
+// GET /api/blogs/:id - Get single blog by ID (public)
+// ⭐ THIS MUST COME AFTER /my-blogs and /stats!
+router.get('/:id', async (req, res) => {
+  try {
+    console.log('📖 Fetching blog:', req.params.id);
+    
+    const blog = await Blog.findById(req.params.id)
+      .populate('author', 'name username profilePicture');
+    
+    if (!blog) {
+      console.log('❌ Blog not found:', req.params.id);
+      return res.status(404).json({
+        success: false,
+        message: 'Blog not found'
+      });
+    }
+    
+    // Increment view count
+    blog.views = (blog.views || 0) + 1;
+    await blog.save();
+    
+    console.log('✅ Blog found:', blog.title);
+    
+    res.json({
+      success: true,
+      blog
+    });
+  } catch (error) {
+    console.error('❌ Get blog error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch blog'
     });
   }
 });
