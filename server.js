@@ -154,7 +154,7 @@ console.log('📦 Loading routes...');
 
 try {
   const blogRoutes = require('./routes/blog.routes');
-  app.use('/api/blogs', blogRoutes);
+  app.use('/blogs', blogRoutes);  // Fixed: Removed /api prefix
   console.log('  ✅ blog.routes loaded');
 } catch (error) {
   console.log('  ❌ blog.routes failed:', error.message);
@@ -242,7 +242,7 @@ try {
 console.log('  📡 Loading Posts routes...');
 try {
   const postsRoutes = require('./routes/posts.routes');
-  app.use('/api/posts', postsRoutes);
+  app.use('/posts', postsRoutes);  // Fixed: Removed /api prefix
   console.log('  ✅ posts.routes loaded');
 } catch (error) {
   console.log('  ❌ posts.routes failed:', error.message);
@@ -261,7 +261,8 @@ try {
 console.log('✅ Route loading complete!');
 console.log('🤖 AI routes: /api/ai');
 console.log('📝 Content routes: /api/content');
-console.log('💬 Posts routes: /api/posts');
+console.log('💬 Posts routes: /posts');  // Fixed: Updated path
+console.log('📚 Blog routes: /blogs');    // Added blog routes
 console.log('📸 Upload routes: /api/upload');
 
 // 404 handler
