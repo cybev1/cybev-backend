@@ -1,4 +1,4 @@
-// routes/blog.routes.js - WITH EMAIL VERIFICATION
+// routes/blog.routes.js - CLEAN VERSION (No verification on public routes)
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
@@ -6,18 +6,21 @@ const verifyToken = require('../middleware/verifyToken');
 const requireEmailVerification = require('../middleware/requireEmailVerification');
 
 // ========================================
-// IMPORTANT: Specific routes MUST come BEFORE :id routes!
+// IMPORTANT: Specific routes BEFORE :id routes!
 // ========================================
 
-// ========== PUBLIC ROUTES (No auth) ==========
+// ========== PUBLIC ROUTES (No auth - Feed access) ==========
 
 // GET /api/blogs/trending - Get trending blogs
 router.get('/trending', async (req, res) => {
   try {
-    const blogs = await Blog.find({ status: 'published' })
+    console.log('🔥 Fetching trending blogs');
+    const blogs = await Blog.find({})  // Show ALL, not just published
       .sort({ views: -1, likes: -1 })
       .limit(10)
       .populate('author', 'name username profilePicture');
+    
+    console.log(`✅ Found ${blogs.length} trending blogs`);
     
     res.json({
       success: true,
@@ -32,20 +35,24 @@ router.get('/trending', async (req, res) => {
   }
 });
 
-// GET /api/blogs - Get all published blogs (with pagination)
+// GET /api/blogs - Get all blogs (PUBLIC - for feed)
 router.get('/', async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 50; // Increased to 50
-    const skip = (page - 1) * limit;
+    const limit = parseInt(req.query.limit) || 50;  // Increased from 10!
+    const skip = parseInt(req.query.skip) || 0;
     
-    const blogs = await Blog.find({ status: 'published' })
+    console.log(`📚 Fetching blogs - limit: ${limit}, skip: ${skip}`);
+    
+    // Show ALL blogs for feed (not just published)
+    const blogs = await Blog.find({})
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
       .populate('author', 'name username profilePicture');
     
-    const total = await Blog.countDocuments({ status: 'published' });
+    const total = await Blog.countDocuments({});
+    
+    console.log(`✅ Found ${blogs.length} blogs (${total} total)`);
     
     res.json({
       success: true,
@@ -54,12 +61,6 @@ router.get('/', async (req, res) => {
         total,
         limit,
         skip
-      },
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
       }
     });
   } catch (error) {
@@ -71,9 +72,9 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ========== PROTECTED ROUTES (Require email verification) ==========
+// ========== PROTECTED ROUTES (User-specific - Email verified) ==========
 
-// GET /api/blogs/my-blogs - Get current user's blogs (VERIFIED ONLY)
+// GET /api/blogs/my-blogs - Get current user's blogs
 // ⭐ MUST BE BEFORE /:id ROUTE!
 router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) => {
   try {
@@ -99,7 +100,7 @@ router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) 
   }
 });
 
-// GET /api/blogs/stats - Get user's blog statistics (VERIFIED ONLY)
+// GET /api/blogs/stats - Get user's blog statistics
 // ⭐ MUST BE BEFORE /:id ROUTE!
 router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => {
   try {
@@ -130,8 +131,9 @@ router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => 
   }
 });
 
-// GET /api/blogs/:id - Get single blog by ID (public)
-// ⭐ THIS MUST COME AFTER /my-blogs and /stats!
+// ========== :id ROUTES (After specific routes) ==========
+
+// GET /api/blogs/:id - Get single blog by ID (PUBLIC)
 router.get('/:id', async (req, res) => {
   try {
     console.log('📖 Fetching blog:', req.params.id);
