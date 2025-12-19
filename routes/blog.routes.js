@@ -168,9 +168,11 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-// POST /api/blogs - Create new blog (VERIFIED ONLY)
-router.post('/', verifyToken, requireEmailVerification, async (req, res) => {
+// POST /api/blogs - Create new blog (AUTH REQUIRED - No email verification)
+router.post('/', verifyToken, async (req, res) => {
   try {
+    console.log('📝 Creating blog for user:', req.user.id);
+    
     const blog = new Blog({
       ...req.body,
       author: req.user.id
@@ -178,6 +180,8 @@ router.post('/', verifyToken, requireEmailVerification, async (req, res) => {
     
     await blog.save();
     await blog.populate('author', 'name username profilePicture');
+    
+    console.log('✅ Blog created:', blog._id);
     
     res.status(201).json({
       success: true,
@@ -193,8 +197,8 @@ router.post('/', verifyToken, requireEmailVerification, async (req, res) => {
   }
 });
 
-// PUT /api/blogs/:id - Update blog (VERIFIED ONLY)
-router.put('/:id', verifyToken, requireEmailVerification, async (req, res) => {
+// PUT /api/blogs/:id - Update blog (AUTH REQUIRED - No email verification)
+router.put('/:id', verifyToken, async (req, res) => {
   try {
     const blog = await Blog.findOne({
       _id: req.params.id,
@@ -226,8 +230,8 @@ router.put('/:id', verifyToken, requireEmailVerification, async (req, res) => {
   }
 });
 
-// DELETE /api/blogs/:id - Delete blog (VERIFIED ONLY)
-router.delete('/:id', verifyToken, requireEmailVerification, async (req, res) => {
+// DELETE /api/blogs/:id - Delete blog (AUTH REQUIRED - No email verification)
+router.delete('/:id', verifyToken, async (req, res) => {
   try {
     const blog = await Blog.findOneAndDelete({
       _id: req.params.id,
@@ -254,8 +258,8 @@ router.delete('/:id', verifyToken, requireEmailVerification, async (req, res) =>
   }
 });
 
-// POST /api/blogs/:id/like - Toggle like (VERIFIED ONLY)
-router.post('/:id/like', verifyToken, requireEmailVerification, async (req, res) => {
+// POST /api/blogs/:id/like - Toggle like (AUTH REQUIRED - No email verification)
+router.post('/:id/like', verifyToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
     
