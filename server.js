@@ -210,12 +210,13 @@ try {
 }
 
 try {
-  const notificationRoutes = require('./routes/notification.routes');
+  // NOTE: file name is plural (notifications.routes.js)
+  const notificationRoutes = require('./routes/notifications.routes');
   app.use('/api/notifications', notificationRoutes);
-  console.log('  ✅ notification.routes loaded');
+  console.log('  ✅ notifications.routes loaded');
 } catch (error) {
-  console.log('  ❌ notification.routes failed:', error.message);
-  console.log('  ⚠️ Notification routes skipped - using mock functions');
+  console.log('  ❌ notifications.routes failed:', error.message);
+  console.log('  ⚠️ Notification routes skipped');
 }
 
 // 🤖 AI & Content Engine Routes - CRITICAL!

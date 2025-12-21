@@ -1,32 +1,31 @@
-```javascript
 const express = require('express');
 const router = express.Router();
+
 const Blog = require('../models/blog.model');
 const Follow = require('../models/follow.model');
 const { authenticateToken } = require('../middleware/auth');
 
-// Get personalized feed (posts from followed users)
+// Get personalized feed (blogs from followed users)
 router.get('/following', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const userId = req.user.id;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;
 
     // Get list of users the current user follows
     const following = await Follow.find({ follower: userId }).select('following');
-    const followingIds = following.map(f => f.following);
+    const followingIds = following.map((f) => f.following);
 
-    // If not following anyone, return empty feed with suggestion
     if (followingIds.length === 0) {
       return res.json({
+        ok: true,
         blogs: [],
         pagination: { page, limit, total: 0, pages: 0 },
         message: 'Follow users to see their posts in your feed'
       });
     }
 
-    // Get blogs from followed users
     const blogs = await Blog.find({
       author: { $in: followingIds },
       status: 'published'
@@ -43,6 +42,7 @@ router.get('/following', authenticateToken, async (req, res) => {
     });
 
     res.json({
+      ok: true,
       blogs,
       pagination: {
         page,
@@ -53,29 +53,28 @@ router.get('/following', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Feed error:', error);
-    res.status(500).json({ error: 'Failed to fetch feed' });
+    res.status(500).json({ ok: false, error: 'Failed to fetch feed' });
   }
 });
 
-// Get mixed feed (combination of following + popular)
+// Get mixed feed (70% following + 30% popular)
 router.get('/mixed', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    const userId = req.user.id;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
     const skip = (page - 1) * limit;
 
     // Get following users
     const following = await Follow.find({ follower: userId }).select('following');
-    const followingIds = following.map(f => f.following);
+    const followingIds = following.map((f) => f.following);
 
-    // Get 70% from following, 30% popular
     const followingLimit = Math.ceil(limit * 0.7);
-    const popularLimit = Math.floor(limit * 0.3);
+    const popularLimit = Math.max(0, limit - followingLimit);
 
     let allBlogs = [];
 
-    // Get blogs from followed users
+    // From followed users
     if (followingIds.length > 0) {
       const followingBlogs = await Blog.find({
         author: { $in: followingIds },
@@ -86,26 +85,27 @@ router.get('/mixed', authenticateToken, async (req, res) => {
         .sort('-createdAt')
         .limit(followingLimit)
         .skip(skip);
-      
-      allBlogs = [...followingBlogs];
+
+      allBlogs = allBlogs.concat(followingBlogs);
     }
 
-    // Fill remaining with popular posts (not from followed users)
+    // Popular posts not from followed users
     const popularBlogs = await Blog.find({
       author: { $nin: [...followingIds, userId] },
       status: 'published'
     })
       .populate('author', 'username email avatar')
       .populate('likes', 'username')
-      .sort('-likes -createdAt')
+      .sort('-createdAt') // Safer than sorting by "-likes" (array) in Mongo
       .limit(popularLimit);
 
-    allBlogs = [...allBlogs, ...popularBlogs];
+    allBlogs = allBlogs.concat(popularBlogs);
 
-    // Shuffle to mix following and popular
+    // Light shuffle to mix buckets
     allBlogs.sort(() => Math.random() - 0.5);
 
     res.json({
+      ok: true,
       blogs: allBlogs,
       pagination: {
         page,
@@ -116,9 +116,8 @@ router.get('/mixed', authenticateToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Mixed feed error:', error);
-    res.status(500).json({ error: 'Failed to fetch mixed feed' });
+    res.status(500).json({ ok: false, error: 'Failed to fetch mixed feed' });
   }
 });
 
 module.exports = router;
-```
