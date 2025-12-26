@@ -1,122 +1,56 @@
 const express = require('express');
 const router = express.Router();
 
-const Blog = require('../models/blog.model');
-const Follow = require('../models/follow.model');
 const { authenticateToken } = require('../middleware/auth');
+const Follow = require('../models/follow.model');
+const Post = require('../models/post.model');
 
-// Get personalized feed (blogs from followed users)
-router.get('/following', authenticateToken, async (req, res) => {
+/**
+ * Feed API
+ * Mounted at: /api/feed
+ *
+ * NOTE: The primary feed endpoint used by the frontend is /posts/feed.
+ * This router exists for backward-compat and for future expansion.
+ */
+
+// GET /api/feed?scope=all|following&limit=50&page=1
+router.get('/', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 10;
+    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 100);
     const skip = (page - 1) * limit;
 
-    // Get list of users the current user follows
-    const following = await Follow.find({ follower: userId }).select('following');
-    const followingIds = following.map((f) => f.following);
+    const scope = String(req.query.scope || 'all').toLowerCase();
 
-    if (followingIds.length === 0) {
-      return res.json({
-        ok: true,
-        blogs: [],
-        pagination: { page, limit, total: 0, pages: 0 },
-        message: 'Follow users to see their posts in your feed'
-      });
+    const query = {};
+    if (scope === 'following') {
+      const follows = await Follow.find({ follower: req.user.id }).select('following');
+      const followingIds = follows.map((f) => f.following);
+      query.authorId = { $in: [...followingIds, req.user.id] };
     }
 
-    const blogs = await Blog.find({
-      author: { $in: followingIds },
-      status: 'published'
-    })
-      .populate('author', 'username email avatar')
-      .populate('likes', 'username')
-      .sort('-createdAt')
-      .limit(limit)
-      .skip(skip);
-
-    const total = await Blog.countDocuments({
-      author: { $in: followingIds },
-      status: 'published'
-    });
+    const [posts, total] = await Promise.all([
+      Post.find(query)
+        .populate('authorId', 'username displayName avatar')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      Post.countDocuments(query),
+    ]);
 
     res.json({
       ok: true,
-      blogs,
+      posts,
       pagination: {
         page,
         limit,
         total,
-        pages: Math.ceil(total / limit)
-      }
+        hasMore: skip + posts.length < total,
+      },
     });
-  } catch (error) {
-    console.error('Feed error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch feed' });
-  }
-});
-
-// Get mixed feed (70% following + 30% popular)
-router.get('/mixed', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const page = parseInt(req.query.page, 10) || 1;
-    const limit = parseInt(req.query.limit, 10) || 10;
-    const skip = (page - 1) * limit;
-
-    // Get following users
-    const following = await Follow.find({ follower: userId }).select('following');
-    const followingIds = following.map((f) => f.following);
-
-    const followingLimit = Math.ceil(limit * 0.7);
-    const popularLimit = Math.max(0, limit - followingLimit);
-
-    let allBlogs = [];
-
-    // From followed users
-    if (followingIds.length > 0) {
-      const followingBlogs = await Blog.find({
-        author: { $in: followingIds },
-        status: 'published'
-      })
-        .populate('author', 'username email avatar')
-        .populate('likes', 'username')
-        .sort('-createdAt')
-        .limit(followingLimit)
-        .skip(skip);
-
-      allBlogs = allBlogs.concat(followingBlogs);
-    }
-
-    // Popular posts not from followed users
-    const popularBlogs = await Blog.find({
-      author: { $nin: [...followingIds, userId] },
-      status: 'published'
-    })
-      .populate('author', 'username email avatar')
-      .populate('likes', 'username')
-      .sort('-createdAt') // Safer than sorting by "-likes" (array) in Mongo
-      .limit(popularLimit);
-
-    allBlogs = allBlogs.concat(popularBlogs);
-
-    // Light shuffle to mix buckets
-    allBlogs.sort(() => Math.random() - 0.5);
-
-    res.json({
-      ok: true,
-      blogs: allBlogs,
-      pagination: {
-        page,
-        limit,
-        total: allBlogs.length,
-        pages: Math.ceil(allBlogs.length / limit)
-      }
-    });
-  } catch (error) {
-    console.error('Mixed feed error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch mixed feed' });
+  } catch (err) {
+    console.error('feed error:', err);
+    res.status(500).json({ ok: false, message: 'Failed to load feed' });
   }
 });
 

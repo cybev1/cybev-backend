@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const Post = require('../models/post.model');
 const User = require('../models/user.model');
+const Follow = require('../models/follow.model');
 const verifyToken = require('../middleware/verifyToken');
 
 // Import existing controller if it exists
@@ -111,11 +112,21 @@ router.post('/', verifyToken, async (req, res) => {
 // ========== GET FEED POSTS ==========
 router.get('/feed', verifyToken, async (req, res) => {
   try {
-    const { page = 1, limit = 20, type } = req.query;
+    const { page = 1, limit = 20, type, scope } = req.query;
     const skip = (page - 1) * limit;
 
     const query = { isHidden: false };
     if (type) query.type = type;
+
+    // Phase 1: "Following" feed
+    // /posts/feed?scope=following
+    if (scope === 'following') {
+      const following = await Follow.find({ follower: req.user.id }).select('following').lean();
+      const followingIds = following.map(f => f.following);
+      // include your own posts as well
+      followingIds.push(req.user.id);
+      query.authorId = { $in: followingIds };
+    }
 
     const posts = await Post.find(query)
       .sort({ isPinned: -1, createdAt: -1 })
