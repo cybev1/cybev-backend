@@ -143,31 +143,6 @@ app.get('/check-cors', (req, res) => {
   });
 });
 
-// ---------- Phase 0 stabilization: DB gate ----------
-// In first-time local runs / CI, MONGO_URI may not be set yet.
-// Instead of crashing the server, we:
-//   1) start the HTTP server
-//   2) connect to Mongo if MONGO_URI exists
-//   3) return 503 for DB-dependent endpoints until Mongo is connected
-app.locals.dbReady = false;
-app.use((req, res, next) => {
-  const allowList = new Set(['/health', '/api/health', '/check-cors']);
-  if (allowList.has(req.path)) return next();
-
-  const dbPrefixes = ['/api', '/blogs', '/posts'];
-  const needsDb = dbPrefixes.some((p) => req.path === p || req.path.startsWith(p + '/') || req.path.startsWith(p));
-
-  if (needsDb && !req.app.locals.dbReady) {
-    return res.status(503).json({
-      ok: false,
-      error: 'Database not connected',
-      hint: 'Set MONGO_URI in your .env (see .env.example) and restart the server.',
-    });
-  }
-
-  next();
-});
-
 // ---------- Routes ----------
 const authRoutes = require('./routes/auth.routes');
 app.use('/api/auth', authRoutes);
@@ -199,6 +174,14 @@ try {
   console.log('  ✅ domain.routes loaded');
 } catch (error) {
   console.log('  ❌ domain.routes failed:', error.message);
+}
+
+try {
+  const blogSiteRoutes = require('./routes/blogsite.routes');
+  app.use('/api/blogsite', blogSiteRoutes);
+  console.log('  ✅ blogsite.routes loaded');
+} catch (error) {
+  console.log('  ❌ blogsite.routes failed:', error.message);
 }
 
 try {
@@ -310,13 +293,18 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ---------- Phase 0 stabilization: Start first, then connect DB ----------
+// ---------- Mongo + Start ----------
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
+if (!MONGO_URI) {
+  console.error('❌ ERROR: MONGO_URI not found in environment variables');
+  process.exit(1);
+}
+
 // Log API key status (without revealing keys)
 console.log('\n🔑 API Keys Status:');
-console.log('  MongoDB:', MONGO_URI ? '✅' : '⚠️ (missing)');
+console.log('  MongoDB:', MONGO_URI ? '✅' : '❌');
 console.log('  Claude AI:', process.env.ANTHROPIC_API_KEY ? '✅' : '❌');
 console.log('  DeepSeek AI:', process.env.DEEPSEEK_API_KEY ? '✅' : '❌');
 console.log('  Unsplash Images:', process.env.UNSPLASH_ACCESS_KEY ? '✅' : '⚠️ (using fallback)');
@@ -324,39 +312,32 @@ console.log('  Pexels Images:', process.env.PEXELS_API_KEY ? '✅' : '⚠️ (op
 console.log('  Cloudinary Upload:', process.env.CLOUDINARY_CLOUD_NAME ? '✅' : '⚠️ (image upload disabled)');
 console.log('');
 
-// Start server immediately. If DB isn't ready yet, the DB gate middleware
-// will return 503 for DB-dependent endpoints.
-server.listen(PORT, () => {
-  console.log(`🚀 CYBEV Server running on PORT ${PORT}`);
-  console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
-  console.log('✨ Content Engine Ready!');
-  console.log('   🤖 AI Blog Generation: /api/content/create-blog');
-  console.log('   🏗️ Website Templates: /api/content/create-template');
-  console.log('   🔍 SEO Generation: /api/content/generate-seo');
-  console.log('   🔥 Viral Hashtags: /api/content/generate-hashtags');
-  console.log('   🖼️ Featured Images: /api/content/get-featured-image');
-  console.log('   💎 NFT Minting: /api/content/mint-nft');
-  console.log('   💰 Token Staking: /api/content/stake');
-  console.log('');
-  console.log('🎉 Server online. DB status:', app.locals.dbReady ? '✅ connected' : '⚠️ not connected');
-});
-
-(async () => {
-  if (!MONGO_URI) {
-    console.warn('⚠️ MONGO_URI is not set. DB-dependent routes will return 503 until you configure it.');
-    return;
-  }
-  try {
-    await mongoose.connect(MONGO_URI);
-    app.locals.dbReady = true;
+mongoose
+  .connect(MONGO_URI)
+  .then(() => {
     console.log('✅ MongoDB connected');
-  } catch (err) {
-    console.error('❌ MongoDB connection failed (server will keep running):', err?.message || err);
-  }
-})();
+    server.listen(PORT, () => {
+      console.log(`🚀 CYBEV Server running on PORT ${PORT}`);
+      console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
+      console.log('✨ Content Engine Ready!');
+      console.log('   🤖 AI Blog Generation: /api/content/create-blog');
+      console.log('   🏗️ Website Templates: /api/content/create-template');
+      console.log('   🔍 SEO Generation: /api/content/generate-seo');
+      console.log('   🔥 Viral Hashtags: /api/content/generate-hashtags');
+      console.log('   🖼️ Featured Images: /api/content/get-featured-image');
+      console.log('   💎 NFT Minting: /api/content/mint-nft');
+      console.log('   💰 Token Staking: /api/content/stake');
+      console.log('');
+      console.log('🎉 Server ready to create amazing content!');
+    });
+  })
+  .catch(err => {
+    console.error('❌ MongoDB connection failed:', err);
+    process.exit(1);
+  });
 
 process.on('SIGTERM', () => {
   console.log('SIGTERM signal received: closing HTTP server');
-  try { mongoose.connection.close(); } catch (_) {}
+  mongoose.connection.close();
   process.exit(0);
 });
