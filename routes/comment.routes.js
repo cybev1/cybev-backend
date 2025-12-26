@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const Comment = require('../models/comment.model');
+const Blog = require('../models/blog.model');
+const { createNotification } = require('../utils/notifications');
 const { authenticateToken } = require('../middleware/auth');
 
 // Get comments for a blog
@@ -76,12 +78,28 @@ router.post('/', authenticateToken, async (req, res) => {
       content,
       blog: blogId,
       author: req.user.id,
-      authorName: req.user.name,
+      authorName: req.user.name || req.user.email || 'User',
       parentComment: parentCommentId || null
     });
 
     await comment.save();
     await comment.populate('author', 'name email');
+
+    // Notify the blog author (avoid self-notifications)
+    try {
+      const blog = await Blog.findById(blogId).select('author title');
+      const blogAuthorId = blog?.author?.toString();
+      if (blogAuthorId && blogAuthorId !== req.user.id) {
+        await createNotification(
+          blogAuthorId,
+          'comment',
+          'New comment on your post',
+          { blogId, commentId: comment._id }
+        );
+      }
+    } catch (_) {
+      // non-blocking
+    }
 
     res.status(201).json({ ok: true, comment });
   } catch (error) {
@@ -156,6 +174,16 @@ router.post('/:id/like', authenticateToken, async (req, res) => {
     } else {
       comment.likes.push(req.user.id);
       liked = true;
+
+      // Notify the comment author (avoid self notifications)
+      if (comment.author && comment.author.toString() !== req.user.id) {
+        await createNotification(
+          comment.author,
+          'comment_like',
+          'Someone liked your comment',
+          { commentId: comment._id, blogId: comment.blog }
+        );
+      }
     }
 
     await comment.save();

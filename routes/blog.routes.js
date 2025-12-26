@@ -4,6 +4,7 @@ const router = express.Router();
 const Blog = require('../models/blog.model');
 const verifyToken = require('../middleware/verifyToken');
 const requireEmailVerification = require('../middleware/requireEmailVerification');
+const { createNotification } = require('../utils/notifications');
 
 // ========================================
 // IMPORTANT: Specific routes BEFORE :id routes!
@@ -15,10 +16,23 @@ const requireEmailVerification = require('../middleware/requireEmailVerification
 router.get('/trending', async (req, res) => {
   try {
     console.log('🔥 Fetching trending blogs');
-    const blogs = await Blog.find({})  // Show ALL, not just published
-      .sort({ views: -1, likes: -1 })
-      .limit(10)
-      .populate('author', 'name username profilePicture');
+    // NOTE: Sorting by an array field (likes) is unreliable; compute a simple score.
+    const raw = await Blog.find({})  // Show ALL, not just published
+      .limit(100)
+      .populate('author', 'name username profilePicture')
+      .lean();
+
+    const blogs = raw
+      .map((b) => {
+        const likesCount = Array.isArray(b.likes) ? b.likes.length : 0;
+        const shares = Array.isArray(b.shares) ? b.shares.length : 0;
+        const shareCount = typeof b.shareCount === 'number' ? b.shareCount : shares;
+        // very simple, tunable score
+        const score = (b.views || 0) + (likesCount * 2) + (shareCount * 3);
+        return { ...b, likesCount, shareCount, _trendScore: score };
+      })
+      .sort((a, b) => (b._trendScore || 0) - (a._trendScore || 0))
+      .slice(0, 10);
     
     console.log(`✅ Found ${blogs.length} trending blogs`);
     
@@ -272,19 +286,33 @@ router.post('/:id/like', verifyToken, async (req, res) => {
     
     const likes = blog.likes || [];
     const userIndex = likes.indexOf(req.user.id);
-    
-    if (userIndex > -1) {
+    const isLike = userIndex === -1;
+
+    if (!isLike) {
       likes.splice(userIndex, 1);
     } else {
       likes.push(req.user.id);
+
+      // Notify author (avoid self-notifs)
+      try {
+        const authorId = blog.author?.toString?.() || blog.author;
+        if (authorId && authorId.toString() !== req.user.id.toString()) {
+          await createNotification(authorId, 'like', 'Someone liked your post', {
+            blogId: blog._id,
+            senderId: req.user.id,
+          });
+        }
+      } catch (e) {
+        console.warn('⚠️ Like notification failed:', e?.message || e);
+      }
     }
-    
+
     blog.likes = likes;
     await blog.save();
-    
+
     res.json({
       success: true,
-      liked: userIndex === -1,
+      liked: isLike,
       likeCount: likes.length
     });
   } catch (error) {
@@ -293,6 +321,42 @@ router.post('/:id/like', verifyToken, async (req, res) => {
       success: false,
       message: 'Failed to toggle like'
     });
+  }
+});
+
+// Track shares (for analytics + trending)
+router.post('/:id/share', verifyToken, async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog) {
+      return res.status(404).json({ success: false, message: 'Blog not found' });
+    }
+
+    blog.shares = blog.shares || [];
+    blog.shares.push({ user: req.user.id, timestamp: new Date() });
+    blog.shareCount = (blog.shareCount || 0) + 1;
+    await blog.save();
+
+    // Notify author (avoid self-notifs)
+    try {
+      const authorId = blog.author?.toString?.() || blog.author;
+      if (authorId && authorId.toString() !== req.user.id.toString()) {
+        await createNotification(authorId, 'share', 'Someone shared your post', {
+          blogId: blog._id,
+          senderId: req.user.id,
+        });
+      }
+    } catch (e) {
+      console.warn('⚠️ Share notification failed:', e?.message || e);
+    }
+
+    res.json({
+      success: true,
+      shareCount: blog.shareCount,
+    });
+  } catch (error) {
+    console.error('❌ Error tracking share:', error);
+    res.status(500).json({ success: false, message: 'Failed to track share' });
   }
 });
 
