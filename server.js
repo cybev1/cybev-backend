@@ -154,7 +154,9 @@ console.log('📦 Loading routes...');
 
 try {
   const blogRoutes = require('./routes/blog.routes');
-  app.use('/blogs', blogRoutes);  // Fixed: Removed /api prefix
+	  // Support both /blogs and /api/blogs (different clients use different bases)
+	  app.use('/blogs', blogRoutes);
+	  app.use('/api/blogs', blogRoutes);
   console.log('  ✅ blog.routes loaded');
 } catch (error) {
   console.log('  ❌ blog.routes failed:', error.message);
@@ -210,13 +212,12 @@ try {
 }
 
 try {
-  // NOTE: file name is plural (notifications.routes.js)
-  const notificationRoutes = require('./routes/notifications.routes');
+  const notificationRoutes = require('./routes/notification.routes');
   app.use('/api/notifications', notificationRoutes);
-  console.log('  ✅ notifications.routes loaded');
+  console.log('  ✅ notification.routes loaded');
 } catch (error) {
-  console.log('  ❌ notifications.routes failed:', error.message);
-  console.log('  ⚠️ Notification routes skipped');
+  console.log('  ❌ notification.routes failed:', error.message);
+  console.log('  ⚠️ Notification routes skipped - using mock functions');
 }
 
 // 🤖 AI & Content Engine Routes - CRITICAL!
@@ -243,7 +244,9 @@ try {
 console.log('  📡 Loading Posts routes...');
 try {
   const postsRoutes = require('./routes/posts.routes');
-  app.use('/posts', postsRoutes);  // Fixed: Removed /api prefix
+	  // Support both /posts and /api/posts
+	  app.use('/posts', postsRoutes);
+	  app.use('/api/posts', postsRoutes);
   console.log('  ✅ posts.routes loaded');
 } catch (error) {
   console.log('  ❌ posts.routes failed:', error.message);
