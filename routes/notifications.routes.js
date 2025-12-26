@@ -1,126 +1,98 @@
 const express = require('express');
 const router = express.Router();
+
 const Notification = require('../models/notification.model');
 const { authenticateToken } = require('../middleware/auth');
 
-// Get user's notifications
+// GET /api/notifications?read=false&page=1&limit=20
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-    const unreadOnly = req.query.unread === 'true';
+    const recipient = req.user.id;
+    const { read, page = 1, limit = 20 } = req.query;
 
-    const query = { recipient: userId };
-    if (unreadOnly) {
-      query.read = false;
-    }
+    const filter = { recipient };
+    if (read === 'true') filter.read = true;
+    if (read === 'false') filter.read = false;
 
-    const notifications = await Notification.find(query)
-      .populate('sender', 'username avatar')
-      .populate('target')
-      .sort('-createdAt')
-      .limit(limit)
-      .skip(skip);
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (pageNum - 1) * limitNum;
 
-    const total = await Notification.countDocuments(query);
-    const unreadCount = await Notification.countDocuments({
-      recipient: userId,
-      read: false
-    });
+    const [items, total] = await Promise.all([
+      Notification.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .populate('sender', 'name email')
+        .lean(),
+      Notification.countDocuments(filter),
+    ]);
 
     res.json({
-      notifications,
-      unreadCount,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      notifications: items,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.ceil(total / limitNum) || 1,
     });
-  } catch (error) {
-    console.error('Get notifications error:', error);
-    res.status(500).json({ error: 'Failed to fetch notifications' });
+  } catch (err) {
+    console.error('GET /api/notifications error:', err);
+    res.status(500).json({ message: 'Failed to fetch notifications' });
   }
 });
 
-// Mark notification as read
+// GET /api/notifications/unread-count
+router.get('/unread-count', authenticateToken, async (req, res) => {
+  try {
+    const recipient = req.user.id;
+    const count = await Notification.countDocuments({ recipient, read: false });
+    res.json({ count });
+  } catch (err) {
+    console.error('GET /api/notifications/unread-count error:', err);
+    res.status(500).json({ message: 'Failed to fetch unread count' });
+  }
+});
+
+// PATCH /api/notifications/:id/read
 router.patch('/:id/read', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const notificationId = req.params.id;
-
+    const recipient = req.user.id;
     const notification = await Notification.findOneAndUpdate(
-      { _id: notificationId, recipient: userId },
-      { read: true },
+      { _id: req.params.id, recipient },
+      { $set: { read: true } },
       { new: true }
     );
 
-    if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-
+    if (!notification) return res.status(404).json({ message: 'Notification not found' });
     res.json({ notification });
-  } catch (error) {
-    console.error('Mark read error:', error);
-    res.status(500).json({ error: 'Failed to mark notification as read' });
+  } catch (err) {
+    console.error('PATCH /api/notifications/:id/read error:', err);
+    res.status(500).json({ message: 'Failed to mark notification as read' });
   }
 });
 
-// Mark all notifications as read
+// POST /api/notifications/mark-all-read
 router.post('/mark-all-read', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-
-    await Notification.updateMany(
-      { recipient: userId, read: false },
-      { read: true }
-    );
-
+    const recipient = req.user.id;
+    await Notification.updateMany({ recipient, read: false }, { $set: { read: true } });
     res.json({ message: 'All notifications marked as read' });
-  } catch (error) {
-    console.error('Mark all read error:', error);
-    res.status(500).json({ error: 'Failed to mark all as read' });
+  } catch (err) {
+    console.error('POST /api/notifications/mark-all-read error:', err);
+    res.status(500).json({ message: 'Failed to mark all as read' });
   }
 });
 
-// Delete notification
+// DELETE /api/notifications/:id
 router.delete('/:id', authenticateToken, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    const notificationId = req.params.id;
-
-    const notification = await Notification.findOneAndDelete({
-      _id: notificationId,
-      recipient: userId
-    });
-
-    if (!notification) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-
+    const recipient = req.user.id;
+    const deleted = await Notification.findOneAndDelete({ _id: req.params.id, recipient });
+    if (!deleted) return res.status(404).json({ message: 'Notification not found' });
     res.json({ message: 'Notification deleted' });
-  } catch (error) {
-    console.error('Delete notification error:', error);
-    res.status(500).json({ error: 'Failed to delete notification' });
-  }
-});
-
-// Get unread count
-router.get('/unread-count', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.userId;
-    const count = await Notification.countDocuments({
-      recipient: userId,
-      read: false
-    });
-
-    res.json({ count });
-  } catch (error) {
-    console.error('Get unread count error:', error);
-    res.status(500).json({ error: 'Failed to get unread count' });
+  } catch (err) {
+    console.error('DELETE /api/notifications/:id error:', err);
+    res.status(500).json({ message: 'Failed to delete notification' });
   }
 });
 

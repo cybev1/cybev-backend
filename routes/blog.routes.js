@@ -16,23 +16,12 @@ const { createNotification } = require('../utils/notifications');
 router.get('/trending', async (req, res) => {
   try {
     console.log('🔥 Fetching trending blogs');
-    // NOTE: Sorting by an array field (likes) is unreliable; compute a simple score.
-    const raw = await Blog.find({})  // Show ALL, not just published
-      .limit(100)
-      .populate('author', 'name username profilePicture')
-      .lean();
-
-    const blogs = raw
-      .map((b) => {
-        const likesCount = Array.isArray(b.likes) ? b.likes.length : 0;
-        const shares = Array.isArray(b.shares) ? b.shares.length : 0;
-        const shareCount = typeof b.shareCount === 'number' ? b.shareCount : shares;
-        // very simple, tunable score
-        const score = (b.views || 0) + (likesCount * 2) + (shareCount * 3);
-        return { ...b, likesCount, shareCount, _trendScore: score };
-      })
-      .sort((a, b) => (b._trendScore || 0) - (a._trendScore || 0))
-      .slice(0, 10);
+    const blogs = await Blog.find({})  // Show ALL, not just published
+      // 'likes' is an array; sorting on it is unreliable.
+      // Use views + shareCount as lightweight trend signals.
+      .sort({ views: -1, shareCount: -1, createdAt: -1 })
+      .limit(10)
+      .populate('author', 'name username profilePicture');
     
     console.log(`✅ Found ${blogs.length} trending blogs`);
     
@@ -286,33 +275,34 @@ router.post('/:id/like', verifyToken, async (req, res) => {
     
     const likes = blog.likes || [];
     const userIndex = likes.indexOf(req.user.id);
-    const isLike = userIndex === -1;
-
-    if (!isLike) {
+    
+    if (userIndex > -1) {
       likes.splice(userIndex, 1);
     } else {
       likes.push(req.user.id);
-
-      // Notify author (avoid self-notifs)
-      try {
-        const authorId = blog.author?.toString?.() || blog.author;
-        if (authorId && authorId.toString() !== req.user.id.toString()) {
-          await createNotification(authorId, 'like', 'Someone liked your post', {
-            blogId: blog._id,
-            senderId: req.user.id,
-          });
-        }
-      } catch (e) {
-        console.warn('⚠️ Like notification failed:', e?.message || e);
-      }
     }
-
+    
     blog.likes = likes;
     await blog.save();
 
+	  // Create notification only when user LIKES (not when unliking)
+	  if (userIndex === -1 && blog.author) {
+	    const authorId = String(blog.author);
+	    const actorId = String(req.user.id);
+	    if (authorId && actorId && authorId !== actorId) {
+	      await createNotification({
+	        user: authorId,
+	        type: 'like',
+	        message: `${req.user.name || 'Someone'} liked your blog post`,
+	        relatedId: blog._id,
+	        relatedType: 'Blog'
+	      });
+	    }
+	  }
+    
     res.json({
       success: true,
-      liked: isLike,
+      liked: userIndex === -1,
       likeCount: likes.length
     });
   } catch (error) {
@@ -324,39 +314,44 @@ router.post('/:id/like', verifyToken, async (req, res) => {
   }
 });
 
-// Track shares (for analytics + trending)
+// POST /api/blogs/:id/share - Increment share count (AUTH REQUIRED - No email verification)
 router.post('/:id/share', verifyToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
     if (!blog) {
-      return res.status(404).json({ success: false, message: 'Blog not found' });
+      return res.status(404).json({
+        success: false,
+        message: 'Blog not found'
+      });
     }
 
-    blog.shares = blog.shares || [];
-    blog.shares.push({ user: req.user.id, timestamp: new Date() });
     blog.shareCount = (blog.shareCount || 0) + 1;
     await blog.save();
 
-    // Notify author (avoid self-notifs)
-    try {
-      const authorId = blog.author?.toString?.() || blog.author;
-      if (authorId && authorId.toString() !== req.user.id.toString()) {
-        await createNotification(authorId, 'share', 'Someone shared your post', {
-          blogId: blog._id,
-          senderId: req.user.id,
+    if (blog.author) {
+      const authorId = String(blog.author);
+      const actorId = String(req.user.id);
+      if (authorId && actorId && authorId !== actorId) {
+        await createNotification({
+          user: authorId,
+          type: 'share',
+          message: `${req.user.name || 'Someone'} shared your blog post`,
+          relatedId: blog._id,
+          relatedType: 'Blog'
         });
       }
-    } catch (e) {
-      console.warn('⚠️ Share notification failed:', e?.message || e);
     }
 
     res.json({
       success: true,
-      shareCount: blog.shareCount,
+      shareCount: blog.shareCount
     });
   } catch (error) {
-    console.error('❌ Error tracking share:', error);
-    res.status(500).json({ success: false, message: 'Failed to track share' });
+    console.error('❌ Error incrementing share:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to share'
+    });
   }
 });
 
