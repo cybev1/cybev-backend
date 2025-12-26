@@ -57,6 +57,29 @@ const blogSchema = new mongoose.Schema({
     default: 0
   },
 
+  // Social sharing (helps trending + analytics)
+  shares: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+
+  shareCount: {
+    type: Number,
+    default: 0
+  },
+
+  // Denormalized for fast sorting (kept in sync when shares are recorded)
+  shareCount: {
+    type: Number,
+    default: 0
+  },
+
   likes: [{
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
