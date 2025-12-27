@@ -83,38 +83,25 @@ router.post('/', authenticateToken, async (req, res) => {
     });
 
     await comment.save();
-
-	    // Notify comment author about like (skip self-notify)
-	    if (liked && comment.author && String(comment.author) !== String(req.user.id)) {
-	      try {
-	        await createNotification({
-	          userId: comment.author,
-		          actorId: req.user.id,
-	          type: 'comment_like',
-	          message: `Someone liked your comment`,
-	          data: { commentId: comment._id, blogId: comment.blog }
-	        });
-	      } catch (_) {
-	        // notification is best-effort
-	      }
-	    }
     await comment.populate('author', 'name email');
 
-	    // Notify blog author about new comment (skip self-notify)
-	    try {
-	      const blog = await Blog.findById(blogId).select('author title');
-	      if (blog?.author && String(blog.author) !== String(req.user.id)) {
-	        await createNotification({
-	          userId: blog.author,
-	          type: 'comment',
-	          message: `${req.user.name || 'Someone'} commented on your post: ${blog.title || 'your post'}`,
-	          link: `/blog/${blogId}`
-	        });
-	      }
-	    } catch (e) {
-	      // never fail comment creation because of notifications
-	      console.warn('[notify] comment notification failed:', e?.message || e);
-	    }
+    // Notify blog author about new comment (skip self-notify)
+    try {
+      const blog = await Blog.findById(blogId).select('author title');
+      if (blog?.author && String(blog.author) !== String(req.user.id)) {
+        await createNotification({
+          recipient: blog.author,
+          sender: req.user.id,
+          type: 'comment',
+          message: `${req.user.name || 'Someone'} commented on "${blog.title || 'your post'}"`,
+          referenceId: blogId,
+          referenceType: 'blog'
+        });
+      }
+    } catch (e) {
+      // never fail comment creation because of notifications
+      console.warn('[notify] comment notification failed:', e?.message || e);
+    }
 
     res.status(201).json({ ok: true, comment });
   } catch (error) {
@@ -193,20 +180,21 @@ router.post('/:id/like', authenticateToken, async (req, res) => {
 
     await comment.save();
 
-	    // Notify comment author about like (skip self-notify)
-	    if (liked && comment.author && String(comment.author) !== String(req.user.id)) {
-	      try {
-	        await createNotification({
-	          userId: comment.author,
-	          type: 'comment_like',
-	          message: `Someone liked your comment`,
-	          referenceId: comment._id,
-	          referenceType: 'comment'
-	        });
-	      } catch (_) {
-	        // notification is best-effort
-	      }
-	    }
+    // Notify comment author about like (skip self-notify)
+    if (liked && comment.author && String(comment.author) !== String(req.user.id)) {
+      try {
+        await createNotification({
+          recipient: comment.author,
+          sender: req.user.id,
+          type: 'comment_like',
+          message: 'liked your comment',
+          referenceId: comment._id,
+          referenceType: 'comment'
+        });
+      } catch (_) {
+        // notification is best-effort
+      }
+    }
 
     res.json({ 
       ok: true,
