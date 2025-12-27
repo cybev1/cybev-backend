@@ -175,4 +175,60 @@ router.post('/onboarding', verifyToken, requireEmailVerification, async (req, re
   }
 });
 
+// Search users
+router.get('/search', async (req, res) => {
+  try {
+    const { q, limit = 20, skip = 0 } = req.query;
+    
+    if (!q || q.length < 2) {
+      return res.json({ ok: true, users: [], total: 0 });
+    }
+    
+    const query = {
+      $or: [
+        { username: { $regex: q, $options: 'i' } },
+        { name: { $regex: q, $options: 'i' } },
+        { email: { $regex: q, $options: 'i' } }
+      ]
+    };
+    
+    const users = await User.find(query)
+      .select('username name avatar bio followerCount followingCount')
+      .skip(parseInt(skip))
+      .limit(parseInt(limit))
+      .sort({ followerCount: -1 });
+    
+    const total = await User.countDocuments(query);
+    
+    res.json({
+      ok: true,
+      success: true,
+      users,
+      pagination: { total, limit: parseInt(limit), skip: parseInt(skip) }
+    });
+  } catch (error) {
+    console.error('User search error:', error);
+    res.status(500).json({ ok: false, error: 'Search failed' });
+  }
+});
+
+// Get user profile by username (PUBLIC)
+router.get('/user/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    
+    const user = await User.findOne({ username })
+      .select('username name avatar bio followerCount followingCount createdAt');
+    
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    
+    res.json({ ok: true, success: true, user });
+  } catch (error) {
+    console.error('Get user profile error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to fetch user' });
+  }
+});
+
 module.exports = router;
