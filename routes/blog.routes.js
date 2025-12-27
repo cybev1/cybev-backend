@@ -4,7 +4,6 @@ const router = express.Router();
 const Blog = require('../models/blog.model');
 const verifyToken = require('../middleware/verifyToken');
 const requireEmailVerification = require('../middleware/requireEmailVerification');
-const { createNotification } = require('../utils/notifications');
 
 // ========================================
 // IMPORTANT: Specific routes BEFORE :id routes!
@@ -17,9 +16,7 @@ router.get('/trending', async (req, res) => {
   try {
     console.log('🔥 Fetching trending blogs');
     const blogs = await Blog.find({})  // Show ALL, not just published
-      // 'likes' is an array; sorting on it is unreliable.
-      // Use views + shareCount as lightweight trend signals.
-      .sort({ views: -1, shareCount: -1, createdAt: -1 })
+      .sort({ views: -1, likes: -1 })
       .limit(10)
       .populate('author', 'name username profilePicture');
     
@@ -221,7 +218,7 @@ router.put('/:id', verifyToken, async (req, res) => {
     
     res.json({
       success: true,
-      message: 'Blog updated successfully',
+      message: 'Blog created successfully',
       blog
     });
   } catch (error) {
@@ -284,21 +281,6 @@ router.post('/:id/like', verifyToken, async (req, res) => {
     
     blog.likes = likes;
     await blog.save();
-
-	  // Create notification only when user LIKES (not when unliking)
-	  if (userIndex === -1 && blog.author) {
-	    const authorId = String(blog.author);
-	    const actorId = String(req.user.id);
-	    if (authorId && actorId && authorId !== actorId) {
-	      await createNotification({
-	        user: authorId,
-	        type: 'like',
-	        message: `${req.user.name || 'Someone'} liked your blog post`,
-	        relatedId: blog._id,
-	        relatedType: 'Blog'
-	      });
-	    }
-	  }
     
     res.json({
       success: true,
@@ -310,47 +292,6 @@ router.post('/:id/like', verifyToken, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to toggle like'
-    });
-  }
-});
-
-// POST /api/blogs/:id/share - Increment share count (AUTH REQUIRED - No email verification)
-router.post('/:id/share', verifyToken, async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
-    if (!blog) {
-      return res.status(404).json({
-        success: false,
-        message: 'Blog not found'
-      });
-    }
-
-    blog.shareCount = (blog.shareCount || 0) + 1;
-    await blog.save();
-
-    if (blog.author) {
-      const authorId = String(blog.author);
-      const actorId = String(req.user.id);
-      if (authorId && actorId && authorId !== actorId) {
-        await createNotification({
-          user: authorId,
-          type: 'share',
-          message: `${req.user.name || 'Someone'} shared your blog post`,
-          relatedId: blog._id,
-          relatedType: 'Blog'
-        });
-      }
-    }
-
-    res.json({
-      success: true,
-      shareCount: blog.shareCount
-    });
-  } catch (error) {
-    console.error('❌ Error incrementing share:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to share'
     });
   }
 });

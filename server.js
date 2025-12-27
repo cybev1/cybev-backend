@@ -155,6 +155,7 @@ console.log('📦 Loading routes...');
 try {
   const blogRoutes = require('./routes/blog.routes');
   app.use('/blogs', blogRoutes);  // Fixed: Removed /api prefix
+app.use('/sites', blogSiteRoutes);
   console.log('  ✅ blog.routes loaded');
 } catch (error) {
   console.log('  ❌ blog.routes failed:', error.message);
@@ -174,14 +175,6 @@ try {
   console.log('  ✅ domain.routes loaded');
 } catch (error) {
   console.log('  ❌ domain.routes failed:', error.message);
-}
-
-try {
-  const blogSiteRoutes = require('./routes/blogsite.routes');
-  app.use('/api/blogsite', blogSiteRoutes);
-  console.log('  ✅ blogsite.routes loaded');
-} catch (error) {
-  console.log('  ❌ blogsite.routes failed:', error.message);
 }
 
 try {
@@ -218,12 +211,13 @@ try {
 }
 
 try {
-  const notificationRoutes = require('./routes/notification.routes');
+  // NOTE: file name is plural (notifications.routes.js)
+  const notificationRoutes = require('./routes/notifications.routes');
   app.use('/api/notifications', notificationRoutes);
-  console.log('  ✅ notification.routes loaded');
+  console.log('  ✅ notifications.routes loaded');
 } catch (error) {
-  console.log('  ❌ notification.routes failed:', error.message);
-  console.log('  ⚠️ Notification routes skipped - using mock functions');
+  console.log('  ❌ notifications.routes failed:', error.message);
+  console.log('  ⚠️ Notification routes skipped');
 }
 
 // 🤖 AI & Content Engine Routes - CRITICAL!
@@ -259,6 +253,7 @@ try {
 console.log('  📸 Loading Upload routes...');
 try {
   const uploadRoutes = require('./routes/upload.routes');
+const blogSiteRoutes = require('./routes/blogsite.routes');
   app.use('/api/upload', uploadRoutes);
   console.log('  ✅ upload.routes loaded');
 } catch (error) {

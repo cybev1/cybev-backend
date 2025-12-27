@@ -28,6 +28,9 @@ const blogSchema = new mongoose.Schema({
     required: true
   },
 
+  // Optional blog site this post belongs to
+  site: { type: mongoose.Schema.Types.ObjectId, ref: 'BlogSite', default: null, index: true },
+
   authorName: {
     type: String,
     required: true
@@ -61,12 +64,6 @@ const blogSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   }],
-
-	// Social share tracking
-	shareCount: {
-	  type: Number,
-	  default: 0
-	},
 
   readTime: {
     type: Number,
