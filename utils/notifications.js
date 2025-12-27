@@ -6,6 +6,7 @@
 // This module is intentionally defensive: notifications should never crash the API.
 
 let Notification;
+let emitNotification;
 
 /**
  * Create a notification.
@@ -19,6 +20,15 @@ let sendNotification;
 
 try {
   Notification = require('../models/notification.model');
+  
+  // Try to load socket emitter
+  try {
+    const socket = require('../socket');
+    emitNotification = socket.emitNotification;
+  } catch (e) {
+    console.log('⚠️ Socket not available for notifications');
+    emitNotification = () => {};
+  }
 
   createNotification = async (arg1, type, message, extra = {}) => {
     try {
@@ -49,12 +59,24 @@ try {
         sender: payload.sender,
         type: payload.type,
         message: payload.message,
-        targetModel: payload.targetModel,
-        target: payload.target,
-        read: false
+        entityId: payload.entityId || payload.targetModel,
+        entityModel: payload.entityModel || payload.target,
+        isRead: false
       });
 
       await notification.save();
+      
+      // Emit real-time notification via socket
+      if (emitNotification) {
+        emitNotification(payload.recipient.toString(), {
+          _id: notification._id,
+          type: notification.type,
+          message: notification.message,
+          sender: payload.sender,
+          createdAt: notification.createdAt
+        });
+      }
+      
       return notification;
     } catch (error) {
       console.log('⚠️ Could not create notification:', error.message);
