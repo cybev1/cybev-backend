@@ -454,4 +454,40 @@ router.post('/:id/like', verifyToken, async (req, res) => {
   }
 });
 
+// POST /api/blogs/:id/share - Track share (PUBLIC - no auth needed)
+router.post('/:id/share', async (req, res) => {
+  try {
+    const { platform } = req.body;
+    const blog = await Blog.findById(req.params.id);
+    
+    if (!blog) {
+      return res.status(404).json({ ok: false, error: 'Blog not found' });
+    }
+    
+    // Initialize shares object if needed
+    if (!blog.shares) {
+      blog.shares = { total: 0, platforms: {} };
+    }
+    
+    // Increment total
+    blog.shares.total = (blog.shares.total || 0) + 1;
+    
+    // Track by platform
+    if (platform) {
+      blog.shares.platforms = blog.shares.platforms || {};
+      blog.shares.platforms[platform] = (blog.shares.platforms[platform] || 0) + 1;
+    }
+    
+    await blog.save();
+    
+    res.json({
+      ok: true,
+      shares: blog.shares
+    });
+  } catch (error) {
+    console.error('Share tracking error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to track share' });
+  }
+});
+
 module.exports = router;
