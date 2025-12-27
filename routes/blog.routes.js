@@ -4,6 +4,7 @@ const router = express.Router();
 const Blog = require('../models/blog.model');
 const verifyToken = require('../middleware/verifyToken');
 const requireEmailVerification = require('../middleware/requireEmailVerification');
+const { createNotification } = require('../utils/notifications');
 
 // ========================================
 // IMPORTANT: Specific routes BEFORE :id routes!
@@ -15,22 +16,157 @@ const requireEmailVerification = require('../middleware/requireEmailVerification
 router.get('/trending', async (req, res) => {
   try {
     console.log('🔥 Fetching trending blogs');
-    const blogs = await Blog.find({})  // Show ALL, not just published
-      .sort({ views: -1, likes: -1 })
-      .limit(10)
-      .populate('author', 'name username profilePicture');
+    
+    // Calculate trending score: views + (likes * 3) + recency bonus
+    const blogs = await Blog.aggregate([
+      {
+        $addFields: {
+          likeCount: { $size: { $ifNull: ['$likes', []] } },
+          // Recency: blogs from last 7 days get bonus
+          recencyBonus: {
+            $cond: {
+              if: { $gte: ['$createdAt', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)] },
+              then: 50,
+              else: 0
+            }
+          }
+        }
+      },
+      {
+        $addFields: {
+          trendingScore: {
+            $add: [
+              { $ifNull: ['$views', 0] },
+              { $multiply: ['$likeCount', 3] },
+              '$recencyBonus'
+            ]
+          }
+        }
+      },
+      { $sort: { trendingScore: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Populate author info
+    await Blog.populate(blogs, { path: 'author', select: 'name username profilePicture' });
     
     console.log(`✅ Found ${blogs.length} trending blogs`);
     
     res.json({
       success: true,
+      ok: true,
       blogs
     });
   } catch (error) {
     console.error('❌ Error fetching trending blogs:', error);
     res.status(500).json({
       success: false,
+      ok: false,
       message: 'Failed to fetch trending blogs'
+    });
+  }
+});
+
+// GET /api/blogs/trending-tags - Get trending tags
+router.get('/trending-tags', async (req, res) => {
+  try {
+    console.log('🏷️ Fetching trending tags');
+    
+    const tags = await Blog.aggregate([
+      { $unwind: '$tags' },
+      { $group: { _id: '$tags', count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 20 },
+      { $project: { tag: '$_id', count: 1, _id: 0 } }
+    ]);
+    
+    console.log(`✅ Found ${tags.length} trending tags`);
+    
+    res.json({
+      success: true,
+      ok: true,
+      tags
+    });
+  } catch (error) {
+    console.error('❌ Error fetching trending tags:', error);
+    res.status(500).json({
+      success: false,
+      ok: false,
+      message: 'Failed to fetch trending tags'
+    });
+  }
+});
+
+// GET /api/blogs/search - Search blogs
+router.get('/search', async (req, res) => {
+  try {
+    const { q, tag, category, author, sort = 'recent', limit = 20, skip = 0 } = req.query;
+    
+    console.log('🔍 Searching blogs:', { q, tag, category, author });
+    
+    const query = {};
+    
+    // Text search
+    if (q) {
+      query.$or = [
+        { title: { $regex: q, $options: 'i' } },
+        { content: { $regex: q, $options: 'i' } },
+        { tags: { $regex: q, $options: 'i' } }
+      ];
+    }
+    
+    // Filter by tag
+    if (tag) {
+      query.tags = { $in: [tag] };
+    }
+    
+    // Filter by category
+    if (category) {
+      query.category = category;
+    }
+    
+    // Filter by author
+    if (author) {
+      query.author = author;
+    }
+    
+    // Sorting options
+    let sortOption = { createdAt: -1 };
+    if (sort === 'popular') {
+      sortOption = { views: -1 };
+    } else if (sort === 'likes') {
+      sortOption = { 'likes.length': -1 };
+    } else if (sort === 'oldest') {
+      sortOption = { createdAt: 1 };
+    }
+    
+    const blogs = await Blog.find(query)
+      .sort(sortOption)
+      .skip(parseInt(skip))
+      .limit(parseInt(limit))
+      .populate('author', 'name username profilePicture');
+    
+    const total = await Blog.countDocuments(query);
+    
+    console.log(`✅ Found ${blogs.length} blogs matching search`);
+    
+    res.json({
+      success: true,
+      ok: true,
+      blogs,
+      pagination: {
+        total,
+        limit: parseInt(limit),
+        skip: parseInt(skip),
+        hasMore: parseInt(skip) + blogs.length < total
+      }
+    });
+  } catch (error) {
+    console.error('❌ Search error:', error);
+    res.status(500).json({
+      success: false,
+      ok: false,
+      message: 'Search failed'
     });
   }
 });
@@ -266,31 +402,53 @@ router.post('/:id/like', verifyToken, async (req, res) => {
     if (!blog) {
       return res.status(404).json({
         success: false,
+        ok: false,
         message: 'Blog not found'
       });
     }
     
     const likes = blog.likes || [];
     const userIndex = likes.indexOf(req.user.id);
+    let liked = false;
     
     if (userIndex > -1) {
       likes.splice(userIndex, 1);
+      liked = false;
     } else {
       likes.push(req.user.id);
+      liked = true;
     }
     
     blog.likes = likes;
     await blog.save();
     
+    // Send notification when liked (not unliked)
+    if (liked && blog.author && String(blog.author) !== String(req.user.id)) {
+      try {
+        await createNotification({
+          recipient: blog.author,
+          sender: req.user.id,
+          type: 'like',
+          message: `liked your post "${blog.title?.substring(0, 30) || 'your post'}"`,
+          entityId: blog._id,
+          entityModel: 'Blog'
+        });
+      } catch (notifyErr) {
+        console.warn('Like notification failed:', notifyErr.message);
+      }
+    }
+    
     res.json({
       success: true,
-      liked: userIndex === -1,
+      ok: true,
+      liked,
       likeCount: likes.length
     });
   } catch (error) {
     console.error('❌ Error toggling like:', error);
     res.status(500).json({
       success: false,
+      ok: false,
       message: 'Failed to toggle like'
     });
   }
