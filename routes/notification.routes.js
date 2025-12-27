@@ -73,4 +73,32 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// GET /api/notifications/unread-count
+router.get('/unread-count', authenticateToken, async (req, res) => {
+  try {
+    const count = await Notification.countDocuments({
+      recipient: req.user.id,
+      isRead: false
+    });
+    res.json({ ok: true, count });
+  } catch (err) {
+    console.error('notifications:unreadCount error', err);
+    res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
+// POST /api/notifications/mark-all-read (alias for PATCH /read-all)
+router.post('/mark-all-read', authenticateToken, async (req, res) => {
+  try {
+    const result = await Notification.updateMany(
+      { recipient: req.user.id, isRead: false },
+      { isRead: true }
+    );
+    res.json({ ok: true, modifiedCount: result.modifiedCount ?? result.nModified ?? 0 });
+  } catch (err) {
+    console.error('notifications:markAllRead error', err);
+    res.status(500).json({ ok: false, message: 'Server error' });
+  }
+});
+
 module.exports = router;
