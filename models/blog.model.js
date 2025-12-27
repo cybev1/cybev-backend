@@ -79,6 +79,18 @@ const blogSchema = new mongoose.Schema({
     metaTitle: String,
     metaDescription: String,
     keywords: [String]
+  },
+
+  shares: {
+    total: { type: Number, default: 0 },
+    platforms: {
+      twitter: { type: Number, default: 0 },
+      facebook: { type: Number, default: 0 },
+      linkedin: { type: Number, default: 0 },
+      whatsapp: { type: Number, default: 0 },
+      copy: { type: Number, default: 0 },
+      native: { type: Number, default: 0 }
+    }
   }
 
 }, { 
