@@ -70,7 +70,6 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- Body parsing ----------
-// Increase limit for image uploads (10MB)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -87,21 +86,11 @@ app.get('/', (req, res) => {
     message: 'CYBEV Backend is live ✅',
     timestamp: Date.now(),
     features: [
-      'auth', 
-      'blogs', 
-      'rewards', 
-      'domains', 
-      'comments', 
-      'bookmarks', 
-      'follow', 
-      'notifications',
-      'ai-generation',
-      'content-engine',
-      'seo-optimization',
-      'image-generation',
-      'viral-hashtags',
-      'nft-minting',
-      'token-staking'
+      'auth', 'blogs', 'rewards', 'domains', 'comments', 
+      'bookmarks', 'follow', 'notifications', 'ai-generation',
+      'content-engine', 'seo-optimization', 'image-generation',
+      'viral-hashtags', 'nft-minting', 'token-staking',
+      'admin-dashboard', 'tipping', 'subscriptions', 'push-notifications'
     ]
   });
 });
@@ -116,6 +105,10 @@ app.get('/health', (req, res) => {
       deepseek: !!process.env.DEEPSEEK_API_KEY,
       unsplash: !!process.env.UNSPLASH_ACCESS_KEY,
       pexels: !!process.env.PEXELS_API_KEY
+    },
+    blockchain: {
+      enabled: !!process.env.CYBEV_TOKEN_ADDRESS,
+      network: process.env.CHAIN_ID || 'not configured'
     }
   });
 });
@@ -124,22 +117,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     ts: Date.now(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    services: {
-      ai: !!process.env.ANTHROPIC_API_KEY || !!process.env.DEEPSEEK_API_KEY,
-      images: !!process.env.UNSPLASH_ACCESS_KEY || !!process.env.PEXELS_API_KEY
-    }
-  });
-});
-
-app.get('/check-cors', (req, res) => {
-  const origin = req.headers.origin || 'no-origin';
-  console.log('🔍 CORS Check endpoint hit from:', origin);
-  res.json({ 
-    ok: true, 
-    message: 'CORS is working',
-    origin: origin,
-    allowedOrigins: allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o)
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
   });
 });
 
@@ -149,8 +127,7 @@ app.use('/api/auth', authRoutes);
 
 console.log('📦 Loading routes...');
 
-// Load each route individually with try-catch
-// This way, one broken model won't crash everything!
+// ========== EXISTING ROUTES ==========
 
 try {
   const blogRoutes = require('./routes/blog.routes');
@@ -206,7 +183,6 @@ try {
   console.log('  ✅ follow.routes loaded');
 } catch (error) {
   console.log('  ❌ follow.routes failed:', error.message);
-  console.log('  ⚠️ Follow routes skipped - model syntax error');
 }
 
 try {
@@ -218,62 +194,98 @@ try {
 }
 
 try {
-  // NOTE: file name is plural (notifications.routes.js)
   const notificationRoutes = require('./routes/notifications.routes');
   app.use('/api/notifications', notificationRoutes);
   console.log('  ✅ notifications.routes loaded');
 } catch (error) {
   console.log('  ❌ notifications.routes failed:', error.message);
-  console.log('  ⚠️ Notification routes skipped');
 }
 
-// 🤖 AI & Content Engine Routes - CRITICAL!
-console.log('  📡 Loading AI routes...');
 try {
   const aiRoutes = require('./routes/ai.routes');
   app.use('/api/ai', aiRoutes);
   console.log('  ✅ ai.routes loaded');
 } catch (error) {
-  console.log('  ❌ ai.routes FAILED:', error.message);
-  console.log('  📍 Stack:', error.stack);
+  console.log('  ❌ ai.routes failed:', error.message);
 }
 
-console.log('  📡 Loading Content routes...');
 try {
   const contentRoutes = require('./routes/content.routes');
-  app.use('/api/content', contentRoutes);  // FIXED: Mount at /api/content
+  app.use('/api/content', contentRoutes);
   console.log('  ✅ content.routes loaded');
 } catch (error) {
-  console.log('  ❌ content.routes FAILED:', error.message);
-  console.log('  📍 Stack:', error.stack);
+  console.log('  ❌ content.routes failed:', error.message);
 }
 
-console.log('  📡 Loading Posts routes...');
 try {
   const postsRoutes = require('./routes/posts.routes');
-  app.use('/posts', postsRoutes);  // Fixed: Removed /api prefix
+  app.use('/posts', postsRoutes);
   console.log('  ✅ posts.routes loaded');
 } catch (error) {
   console.log('  ❌ posts.routes failed:', error.message);
 }
 
-console.log('  📸 Loading Upload routes...');
 try {
   const uploadRoutes = require('./routes/upload.routes');
   app.use('/api/upload', uploadRoutes);
   console.log('  ✅ upload.routes loaded');
 } catch (error) {
   console.log('  ❌ upload.routes failed:', error.message);
-  console.log('  ⚠️ Image upload will not work without upload.routes');
+}
+
+// ========== NEW ROUTES (Admin, NFT, Staking, Tips, Subscriptions) ==========
+
+console.log('  🆕 Loading NEW routes...');
+
+try {
+  const adminRoutes = require('./routes/admin.routes');
+  app.use('/api/admin', adminRoutes);
+  console.log('  ✅ admin.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ admin.routes not found (optional):', error.message);
+}
+
+try {
+  const nftRoutes = require('./routes/nft.routes');
+  app.use('/api/nft', nftRoutes);
+  console.log('  ✅ nft.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ nft.routes not found (optional):', error.message);
+}
+
+try {
+  const stakingRoutes = require('./routes/staking.routes');
+  app.use('/api/staking', stakingRoutes);
+  console.log('  ✅ staking.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ staking.routes not found (optional):', error.message);
+}
+
+try {
+  const tippingRoutes = require('./routes/tipping.routes');
+  app.use('/api/tips', tippingRoutes);
+  console.log('  ✅ tipping.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ tipping.routes not found (optional):', error.message);
+}
+
+try {
+  const subscriptionRoutes = require('./routes/subscription.routes');
+  app.use('/api/subscriptions', subscriptionRoutes);
+  console.log('  ✅ subscription.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ subscription.routes not found (optional):', error.message);
+}
+
+try {
+  const pushRoutes = require('./routes/push.routes');
+  app.use('/api/push', pushRoutes);
+  console.log('  ✅ push.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ push.routes not found (optional):', error.message);
 }
 
 console.log('✅ Route loading complete!');
-console.log('🤖 AI routes: /api/ai');
-console.log('📝 Content routes: /api/content');
-console.log('💬 Posts routes: /posts');
-console.log('📚 Blog routes: /blogs');
-console.log('🌐 BlogSite routes: /sites');
-console.log('📸 Upload routes: /api/upload');
 
 // 404 handler
 app.use((req, res) => {
@@ -290,8 +302,7 @@ app.use((err, req, res, next) => {
   console.error('💥 Error:', err);
   res.status(err.status || 500).json({ 
     ok: false, 
-    error: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    error: err.message || 'Internal Server Error'
   });
 });
 
@@ -300,19 +311,22 @@ const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
 if (!MONGO_URI) {
-  console.error('❌ ERROR: MONGO_URI not found in environment variables');
+  console.error('❌ ERROR: MONGO_URI not found');
   process.exit(1);
 }
 
-// Log API key status (without revealing keys)
 console.log('\n🔑 API Keys Status:');
 console.log('  MongoDB:', MONGO_URI ? '✅' : '❌');
 console.log('  Claude AI:', process.env.ANTHROPIC_API_KEY ? '✅' : '❌');
 console.log('  DeepSeek AI:', process.env.DEEPSEEK_API_KEY ? '✅' : '❌');
-console.log('  Unsplash Images:', process.env.UNSPLASH_ACCESS_KEY ? '✅' : '⚠️ (using fallback)');
-console.log('  Pexels Images:', process.env.PEXELS_API_KEY ? '✅' : '⚠️ (optional)');
-console.log('  Cloudinary Upload:', process.env.CLOUDINARY_CLOUD_NAME ? '✅' : '⚠️ (image upload disabled)');
-console.log('');
+console.log('  Unsplash:', process.env.UNSPLASH_ACCESS_KEY ? '✅' : '⚠️');
+console.log('  Cloudinary:', process.env.CLOUDINARY_CLOUD_NAME ? '✅' : '⚠️');
+
+console.log('\n🔗 Blockchain Status:');
+console.log('  Token Contract:', process.env.CYBEV_TOKEN_ADDRESS ? '✅' : '⚠️ Not deployed');
+console.log('  NFT Contract:', process.env.CYBEV_NFT_ADDRESS ? '✅' : '⚠️ Not deployed');
+console.log('  Staking Contract:', process.env.CYBEV_STAKING_ADDRESS ? '✅' : '⚠️ Not deployed');
+console.log('  Chain ID:', process.env.CHAIN_ID || '⚠️ Not set');
 
 mongoose
   .connect(MONGO_URI)
@@ -320,17 +334,7 @@ mongoose
     console.log('✅ MongoDB connected');
     server.listen(PORT, () => {
       console.log(`🚀 CYBEV Server running on PORT ${PORT}`);
-      console.log('🌐 Allowed origins:', allowedOrigins.map(o => o instanceof RegExp ? o.toString() : o));
-      console.log('✨ Content Engine Ready!');
-      console.log('   🤖 AI Blog Generation: /api/content/create-blog');
-      console.log('   🏗️ Website Templates: /api/content/create-template');
-      console.log('   🔍 SEO Generation: /api/content/generate-seo');
-      console.log('   🔥 Viral Hashtags: /api/content/generate-hashtags');
-      console.log('   🖼️ Featured Images: /api/content/get-featured-image');
-      console.log('   💎 NFT Minting: /api/content/mint-nft');
-      console.log('   💰 Token Staking: /api/content/stake');
-      console.log('');
-      console.log('🎉 Server ready to create amazing content!');
+      console.log('🎉 Server ready!');
     });
   })
   .catch(err => {
@@ -339,7 +343,6 @@ mongoose
   });
 
 process.on('SIGTERM', () => {
-  console.log('SIGTERM signal received: closing HTTP server');
   mongoose.connection.close();
   process.exit(0);
 });
