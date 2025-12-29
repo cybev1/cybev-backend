@@ -1,5 +1,6 @@
 // ============================================
-// FILE: server/server.js
+// FILE: server.js
+// PATH: /server.js (root of cybev-backend)
 // CYBEV Backend with AI Content Engine
 // ============================================
 require('dotenv').config();
@@ -70,8 +71,8 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- Body parsing ----------
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Request logging
 app.use((req, res, next) => {
@@ -85,12 +86,14 @@ app.get('/', (req, res) => {
     ok: true, 
     message: 'CYBEV Backend is live ✅',
     timestamp: Date.now(),
+    version: '2.0.0',
     features: [
       'auth', 'blogs', 'rewards', 'domains', 'comments', 
       'bookmarks', 'follow', 'notifications', 'ai-generation',
       'content-engine', 'seo-optimization', 'image-generation',
       'viral-hashtags', 'nft-minting', 'token-staking',
-      'admin-dashboard', 'tipping', 'subscriptions', 'push-notifications'
+      'admin-dashboard', 'tipping', 'subscriptions', 'push-notifications',
+      'reactions', 'messages', 'live-streaming'
     ]
   });
 });
@@ -127,11 +130,12 @@ app.use('/api/auth', authRoutes);
 
 console.log('📦 Loading routes...');
 
-// ========== EXISTING ROUTES ==========
+// ========== CORE ROUTES ==========
 
 try {
   const blogRoutes = require('./routes/blog.routes');
   app.use('/blogs', blogRoutes);
+  app.use('/api/blogs', blogRoutes); // Also mount at /api/blogs for consistency
   console.log('  ✅ blog.routes loaded');
 } catch (error) {
   console.log('  ❌ blog.routes failed:', error.message);
@@ -140,6 +144,7 @@ try {
 try {
   const blogSiteRoutes = require('./routes/blogsite.routes');
   app.use('/sites', blogSiteRoutes);
+  app.use('/api/sites', blogSiteRoutes);
   console.log('  ✅ blogsite.routes loaded');
 } catch (error) {
   console.log('  ❌ blogsite.routes failed:', error.message);
@@ -193,12 +198,13 @@ try {
   console.log('  ❌ feed.routes failed:', error.message);
 }
 
+// *** FIXED: Changed from 'notifications.routes' to 'notification.routes' ***
 try {
-  const notificationRoutes = require('./routes/notifications.routes');
+  const notificationRoutes = require('./routes/notification.routes');
   app.use('/api/notifications', notificationRoutes);
-  console.log('  ✅ notifications.routes loaded');
+  console.log('  ✅ notification.routes loaded');
 } catch (error) {
-  console.log('  ❌ notifications.routes failed:', error.message);
+  console.log('  ❌ notification.routes failed:', error.message);
 }
 
 try {
@@ -220,6 +226,7 @@ try {
 try {
   const postsRoutes = require('./routes/posts.routes');
   app.use('/posts', postsRoutes);
+  app.use('/api/posts', postsRoutes); // Also mount at /api/posts
   console.log('  ✅ posts.routes loaded');
 } catch (error) {
   console.log('  ❌ posts.routes failed:', error.message);
@@ -233,9 +240,21 @@ try {
   console.log('  ❌ upload.routes failed:', error.message);
 }
 
-// ========== NEW ROUTES (Admin, NFT, Staking, Tips, Subscriptions) ==========
+// ========== ENGAGEMENT ROUTES (Reactions, Likes, Views) ==========
 
-console.log('  🆕 Loading NEW routes...');
+console.log('  💫 Loading engagement routes...');
+
+try {
+  const reactionRoutes = require('./routes/reaction.routes');
+  app.use('/api/reactions', reactionRoutes);
+  console.log('  ✅ reaction.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ reaction.routes not found (optional):', error.message);
+}
+
+// ========== ADMIN & MONETIZATION ROUTES ==========
+
+console.log('  🆕 Loading admin & monetization routes...');
 
 try {
   const adminRoutes = require('./routes/admin.routes');
@@ -283,6 +302,30 @@ try {
   console.log('  ✅ push.routes loaded');
 } catch (error) {
   console.log('  ⚠️ push.routes not found (optional):', error.message);
+}
+
+// ========== MESSAGING ROUTES ==========
+
+console.log('  💬 Loading messaging routes...');
+
+try {
+  const messageRoutes = require('./routes/message.routes');
+  app.use('/api/messages', messageRoutes);
+  console.log('  ✅ message.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ message.routes not found (optional):', error.message);
+}
+
+// ========== LIVE STREAMING ROUTES ==========
+
+console.log('  📺 Loading streaming routes...');
+
+try {
+  const liveRoutes = require('./routes/live.routes');
+  app.use('/api/live', liveRoutes);
+  console.log('  ✅ live.routes loaded');
+} catch (error) {
+  console.log('  ⚠️ live.routes not found (optional):', error.message);
 }
 
 console.log('✅ Route loading complete!');
