@@ -32,6 +32,7 @@ exports.register = async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Email and password are required' 
       });
     }
@@ -45,12 +46,14 @@ exports.register = async (req, res) => {
       if (existingUser.email === email) {
         return res.status(400).json({ 
           success: false,
+          ok: false,
           message: 'Email already registered' 
         });
       }
       if (existingUser.username === username) {
         return res.status(400).json({ 
           success: false,
+          ok: false,
           message: 'Username already taken' 
         });
       }
@@ -126,6 +129,7 @@ exports.register = async (req, res) => {
 
     res.status(201).json({
       success: true,
+      ok: true,
       message: 'Registration successful! Please check your email to verify your account.',
       token,
       user: {
@@ -133,7 +137,9 @@ exports.register = async (req, res) => {
         name: user.name,
         email: user.email,
         username: user.username,
-        isEmailVerified: user.isEmailVerified
+        isEmailVerified: user.isEmailVerified,
+        role: user.role || 'user',
+        isAdmin: user.isAdmin || false
       }
     });
 
@@ -141,6 +147,7 @@ exports.register = async (req, res) => {
     console.error('❌ Registration error:', error);
     res.status(500).json({ 
       success: false,
+      ok: false,
       message: error.message || 'Registration failed' 
     });
   }
@@ -154,6 +161,7 @@ exports.verifyEmail = async (req, res) => {
     if (!token) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Verification token is required' 
       });
     }
@@ -173,6 +181,7 @@ exports.verifyEmail = async (req, res) => {
     if (!user) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Invalid or expired verification token' 
       });
     }
@@ -187,6 +196,7 @@ exports.verifyEmail = async (req, res) => {
 
     res.json({ 
       success: true,
+      ok: true,
       message: 'Email verified successfully! You can now access all features.' 
     });
 
@@ -194,6 +204,7 @@ exports.verifyEmail = async (req, res) => {
     console.error('❌ Email verification error:', error);
     res.status(500).json({ 
       success: false,
+      ok: false,
       message: 'Failed to verify email' 
     });
   }
@@ -209,6 +220,7 @@ exports.resendVerification = async (req, res) => {
     if (!user) {
       return res.json({ 
         success: true,
+        ok: true,
         message: 'If that email exists, a verification link has been sent' 
       });
     }
@@ -216,6 +228,7 @@ exports.resendVerification = async (req, res) => {
     if (user.isEmailVerified) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Email is already verified' 
       });
     }
@@ -254,80 +267,93 @@ exports.resendVerification = async (req, res) => {
 
     res.json({ 
       success: true,
-      message: 'Verification email sent!' 
+      ok: true,
+      message: 'Verification email sent' 
     });
 
   } catch (error) {
     console.error('❌ Resend verification error:', error);
     res.status(500).json({ 
       success: false,
-      message: 'Failed to resend verification email' 
+      ok: false,
+      message: 'Failed to send verification email' 
     });
   }
 };
 
-// ========== LOGIN (Email OR Username) with IP Tracking ==========
+// ========== LOGIN ==========
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    console.log('🔐 Login attempt:', email);
-
+    // Validation
     if (!email || !password) {
       return res.status(400).json({ 
         success: false,
-        message: 'Email/Username and password are required' 
+        ok: false,
+        message: 'Email and password are required' 
       });
     }
 
-    // Find user by email OR username
-    const user = await User.findOne({
+    // Find user with password
+    const user = await User.findOne({ 
       $or: [
         { email: email.toLowerCase() },
         { username: email.toLowerCase() }
       ]
-    });
+    }).select('+password');
 
     if (!user) {
-      console.log('❌ User not found:', email);
       return res.status(401).json({ 
         success: false,
-        message: 'Invalid credentials' 
+        ok: false,
+        message: 'Invalid email or password' 
+      });
+    }
+
+    // Check if user is banned
+    if (user.isBanned) {
+      return res.status(403).json({ 
+        success: false,
+        ok: false,
+        message: 'Your account has been suspended. Please contact support.' 
       });
     }
 
     // Check password
-    const isValidPassword = await bcrypt.compare(password, user.password);
-
-    if (!isValidPassword) {
-      console.log('❌ Invalid password for:', email);
-      
-      // Track suspicious login
+    const isMatch = await bcrypt.compare(password, user.password);
+    
+    if (!isMatch) {
+      // Track suspicious activity
       user.suspiciousLoginAttempts = (user.suspiciousLoginAttempts || 0) + 1;
       await user.save();
       
       return res.status(401).json({ 
         success: false,
-        message: 'Invalid credentials' 
+        ok: false,
+        message: 'Invalid email or password' 
       });
     }
 
-    // ✅ AUTO-FIX FOR EXISTING USERS - Mark old accounts as onboarded
-    if (!user.hasCompletedOnboarding && user.createdAt) {
-      const accountAge = Date.now() - new Date(user.createdAt).getTime();
-      const oneDayInMs = 24 * 60 * 60 * 1000; // 24 hours
-      
-      // If account is older than 1 day, mark as onboarded
-      if (accountAge > oneDayInMs) {
-        console.log(`✅ Auto-marking existing user as onboarded: ${user.email}`);
+    // Check if email is verified (warn but don't block)
+    if (!user.isEmailVerified) {
+      console.log('⚠️ Login from unverified email:', user.email);
+      // Continue with login, but frontend should show reminder
+    }
+
+    // Handle onboarding for users who haven't completed it
+    if (!user.hasCompletedOnboarding) {
+      // Check if onboarding data exists in different format
+      if (user.onboardingData && user.onboardingData.role) {
         user.hasCompletedOnboarding = true;
-        
-        // Add basic onboarding data if missing
+        await user.save();
+      } else if (user.contentType) {
+        // Legacy format - mark as completed
+        user.hasCompletedOnboarding = true;
         if (!user.onboardingData) {
           user.onboardingData = {
-            fullName: user.name,
-            role: 'content_creator',
-            goals: ['create_content'],
+            role: 'Creator',
+            goals: ['create'],
             experience: 'intermediate',
             completedAt: new Date()
           };
@@ -411,22 +437,29 @@ exports.login = async (req, res) => {
       { expiresIn: '30d' }
     );
 
-    console.log('✅ Login successful:', user.email, 'from IP:', clientIP);
+    console.log('✅ Login successful:', user.email, 'from IP:', clientIP, '| role:', user.role, '| isAdmin:', user.isAdmin);
 
+    // =====================================================
+    // IMPORTANT: Include role and isAdmin in the response!
+    // =====================================================
     res.json({
       success: true,
+      ok: true,  // For frontend compatibility
       message: 'Login successful',
       token,
       newIPDetected, // Let frontend know about new IP
       user: {
         id: user._id,
+        _id: user._id,
         name: user.name,
         email: user.email,
         username: user.username,
-        avatar: user.avatar,
-        isEmailVerified: user.isEmailVerified,
-        hasCompletedOnboarding: user.hasCompletedOnboarding,
-        onboardingData: user.onboardingData
+        avatar: user.avatar || '',
+        isEmailVerified: user.isEmailVerified || false,
+        hasCompletedOnboarding: user.hasCompletedOnboarding || false,
+        onboardingData: user.onboardingData,
+        role: user.role || 'user',           // CRITICAL: Include role for admin check
+        isAdmin: user.isAdmin || false       // CRITICAL: Include isAdmin for admin check
       }
     });
 
@@ -434,6 +467,7 @@ exports.login = async (req, res) => {
     console.error('❌ Login error:', error);
     res.status(500).json({ 
       success: false,
+      ok: false,
       message: 'Login failed. Please try again.' 
     });
   }
@@ -447,6 +481,7 @@ exports.forgotPassword = async (req, res) => {
     if (!email) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Email is required' 
       });
     }
@@ -458,6 +493,7 @@ exports.forgotPassword = async (req, res) => {
     if (!user) {
       return res.json({ 
         success: true,
+        ok: true,
         message: 'If that email exists, a password reset link has been sent' 
       });
     }
@@ -499,6 +535,7 @@ exports.forgotPassword = async (req, res) => {
 
     res.json({ 
       success: true,
+      ok: true,
       message: 'If that email exists, a password reset link has been sent',
       resetUrl: process.env.NODE_ENV === 'development' ? resetUrl : undefined
     });
@@ -507,6 +544,7 @@ exports.forgotPassword = async (req, res) => {
     console.error('❌ Forgot password error:', error);
     res.status(500).json({ 
       success: false,
+      ok: false,
       message: 'Failed to process request' 
     });
   }
@@ -520,6 +558,7 @@ exports.resetPassword = async (req, res) => {
     if (!token || !password) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Token and new password are required' 
       });
     }
@@ -537,17 +576,16 @@ exports.resetPassword = async (req, res) => {
     if (!user) {
       return res.status(400).json({ 
         success: false,
+        ok: false,
         message: 'Invalid or expired reset token' 
       });
     }
 
-    // Hash new password
     // Update password - pre-save hook will hash it
-    user.password = password; // Pre-save hook will hash this
+    user.password = password;
     user.resetPasswordToken = undefined;
     user.resetPasswordExpires = undefined;
-    await user.save(); // Pre-save hook hashes the password here
-
+    await user.save();
 
     // Send confirmation email
     try {
@@ -571,6 +609,7 @@ exports.resetPassword = async (req, res) => {
 
     res.json({ 
       success: true,
+      ok: true,
       message: 'Password reset successful. You can now login with your new password.' 
     });
 
@@ -578,6 +617,7 @@ exports.resetPassword = async (req, res) => {
     console.error('❌ Reset password error:', error);
     res.status(500).json({ 
       success: false,
+      ok: false,
       message: 'Failed to reset password' 
     });
   }
