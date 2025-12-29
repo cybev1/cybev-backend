@@ -1,76 +1,40 @@
 // ============================================
 // FILE: server.js
-// PATH: /server.js (root of cybev-backend)
-// CYBEV Backend with AI Content Engine
+// PATH: cybev-backend/server.js
+// PURPOSE: Main Express server with all routes
+// VERSION: 3.0.0 - December 29, 2024 Update 2
 // ============================================
-require('dotenv').config();
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
+const socketIO = require('socket.io');
+require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 
-console.log('🔧 Starting CYBEV Backend...');
-
-// Initialize Socket.io
-const { initializeSocket } = require('./socket');
-initializeSocket(server);
-
-// ---------- CORS Configuration ----------
-const allowedOrigins = [
-  'http://localhost:3000',
-  'https://cybev.io',
-  'https://www.cybev.io',
-  'https://api.cybev.io',
-  /https:\/\/.*\.vercel\.app$/
-];
-
-app.use(cors({
-  origin: function (origin, callback) {
-    console.log('🌐 CORS Check - Origin:', origin);
-    
-    if (!origin) {
-      console.log('✅ No origin - allowing');
-      return callback(null, true);
-    }
-
-    const isAllowed = allowedOrigins.some(allowed => {
-      if (allowed instanceof RegExp) {
-        return allowed.test(origin);
-      }
-      return allowed === origin;
-    });
-
-    if (isAllowed) {
-      console.log('✅ Origin allowed:', origin);
-      callback(null, true);
-    } else {
-      console.log('❌ Origin blocked:', origin);
-      callback(new Error(`CORS: Origin ${origin} not allowed`));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-app.options('*', cors());
-
-app.use((err, req, res, next) => {
-  if (err && /CORS/i.test(err.message)) {
-    console.error('❌ CORS Error:', err.message);
-    return res.status(403).json({ 
-      ok: false, 
-      error: 'CORS blocked', 
-      detail: err.message 
-    });
+// Socket.IO setup
+const io = socketIO(server, {
+  cors: {
+    origin: process.env.FRONTEND_URL || '*',
+    methods: ['GET', 'POST']
   }
-  next(err);
 });
 
-// ---------- Body parsing ----------
+// Make io accessible to routes
+app.set('io', io);
+
+// ==========================================
+// MIDDLEWARE
+// ==========================================
+
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*',
+  credentials: true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -80,312 +44,349 @@ app.use((req, res, next) => {
   next();
 });
 
-// ---------- Health checks ----------
-app.get('/', (req, res) => {
-  res.json({ 
-    ok: true, 
-    message: 'CYBEV Backend is live ✅',
-    timestamp: Date.now(),
-    version: '2.0.0',
-    features: [
-      'auth', 'blogs', 'rewards', 'domains', 'comments', 
-      'bookmarks', 'follow', 'notifications', 'ai-generation',
-      'content-engine', 'seo-optimization', 'image-generation',
-      'viral-hashtags', 'nft-minting', 'token-staking',
-      'admin-dashboard', 'tipping', 'subscriptions', 'push-notifications',
-      'reactions', 'messages', 'live-streaming'
-    ]
-  });
-});
+// ==========================================
+// DATABASE CONNECTION
+// ==========================================
 
-app.get('/health', (req, res) => {
-  res.status(200).json({ 
-    ok: true, 
-    status: 'healthy',
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    ai: {
-      claude: !!process.env.ANTHROPIC_API_KEY,
-      deepseek: !!process.env.DEEPSEEK_API_KEY,
-      unsplash: !!process.env.UNSPLASH_ACCESS_KEY,
-      pexels: !!process.env.PEXELS_API_KEY
-    },
-    blockchain: {
-      enabled: !!process.env.CYBEV_TOKEN_ADDRESS,
-      network: process.env.CHAIN_ID || 'not configured'
-    }
-  });
-});
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cybev', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log('✅ MongoDB connected'))
+.catch(err => console.error('❌ MongoDB error:', err));
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    ok: true, 
-    ts: Date.now(),
-    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
-  });
-});
+// ==========================================
+// ROUTES - AUTHENTICATION
+// ==========================================
 
-// ---------- Routes ----------
-const authRoutes = require('./routes/auth.routes');
-app.use('/api/auth', authRoutes);
+try {
+  const authRoutes = require('./routes/auth.routes');
+  app.use('/api/auth', authRoutes);
+  console.log('✅ Auth routes loaded');
+} catch (err) {
+  console.log('⚠️ Auth routes not found:', err.message);
+}
 
-console.log('📦 Loading routes...');
+// ==========================================
+// ROUTES - USER
+// ==========================================
 
-// ========== CORE ROUTES ==========
+try {
+  const userRoutes = require('./routes/user.routes');
+  app.use('/api/users', userRoutes);
+  console.log('✅ User routes loaded');
+} catch (err) {
+  console.log('⚠️ User routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - BLOG
+// ==========================================
 
 try {
   const blogRoutes = require('./routes/blog.routes');
-  app.use('/blogs', blogRoutes);
-  app.use('/api/blogs', blogRoutes); // Also mount at /api/blogs for consistency
-  console.log('  ✅ blog.routes loaded');
-} catch (error) {
-  console.log('  ❌ blog.routes failed:', error.message);
+  app.use('/api/blogs', blogRoutes);
+  console.log('✅ Blog routes loaded');
+} catch (err) {
+  console.log('⚠️ Blog routes not found:', err.message);
 }
 
-try {
-  const blogSiteRoutes = require('./routes/blogsite.routes');
-  app.use('/sites', blogSiteRoutes);
-  app.use('/api/sites', blogSiteRoutes);
-  console.log('  ✅ blogsite.routes loaded');
-} catch (error) {
-  console.log('  ❌ blogsite.routes failed:', error.message);
-}
+// ==========================================
+// ROUTES - POSTS
+// ==========================================
 
 try {
-  const rewardRoutes = require('./routes/reward.routes');
-  app.use('/api/rewards', rewardRoutes);
-  console.log('  ✅ reward.routes loaded');
-} catch (error) {
-  console.log('  ❌ reward.routes failed:', error.message);
+  const postRoutes = require('./routes/post.routes');
+  app.use('/api/posts', postRoutes);
+  console.log('✅ Post routes loaded');
+} catch (err) {
+  console.log('⚠️ Post routes not found:', err.message);
 }
 
-try {
-  const domainRoutes = require('./routes/domain.routes');
-  app.use('/api/domain', domainRoutes);
-  console.log('  ✅ domain.routes loaded');
-} catch (error) {
-  console.log('  ❌ domain.routes failed:', error.message);
-}
-
-try {
-  const commentRoutes = require('./routes/comment.routes');
-  app.use('/api/comments', commentRoutes);
-  console.log('  ✅ comment.routes loaded');
-} catch (error) {
-  console.log('  ❌ comment.routes failed:', error.message);
-}
-
-try {
-  const bookmarkRoutes = require('./routes/bookmark.routes');
-  app.use('/api/bookmarks', bookmarkRoutes);
-  console.log('  ✅ bookmark.routes loaded');
-} catch (error) {
-  console.log('  ❌ bookmark.routes failed:', error.message);
-}
-
-try {
-  const followRoutes = require('./routes/follow.routes');
-  app.use('/api/follow', followRoutes);
-  console.log('  ✅ follow.routes loaded');
-} catch (error) {
-  console.log('  ❌ follow.routes failed:', error.message);
-}
+// ==========================================
+// ROUTES - FEED
+// ==========================================
 
 try {
   const feedRoutes = require('./routes/feed.routes');
   app.use('/api/feed', feedRoutes);
-  console.log('  ✅ feed.routes loaded');
-} catch (error) {
-  console.log('  ❌ feed.routes failed:', error.message);
+  console.log('✅ Feed routes loaded');
+} catch (err) {
+  console.log('⚠️ Feed routes not found:', err.message);
 }
 
-// *** FIXED: Changed from 'notifications.routes' to 'notification.routes' ***
+// ==========================================
+// ROUTES - COMMENTS
+// ==========================================
+
+try {
+  const commentRoutes = require('./routes/comment.routes');
+  app.use('/api/comments', commentRoutes);
+  console.log('✅ Comment routes loaded');
+} catch (err) {
+  console.log('⚠️ Comment routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - BOOKMARKS
+// ==========================================
+
+try {
+  const bookmarkRoutes = require('./routes/bookmark.routes');
+  app.use('/api/bookmarks', bookmarkRoutes);
+  console.log('✅ Bookmark routes loaded');
+} catch (err) {
+  console.log('⚠️ Bookmark routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - NOTIFICATIONS (singular!)
+// ==========================================
+
 try {
   const notificationRoutes = require('./routes/notification.routes');
   app.use('/api/notifications', notificationRoutes);
-  console.log('  ✅ notification.routes loaded');
-} catch (error) {
-  console.log('  ❌ notification.routes failed:', error.message);
+  console.log('✅ Notification routes loaded');
+} catch (err) {
+  console.log('⚠️ Notification routes not found:', err.message);
 }
 
-try {
-  const aiRoutes = require('./routes/ai.routes');
-  app.use('/api/ai', aiRoutes);
-  console.log('  ✅ ai.routes loaded');
-} catch (error) {
-  console.log('  ❌ ai.routes failed:', error.message);
-}
-
-try {
-  const contentRoutes = require('./routes/content.routes');
-  app.use('/api/content', contentRoutes);
-  console.log('  ✅ content.routes loaded');
-} catch (error) {
-  console.log('  ❌ content.routes failed:', error.message);
-}
-
-try {
-  const postsRoutes = require('./routes/posts.routes');
-  app.use('/posts', postsRoutes);
-  app.use('/api/posts', postsRoutes); // Also mount at /api/posts
-  console.log('  ✅ posts.routes loaded');
-} catch (error) {
-  console.log('  ❌ posts.routes failed:', error.message);
-}
-
-try {
-  const uploadRoutes = require('./routes/upload.routes');
-  app.use('/api/upload', uploadRoutes);
-  console.log('  ✅ upload.routes loaded');
-} catch (error) {
-  console.log('  ❌ upload.routes failed:', error.message);
-}
-
-// ========== ENGAGEMENT ROUTES (Reactions, Likes, Views) ==========
-
-console.log('  💫 Loading engagement routes...');
+// ==========================================
+// ROUTES - REACTIONS (NEW)
+// ==========================================
 
 try {
   const reactionRoutes = require('./routes/reaction.routes');
   app.use('/api/reactions', reactionRoutes);
-  console.log('  ✅ reaction.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ reaction.routes not found (optional):', error.message);
+  console.log('✅ Reaction routes loaded');
+} catch (err) {
+  console.log('⚠️ Reaction routes not found:', err.message);
 }
 
-// ========== ADMIN & MONETIZATION ROUTES ==========
-
-console.log('  🆕 Loading admin & monetization routes...');
-
-try {
-  const adminRoutes = require('./routes/admin.routes');
-  app.use('/api/admin', adminRoutes);
-  console.log('  ✅ admin.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ admin.routes not found (optional):', error.message);
-}
-
-try {
-  const nftRoutes = require('./routes/nft.routes');
-  app.use('/api/nft', nftRoutes);
-  console.log('  ✅ nft.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ nft.routes not found (optional):', error.message);
-}
-
-try {
-  const stakingRoutes = require('./routes/staking.routes');
-  app.use('/api/staking', stakingRoutes);
-  console.log('  ✅ staking.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ staking.routes not found (optional):', error.message);
-}
-
-try {
-  const tippingRoutes = require('./routes/tipping.routes');
-  app.use('/api/tips', tippingRoutes);
-  console.log('  ✅ tipping.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ tipping.routes not found (optional):', error.message);
-}
-
-try {
-  const subscriptionRoutes = require('./routes/subscription.routes');
-  app.use('/api/subscriptions', subscriptionRoutes);
-  console.log('  ✅ subscription.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ subscription.routes not found (optional):', error.message);
-}
-
-try {
-  const pushRoutes = require('./routes/push.routes');
-  app.use('/api/push', pushRoutes);
-  console.log('  ✅ push.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ push.routes not found (optional):', error.message);
-}
-
-// ========== MESSAGING ROUTES ==========
-
-console.log('  💬 Loading messaging routes...');
+// ==========================================
+// ROUTES - MESSAGES (NEW)
+// ==========================================
 
 try {
   const messageRoutes = require('./routes/message.routes');
   app.use('/api/messages', messageRoutes);
-  console.log('  ✅ message.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ message.routes not found (optional):', error.message);
+  console.log('✅ Message routes loaded');
+} catch (err) {
+  console.log('⚠️ Message routes not found:', err.message);
 }
 
-// ========== LIVE STREAMING ROUTES ==========
-
-console.log('  📺 Loading streaming routes...');
+// ==========================================
+// ROUTES - LIVE STREAMING (NEW)
+// ==========================================
 
 try {
   const liveRoutes = require('./routes/live.routes');
   app.use('/api/live', liveRoutes);
-  console.log('  ✅ live.routes loaded');
-} catch (error) {
-  console.log('  ⚠️ live.routes not found (optional):', error.message);
+  console.log('✅ Live streaming routes loaded');
+} catch (err) {
+  console.log('⚠️ Live routes not found:', err.message);
 }
 
-console.log('✅ Route loading complete!');
+// ==========================================
+// ROUTES - NFT (NEW)
+// ==========================================
+
+try {
+  const nftRoutes = require('./routes/nft.routes');
+  app.use('/api/nft', nftRoutes);
+  console.log('✅ NFT routes loaded');
+} catch (err) {
+  console.log('⚠️ NFT routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - STAKING (NEW)
+// ==========================================
+
+try {
+  const stakingRoutes = require('./routes/staking.routes');
+  app.use('/api/staking', stakingRoutes);
+  console.log('✅ Staking routes loaded');
+} catch (err) {
+  console.log('⚠️ Staking routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - ADMIN (NEW)
+// ==========================================
+
+try {
+  const adminRoutes = require('./routes/admin.routes');
+  app.use('/api/admin', adminRoutes);
+  console.log('✅ Admin routes loaded');
+} catch (err) {
+  console.log('⚠️ Admin routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - WALLET
+// ==========================================
+
+try {
+  const walletRoutes = require('./routes/wallet.routes');
+  app.use('/api/wallet', walletRoutes);
+  console.log('✅ Wallet routes loaded');
+} catch (err) {
+  console.log('⚠️ Wallet routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - UPLOAD
+// ==========================================
+
+try {
+  const uploadRoutes = require('./routes/upload.routes');
+  app.use('/api/upload', uploadRoutes);
+  console.log('✅ Upload routes loaded');
+} catch (err) {
+  console.log('⚠️ Upload routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - FOLLOW
+// ==========================================
+
+try {
+  const followRoutes = require('./routes/follow.routes');
+  app.use('/api/follow', followRoutes);
+  console.log('✅ Follow routes loaded');
+} catch (err) {
+  console.log('⚠️ Follow routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - DOMAIN
+// ==========================================
+
+try {
+  const domainRoutes = require('./routes/domain.routes');
+  app.use('/api/domain', domainRoutes);
+  console.log('✅ Domain routes loaded');
+} catch (err) {
+  console.log('⚠️ Domain routes not found:', err.message);
+}
+
+// ==========================================
+// HEALTH CHECK
+// ==========================================
+
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    ok: true, 
+    status: 'healthy',
+    version: '3.0.0',
+    timestamp: new Date().toISOString(),
+    features: [
+      'auth', 'users', 'blogs', 'posts', 'feed',
+      'comments', 'bookmarks', 'notifications',
+      'reactions', 'messages', 'live-streaming',
+      'nft', 'staking', 'admin', 'wallet', 'upload'
+    ]
+  });
+});
+
+// Root route
+app.get('/', (req, res) => {
+  res.json({
+    message: 'CYBEV API Server v3.0.0',
+    documentation: '/api/health',
+    status: 'running'
+  });
+});
+
+// ==========================================
+// SOCKET.IO EVENTS
+// ==========================================
+
+io.on('connection', (socket) => {
+  console.log('🔌 User connected:', socket.id);
+
+  // Join user's personal room
+  socket.on('join', (userId) => {
+    socket.join(`user:${userId}`);
+    console.log(`User ${userId} joined their room`);
+  });
+
+  // Join conversation room
+  socket.on('join-conversation', (conversationId) => {
+    socket.join(`conversation:${conversationId}`);
+  });
+
+  // Leave conversation room
+  socket.on('leave-conversation', (conversationId) => {
+    socket.leave(`conversation:${conversationId}`);
+  });
+
+  // Typing indicator
+  socket.on('typing', ({ conversationId, userId, isTyping }) => {
+    socket.to(`conversation:${conversationId}`).emit('user-typing', { userId, isTyping });
+  });
+
+  // Join live stream
+  socket.on('join-stream', (streamId) => {
+    socket.join(`stream:${streamId}`);
+  });
+
+  // Leave live stream
+  socket.on('leave-stream', (streamId) => {
+    socket.leave(`stream:${streamId}`);
+  });
+
+  // Stream chat message
+  socket.on('stream-chat', ({ streamId, message }) => {
+    io.to(`stream:${streamId}`).emit('chat-message', message);
+  });
+
+  // Disconnect
+  socket.on('disconnect', () => {
+    console.log('🔌 User disconnected:', socket.id);
+  });
+});
+
+// ==========================================
+// ERROR HANDLING
+// ==========================================
 
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ 
-    ok: false,
-    error: 'Route not found',
-    path: req.path,
-    method: req.method
-  });
-});
-
-// Error Handler
-app.use((err, req, res, next) => {
-  console.error('💥 Error:', err);
-  res.status(err.status || 500).json({ 
     ok: false, 
-    error: err.message || 'Internal Server Error'
+    error: 'Endpoint not found',
+    path: req.path 
   });
 });
 
-// ---------- Mongo + Start ----------
+// Global error handler
+app.use((err, req, res, next) => {
+  console.error('Server error:', err);
+  res.status(500).json({ 
+    ok: false, 
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// ==========================================
+// START SERVER
+// ==========================================
+
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI;
-
-if (!MONGO_URI) {
-  console.error('❌ ERROR: MONGO_URI not found');
-  process.exit(1);
-}
-
-console.log('\n🔑 API Keys Status:');
-console.log('  MongoDB:', MONGO_URI ? '✅' : '❌');
-console.log('  Claude AI:', process.env.ANTHROPIC_API_KEY ? '✅' : '❌');
-console.log('  DeepSeek AI:', process.env.DEEPSEEK_API_KEY ? '✅' : '❌');
-console.log('  Unsplash:', process.env.UNSPLASH_ACCESS_KEY ? '✅' : '⚠️');
-console.log('  Cloudinary:', process.env.CLOUDINARY_CLOUD_NAME ? '✅' : '⚠️');
-
-console.log('\n🔗 Blockchain Status:');
-console.log('  Token Contract:', process.env.CYBEV_TOKEN_ADDRESS ? '✅' : '⚠️ Not deployed');
-console.log('  NFT Contract:', process.env.CYBEV_NFT_ADDRESS ? '✅' : '⚠️ Not deployed');
-console.log('  Staking Contract:', process.env.CYBEV_STAKING_ADDRESS ? '✅' : '⚠️ Not deployed');
-console.log('  Chain ID:', process.env.CHAIN_ID || '⚠️ Not set');
-
-mongoose
-  .connect(MONGO_URI)
-  .then(() => {
-    console.log('✅ MongoDB connected');
-    server.listen(PORT, () => {
-      console.log(`🚀 CYBEV Server running on PORT ${PORT}`);
-      console.log('🎉 Server ready!');
-    });
-  })
-  .catch(err => {
-    console.error('❌ MongoDB connection failed:', err);
-    process.exit(1);
-  });
-
-process.on('SIGTERM', () => {
-  mongoose.connection.close();
-  process.exit(0);
+server.listen(PORT, () => {
+  console.log(`
+╔═══════════════════════════════════════════╗
+║         CYBEV API Server v3.0.0           ║
+╠═══════════════════════════════════════════╣
+║  🚀 Server running on port ${PORT}           ║
+║  📦 MongoDB: ${process.env.MONGODB_URI ? 'Connected' : 'Connecting...'}            ║
+║  🔌 Socket.IO: Enabled                    ║
+║  📅 ${new Date().toISOString()}  ║
+╚═══════════════════════════════════════════╝
+  `);
 });
+
+module.exports = { app, server, io };
