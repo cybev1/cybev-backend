@@ -4,157 +4,86 @@
 // ============================================
 const express = require('express');
 const router = express.Router();
-const verifyToken = require('../middleware/verifyToken');
 const mongoose = require('mongoose');
+const verifyToken = require('../middleware/verifyToken');
 
-// Staking Model
-const stakeSchema = new mongoose.Schema({
+// Staking Schema
+const stakingSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  wallet: { type: String },
+  wallet: { type: String, required: true },
   amount: { type: Number, required: true },
-  tier: { type: String, enum: ['Bronze', 'Silver', 'Gold', 'Diamond'], required: true },
-  apy: { type: Number, required: true },
-  lockDays: { type: Number, required: true },
-  startDate: { type: Date, default: Date.now },
-  unlockDate: { type: Date, required: true },
-  earnedRewards: { type: Number, default: 0 },
-  lastRewardCalculation: { type: Date, default: Date.now },
-  status: { type: String, enum: ['active', 'unstaked', 'completed'], default: 'active' },
-  unstakeDate: { type: Date },
-  penalty: { type: Number, default: 0 }
+  tier: { type: Number, enum: [0, 1, 2, 3], required: true }, // 0=Bronze, 1=Silver, 2=Gold, 3=Diamond
+  transactionHash: { type: String },
+  stakeIndex: { type: Number }, // Index in smart contract
+  startTime: { type: Date, default: Date.now },
+  endTime: { type: Date },
+  status: { type: String, enum: ['active', 'unstaked', 'pending'], default: 'pending' },
+  rewards: { type: Number, default: 0 },
+  unstakedAt: { type: Date }
 }, { timestamps: true });
 
-let Stake;
+let Staking;
 try {
-  Stake = mongoose.model('Stake');
+  Staking = mongoose.model('Staking');
 } catch {
-  Stake = mongoose.model('Stake', stakeSchema);
+  Staking = mongoose.model('Staking', stakingSchema);
 }
 
-// Tier configuration
-const TIERS = {
-  Bronze: { minStake: 100, apy: 8, lockDays: 30 },
-  Silver: { minStake: 500, apy: 12, lockDays: 90 },
-  Gold: { minStake: 1000, apy: 18, lockDays: 180 },
-  Diamond: { minStake: 5000, apy: 25, lockDays: 365 }
-};
+// Tier configurations (must match smart contract)
+const TIERS = [
+  { name: 'Bronze', minStake: 100, lockDays: 30, apy: 8 },
+  { name: 'Silver', minStake: 500, lockDays: 90, apy: 12 },
+  { name: 'Gold', minStake: 1000, lockDays: 180, apy: 18 },
+  { name: 'Diamond', minStake: 5000, lockDays: 365, apy: 25 }
+];
 
-// Calculate rewards for a stake
-function calculateRewards(stake) {
-  const now = new Date();
-  const daysPassed = Math.floor((now - stake.lastRewardCalculation) / (1000 * 60 * 60 * 24));
-  if (daysPassed < 1) return stake.earnedRewards;
-  
-  const dailyRate = stake.apy / 100 / 365;
-  const newRewards = stake.amount * dailyRate * daysPassed;
-  return stake.earnedRewards + newRewards;
-}
-
-// GET /api/staking/info - Get user's staking info
-router.get('/info', verifyToken, async (req, res) => {
-  try {
-    const Wallet = require('../models/wallet.model');
-    
-    // Get active stakes
-    const activeStakes = await Stake.find({ 
-      user: req.user.id, 
-      status: 'active' 
-    }).sort({ startDate: -1 });
-
-    // Update rewards for each stake
-    let totalStaked = 0;
-    let pendingRewards = 0;
-    let currentApy = 0;
-
-    const updatedStakes = await Promise.all(activeStakes.map(async (stake) => {
-      const rewards = calculateRewards(stake);
-      stake.earnedRewards = rewards;
-      stake.lastRewardCalculation = new Date();
-      await stake.save();
-
-      totalStaked += stake.amount;
-      pendingRewards += rewards;
-      currentApy = Math.max(currentApy, stake.apy);
-
-      return {
-        _id: stake._id,
-        amount: stake.amount,
-        tier: stake.tier,
-        apy: stake.apy,
-        startDate: stake.startDate,
-        unlockDate: stake.unlockDate,
-        earnedRewards: rewards,
-        daysRemaining: Math.max(0, Math.ceil((stake.unlockDate - new Date()) / (1000 * 60 * 60 * 24)))
-      };
-    }));
-
-    // Get wallet balance
-    let walletBalance = 0;
-    try {
-      const wallet = await Wallet.findOne({ user: req.user.id });
-      walletBalance = wallet?.balance || 0;
-    } catch (e) {}
-
-    res.json({
-      ok: true,
-      totalStaked,
-      pendingRewards: parseFloat(pendingRewards.toFixed(4)),
-      currentApy,
-      walletBalance,
-      activeStakes: updatedStakes,
-      tiers: TIERS
-    });
-  } catch (error) {
-    console.error('Staking info error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch staking info' });
-  }
+// GET /api/staking/tiers - Get staking tiers info
+router.get('/tiers', (req, res) => {
+  res.json({
+    ok: true,
+    tiers: TIERS.map((tier, index) => ({
+      id: index,
+      ...tier,
+      lockDaysFormatted: tier.lockDays >= 365 ? '1 Year' : `${tier.lockDays} Days`
+    })),
+    contractAddress: process.env.CYBEV_STAKING_ADDRESS || null,
+    tokenAddress: process.env.CYBEV_TOKEN_ADDRESS || null
+  });
 });
 
-// POST /api/staking/stake - Stake tokens
+// POST /api/staking/stake - Record new stake
 router.post('/stake', verifyToken, async (req, res) => {
   try {
-    const { amount, tier, wallet } = req.body;
-    const Wallet = require('../models/wallet.model');
+    const { wallet, amount, tier, transactionHash, stakeIndex } = req.body;
 
-    if (!amount || !tier) {
-      return res.status(400).json({ ok: false, error: 'Amount and tier required' });
+    if (!wallet || amount === undefined || tier === undefined) {
+      return res.status(400).json({ ok: false, error: 'Wallet, amount, and tier required' });
     }
 
-    const tierConfig = TIERS[tier];
-    if (!tierConfig) {
+    if (tier < 0 || tier > 3) {
       return res.status(400).json({ ok: false, error: 'Invalid tier' });
     }
 
-    if (amount < tierConfig.minStake) {
+    if (amount < TIERS[tier].minStake) {
       return res.status(400).json({ 
         ok: false, 
-        error: `Minimum stake for ${tier} is ${tierConfig.minStake} CYBEV` 
+        error: `Minimum stake for ${TIERS[tier].name} is ${TIERS[tier].minStake} CYBEV` 
       });
     }
 
-    // Check wallet balance
-    const userWallet = await Wallet.findOne({ user: req.user.id });
-    if (!userWallet || userWallet.balance < amount) {
-      return res.status(400).json({ ok: false, error: 'Insufficient balance' });
-    }
+    const tierConfig = TIERS[tier];
+    const endTime = new Date(Date.now() + tierConfig.lockDays * 24 * 60 * 60 * 1000);
 
-    // Deduct from wallet
-    userWallet.balance -= amount;
-    await userWallet.save();
-
-    // Create stake
-    const unlockDate = new Date();
-    unlockDate.setDate(unlockDate.getDate() + tierConfig.lockDays);
-
-    const stake = new Stake({
+    const stake = new Staking({
       user: req.user.id,
-      wallet: wallet?.toLowerCase(),
+      wallet: wallet.toLowerCase(),
       amount,
       tier,
-      apy: tierConfig.apy,
-      lockDays: tierConfig.lockDays,
-      unlockDate,
-      earnedRewards: 0
+      transactionHash,
+      stakeIndex,
+      startTime: new Date(),
+      endTime,
+      status: transactionHash ? 'active' : 'pending'
     });
 
     await stake.save();
@@ -164,130 +93,183 @@ router.post('/stake', verifyToken, async (req, res) => {
       stake: {
         _id: stake._id,
         amount: stake.amount,
-        tier: stake.tier,
-        apy: stake.apy,
-        unlockDate: stake.unlockDate
-      },
-      newBalance: userWallet.balance
+        tier: tierConfig.name,
+        apy: tierConfig.apy,
+        lockDays: tierConfig.lockDays,
+        startTime: stake.startTime,
+        endTime: stake.endTime,
+        status: stake.status
+      }
     });
   } catch (error) {
     console.error('Stake error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to stake tokens' });
+    res.status(500).json({ ok: false, error: 'Failed to record stake' });
   }
 });
 
-// POST /api/staking/unstake - Unstake tokens
-router.post('/unstake', verifyToken, async (req, res) => {
+// PUT /api/staking/confirm/:id - Confirm stake with transaction
+router.put('/confirm/:id', verifyToken, async (req, res) => {
   try {
-    const { stakeId } = req.body;
-    const Wallet = require('../models/wallet.model');
-
-    const stake = await Stake.findOne({ _id: stakeId, user: req.user.id, status: 'active' });
+    const { transactionHash, stakeIndex } = req.body;
+    
+    const stake = await Staking.findById(req.params.id);
     if (!stake) {
       return res.status(404).json({ ok: false, error: 'Stake not found' });
     }
 
-    // Calculate final rewards
-    const rewards = calculateRewards(stake);
-    
-    // Check if early unstake (penalty applies)
-    const now = new Date();
-    let penalty = 0;
-    let returnAmount = stake.amount;
-
-    if (now < stake.unlockDate) {
-      // Early unstake - 20% penalty on principal + forfeit rewards
-      penalty = stake.amount * 0.2;
-      returnAmount = stake.amount - penalty;
-      stake.penalty = penalty;
-    } else {
-      // Matured stake - return principal + rewards
-      returnAmount = stake.amount + rewards;
+    if (stake.user.toString() !== req.user.id) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
 
-    // Return to wallet
-    let userWallet = await Wallet.findOne({ user: req.user.id });
-    if (!userWallet) {
-      userWallet = new Wallet({ user: req.user.id, balance: 0 });
-    }
-    userWallet.balance += returnAmount;
-    await userWallet.save();
-
-    // Update stake status
-    stake.status = 'unstaked';
-    stake.unstakeDate = now;
-    stake.earnedRewards = now >= stake.unlockDate ? rewards : 0;
+    stake.transactionHash = transactionHash;
+    stake.stakeIndex = stakeIndex;
+    stake.status = 'active';
     await stake.save();
 
-    res.json({
-      ok: true,
-      returnAmount,
-      penalty,
-      rewards: now >= stake.unlockDate ? rewards : 0,
-      newBalance: userWallet.balance,
-      message: penalty > 0 
-        ? `Early unstake penalty: ${penalty.toFixed(2)} CYBEV` 
-        : `Returned ${returnAmount.toFixed(2)} CYBEV`
-    });
+    res.json({ ok: true, stake });
   } catch (error) {
-    console.error('Unstake error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to unstake tokens' });
+    res.status(500).json({ ok: false, error: 'Failed to confirm stake' });
   }
 });
 
-// POST /api/staking/claim - Claim rewards
-router.post('/claim', verifyToken, async (req, res) => {
+// POST /api/staking/unstake/:id - Record unstake
+router.post('/unstake/:id', verifyToken, async (req, res) => {
   try {
-    const Wallet = require('../models/wallet.model');
-
-    // Get all active stakes
-    const activeStakes = await Stake.find({ user: req.user.id, status: 'active' });
+    const { transactionHash, rewards } = req.body;
     
-    let totalClaimed = 0;
-    for (const stake of activeStakes) {
-      const rewards = calculateRewards(stake);
-      if (rewards > stake.earnedRewards) {
-        totalClaimed += rewards - stake.earnedRewards;
-      }
-      stake.earnedRewards = 0; // Reset after claiming
-      stake.lastRewardCalculation = new Date();
-      await stake.save();
+    const stake = await Staking.findById(req.params.id);
+    if (!stake) {
+      return res.status(404).json({ ok: false, error: 'Stake not found' });
     }
 
-    if (totalClaimed <= 0) {
-      return res.status(400).json({ ok: false, error: 'No rewards to claim' });
+    if (stake.user.toString() !== req.user.id) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
 
-    // Add to wallet
-    let userWallet = await Wallet.findOne({ user: req.user.id });
-    if (!userWallet) {
-      userWallet = new Wallet({ user: req.user.id, balance: 0 });
+    if (stake.status !== 'active') {
+      return res.status(400).json({ ok: false, error: 'Stake is not active' });
     }
-    userWallet.balance += totalClaimed;
-    userWallet.totalEarned = (userWallet.totalEarned || 0) + totalClaimed;
-    await userWallet.save();
 
-    res.json({
-      ok: true,
-      amount: parseFloat(totalClaimed.toFixed(4)),
-      newBalance: userWallet.balance
+    stake.status = 'unstaked';
+    stake.unstakedAt = new Date();
+    stake.rewards = rewards || 0;
+    if (transactionHash) stake.transactionHash = transactionHash;
+    await stake.save();
+
+    const isEarly = new Date() < stake.endTime;
+
+    res.json({ 
+      ok: true, 
+      stake,
+      earlyUnstake: isEarly,
+      message: isEarly ? 'Early unstake - 20% penalty applied' : 'Successfully unstaked with rewards'
     });
   } catch (error) {
-    console.error('Claim error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to claim rewards' });
+    res.status(500).json({ ok: false, error: 'Failed to unstake' });
   }
 });
 
-// GET /api/staking/history - Get staking history
-router.get('/history', verifyToken, async (req, res) => {
+// GET /api/staking/my-stakes - Get user's stakes
+router.get('/my-stakes', verifyToken, async (req, res) => {
   try {
-    const stakes = await Stake.find({ user: req.user.id })
-      .sort({ createdAt: -1 })
-      .limit(50);
+    const stakes = await Staking.find({ user: req.user.id })
+      .sort({ createdAt: -1 });
 
-    res.json({ ok: true, history: stakes });
+    const formattedStakes = stakes.map(stake => {
+      const tierConfig = TIERS[stake.tier];
+      const now = new Date();
+      const isLocked = now < stake.endTime;
+      const elapsed = now - stake.startTime;
+      const totalDuration = stake.endTime - stake.startTime;
+      const progress = Math.min(100, (elapsed / totalDuration) * 100);
+      
+      // Calculate pending rewards
+      const elapsedDays = elapsed / (24 * 60 * 60 * 1000);
+      const pendingRewards = (stake.amount * tierConfig.apy * elapsedDays) / (365 * 100);
+
+      return {
+        _id: stake._id,
+        amount: stake.amount,
+        tier: stake.tier,
+        tierName: tierConfig.name,
+        apy: tierConfig.apy,
+        startTime: stake.startTime,
+        endTime: stake.endTime,
+        status: stake.status,
+        isLocked,
+        progress: progress.toFixed(1),
+        pendingRewards: pendingRewards.toFixed(2),
+        rewards: stake.rewards,
+        transactionHash: stake.transactionHash
+      };
+    });
+
+    res.json({ ok: true, stakes: formattedStakes });
   } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to fetch history' });
+    res.status(500).json({ ok: false, error: 'Failed to fetch stakes' });
+  }
+});
+
+// GET /api/staking/stats - Get staking statistics
+router.get('/stats', async (req, res) => {
+  try {
+    const [totalStaked, activeStakes, totalStakers] = await Promise.all([
+      Staking.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      Staking.countDocuments({ status: 'active' }),
+      Staking.distinct('user', { status: 'active' })
+    ]);
+
+    res.json({
+      ok: true,
+      stats: {
+        totalStaked: totalStaked[0]?.total || 0,
+        activeStakes,
+        totalStakers: totalStakers.length,
+        contractAddress: process.env.CYBEV_STAKING_ADDRESS || null
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to fetch stats' });
+  }
+});
+
+// GET /api/staking/leaderboard - Top stakers
+router.get('/leaderboard', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+
+    const leaderboard = await Staking.aggregate([
+      { $match: { status: 'active' } },
+      { $group: { 
+        _id: '$user', 
+        totalStaked: { $sum: '$amount' },
+        stakes: { $sum: 1 }
+      }},
+      { $sort: { totalStaked: -1 } },
+      { $limit: limit },
+      { $lookup: {
+        from: 'users',
+        localField: '_id',
+        foreignField: '_id',
+        as: 'user'
+      }},
+      { $unwind: '$user' },
+      { $project: {
+        _id: 1,
+        totalStaked: 1,
+        stakes: 1,
+        'user.name': 1,
+        'user.username': 1,
+        'user.avatar': 1
+      }}
+    ]);
+
+    res.json({ ok: true, leaderboard });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to fetch leaderboard' });
   }
 });
 
