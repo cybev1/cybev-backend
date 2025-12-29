@@ -48,12 +48,24 @@ app.use((req, res, next) => {
 // DATABASE CONNECTION
 // ==========================================
 
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/cybev', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-})
-.then(() => console.log('✅ MongoDB connected'))
-.catch(err => console.error('❌ MongoDB error:', err));
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DATABASE_URL;
+
+if (!MONGODB_URI) {
+  console.error('❌ MONGODB_URI environment variable not set!');
+  console.log('⚠️ Server will start but database operations will fail');
+} else {
+  mongoose.connect(MONGODB_URI)
+    .then(() => console.log('✅ MongoDB connected'))
+    .catch(err => {
+      console.error('❌ MongoDB connection error:', err.message);
+      console.log('⚠️ Server will continue without database - some features unavailable');
+    });
+}
+
+// Handle connection events
+mongoose.connection.on('connected', () => console.log('📦 MongoDB connected'));
+mongoose.connection.on('error', (err) => console.error('📦 MongoDB error:', err.message));
+mongoose.connection.on('disconnected', () => console.log('📦 MongoDB disconnected'));
 
 // ==========================================
 // ROUTES - AUTHENTICATION
