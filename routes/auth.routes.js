@@ -22,13 +22,39 @@ router.post('/resend-verification', authController.resendVerification);
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
 
-// User Profile
+// User Profile - Get current user
 router.get('/me', verifyToken, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password');
-    res.json(user);
-  } catch {
-    res.status(500).json({ error: 'Failed to fetch user' });
+    
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    
+    // Return user with role and isAdmin fields explicitly included
+    res.json({
+      ok: true,
+      user: {
+        id: user._id,
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        username: user.username,
+        avatar: user.avatar || '',
+        bio: user.bio || '',
+        isEmailVerified: user.isEmailVerified || false,
+        hasCompletedOnboarding: user.hasCompletedOnboarding || false,
+        onboardingData: user.onboardingData,
+        role: user.role || 'user',           // IMPORTANT: Include role
+        isAdmin: user.isAdmin || false,       // IMPORTANT: Include isAdmin
+        followerCount: user.followerCount || 0,
+        followingCount: user.followingCount || 0,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Get me error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to fetch user' });
   }
 });
 
@@ -45,20 +71,25 @@ router.get('/profile', verifyToken, async (req, res) => {
 
     const profile = {
       id: user._id,
+      _id: user._id,
       name: user.name,
       email: user.email,
       username: user.username,
       hasCompletedOnboarding: user.hasCompletedOnboarding || false,
       onboardingData: user.onboardingData || null,
-      avatar: user.avatar,
-      bio: user.bio,
-      isEmailVerified: user.isEmailVerified || false
+      avatar: user.avatar || '',
+      bio: user.bio || '',
+      isEmailVerified: user.isEmailVerified || false,
+      role: user.role || 'user',           // IMPORTANT: Include role
+      isAdmin: user.isAdmin || false       // IMPORTANT: Include isAdmin
     };
 
     console.log('✅ Profile data:', {
       id: profile.id,
       hasCompletedOnboarding: profile.hasCompletedOnboarding,
-      hasOnboardingData: !!profile.onboardingData
+      hasOnboardingData: !!profile.onboardingData,
+      role: profile.role,
+      isAdmin: profile.isAdmin
     });
 
     res.json(profile);
