@@ -1,163 +1,147 @@
 // ============================================
 // FILE: routes/admin.routes.js
-// Admin Dashboard API
+// PATH: cybev-backend/routes/admin.routes.js
+// PURPOSE: Admin dashboard - users, content, analytics, settings
 // ============================================
+
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const verifyToken = require('../middleware/verifyToken');
 
-// Admin middleware - checks both role AND isAdmin field
-const isAdmin = async (req, res, next) => {
+// Admin middleware
+const adminOnly = async (req, res, next) => {
   try {
     const User = mongoose.model('User');
     const user = await User.findById(req.user.id);
     
-    // Check both role === 'admin' OR isAdmin === true
-    if (!user || (user.role !== 'admin' && !user.isAdmin)) {
-      console.log('❌ Admin access denied for:', user?.email, '| role:', user?.role, '| isAdmin:', user?.isAdmin);
+    if (!user || (!user.isAdmin && user.role !== 'admin')) {
       return res.status(403).json({ ok: false, error: 'Admin access required' });
     }
     
-    console.log('✅ Admin access granted for:', user.email);
-    req.adminUser = user; // Attach admin user to request
+    req.adminUser = user;
     next();
   } catch (error) {
-    console.error('Admin middleware error:', error);
-    res.status(500).json({ ok: false, error: 'Auth error' });
+    res.status(500).json({ ok: false, error: 'Authorization failed' });
   }
 };
 
-// GET /api/admin/stats - Dashboard statistics
-router.get('/stats', verifyToken, isAdmin, async (req, res) => {
+// ==========================================
+// DASHBOARD STATS
+// ==========================================
+
+// GET /api/admin/stats - Get dashboard statistics
+router.get('/stats', verifyToken, adminOnly, async (req, res) => {
   try {
     const User = mongoose.model('User');
-    const Blog = mongoose.model('Blog');
     
-    // Get current date boundaries
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    // Get models if they exist
+    let Blog, NFT, Stake, Transaction;
+    try { Blog = mongoose.model('Blog'); } catch {}
+    try { NFT = mongoose.model('NFT'); } catch {}
+    try { Stake = mongoose.model('Stake'); } catch {}
+    try { Transaction = mongoose.model('Transaction'); } catch {}
 
-    const [
-      totalUsers,
-      totalBlogs,
-      usersToday,
-      usersThisWeek,
-      usersThisMonth,
-      blogsToday,
-      blogsThisWeek,
-      recentUsers,
-      recentBlogs,
-      topBlogs
-    ] = await Promise.all([
-      User.countDocuments(),
-      Blog.countDocuments(),
-      User.countDocuments({ createdAt: { $gte: startOfToday } }),
-      User.countDocuments({ createdAt: { $gte: startOfWeek } }),
-      User.countDocuments({ createdAt: { $gte: startOfMonth } }),
-      Blog.countDocuments({ createdAt: { $gte: startOfToday } }),
-      Blog.countDocuments({ createdAt: { $gte: startOfWeek } }),
-      User.find()
-        .select('name username email avatar createdAt')
-        .sort({ createdAt: -1 })
-        .limit(5),
-      Blog.find()
-        .select('title author authorName views likes createdAt')
-        .populate('author', 'name username')
-        .sort({ createdAt: -1 })
-        .limit(5),
-      Blog.find()
-        .select('title author authorName views likes createdAt')
-        .populate('author', 'name username')
-        .sort({ views: -1 })
-        .limit(10)
-    ]);
+    // User stats
+    const totalUsers = await User.countDocuments();
+    const newUsersToday = await User.countDocuments({
+      createdAt: { $gte: new Date(new Date().setHours(0, 0, 0, 0)) }
+    });
+    const newUsersThisWeek = await User.countDocuments({
+      createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) }
+    });
+    const newUsersThisMonth = await User.countDocuments({
+      createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+    });
+    const verifiedUsers = await User.countDocuments({ isVerified: true });
+    const activeUsers = await User.countDocuments({
+      lastActive: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
+    });
 
-    // Calculate total engagement
-    const engagementStats = await Blog.aggregate([
+    // Content stats
+    let totalBlogs = 0, publishedBlogs = 0, totalNFTs = 0, listedNFTs = 0;
+    if (Blog) {
+      totalBlogs = await Blog.countDocuments();
+      publishedBlogs = await Blog.countDocuments({ status: 'published' });
+    }
+    if (NFT) {
+      totalNFTs = await NFT.countDocuments();
+      listedNFTs = await NFT.countDocuments({ isListed: true, status: 'minted' });
+    }
+
+    // Staking stats
+    let totalStaked = 0, activeStakes = 0;
+    if (Stake) {
+      const stakingStats = await Stake.aggregate([
+        { $match: { status: 'active' } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      ]);
+      if (stakingStats[0]) {
+        totalStaked = stakingStats[0].total;
+        activeStakes = stakingStats[0].count;
+      }
+    }
+
+    // Growth trends (last 7 days)
+    const userGrowth = await User.aggregate([
+      { 
+        $match: { 
+          createdAt: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } 
+        } 
+      },
       {
         $group: {
-          _id: null,
-          totalViews: { $sum: '$views' },
-          totalLikes: { $sum: { $size: { $ifNull: ['$likes', []] } } },
-          totalShares: { $sum: { $ifNull: ['$shareCount', 0] } },
-          totalComments: { $sum: { $ifNull: ['$commentCount', 0] } }
+          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+          count: { $sum: 1 }
         }
-      }
+      },
+      { $sort: { _id: 1 } }
     ]);
-
-    const engagement = engagementStats[0] || { totalViews: 0, totalLikes: 0, totalShares: 0, totalComments: 0 };
 
     res.json({
       ok: true,
       stats: {
-        totalUsers,
-        totalBlogs,
         users: {
           total: totalUsers,
-          today: usersToday,
-          thisWeek: usersThisWeek,
-          thisMonth: usersThisMonth
+          today: newUsersToday,
+          thisWeek: newUsersThisWeek,
+          thisMonth: newUsersThisMonth,
+          verified: verifiedUsers,
+          active: activeUsers
         },
         content: {
-          blogs: totalBlogs,
-          comments: engagement.totalComments
+          totalBlogs,
+          publishedBlogs,
+          totalNFTs,
+          listedNFTs
         },
-        engagement: {
-          views: engagement.totalViews,
-          likes: engagement.totalLikes,
-          shares: engagement.totalShares
+        staking: {
+          totalStaked,
+          activeStakes
         },
         growth: {
-          users: usersThisWeek,
-          blogs: blogsThisWeek
+          users: userGrowth
         }
-      },
-      recentUsers: recentUsers.map(u => ({
-        _id: u._id,
-        name: u.name,
-        username: u.username,
-        email: u.email,
-        avatar: u.avatar,
-        createdAt: u.createdAt
-      })),
-      recentBlogs: recentBlogs.map(b => ({
-        _id: b._id,
-        title: b.title,
-        authorName: b.author?.name || b.authorName || 'Unknown',
-        views: b.views || 0,
-        likes: b.likes || [],
-        createdAt: b.createdAt
-      })),
-      topBlogs: topBlogs.map(b => ({
-        _id: b._id,
-        title: b.title,
-        authorName: b.author?.name || b.authorName || 'Unknown',
-        views: b.views || 0,
-        likes: b.likes || [],
-        createdAt: b.createdAt
-      }))
+      }
     });
   } catch (error) {
     console.error('Admin stats error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch stats' });
+    res.status(500).json({ ok: false, error: 'Failed to get stats' });
   }
 });
 
-// GET /api/admin/users - List all users
-router.get('/users', verifyToken, isAdmin, async (req, res) => {
-  try {
-    const User = mongoose.model('User');
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-    const { search, status, role } = req.query;
+// ==========================================
+// USER MANAGEMENT
+// ==========================================
 
-    // Build query
-    let query = {};
-    
+// GET /api/admin/users - Get all users
+router.get('/users', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { page = 1, limit = 20, search, role, status, sort = 'newest' } = req.query;
+
+    const User = mongoose.model('User');
+    const query = {};
+
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -165,81 +149,51 @@ router.get('/users', verifyToken, isAdmin, async (req, res) => {
         { username: { $regex: search, $options: 'i' } }
       ];
     }
-    
-    if (status === 'verified') {
-      query.isEmailVerified = true;
-    } else if (status === 'banned') {
-      query.isBanned = true;
-    }
-    
-    if (role && role !== '') {
-      query.role = role;
-    }
 
-    const [users, total] = await Promise.all([
-      User.find(query)
-        .select('-password')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      User.countDocuments(query)
-    ]);
+    if (role) query.role = role;
+    if (status === 'verified') query.isVerified = true;
+    if (status === 'banned') query.isBanned = true;
+    if (status === 'admin') query.isAdmin = true;
 
-    res.json({
-      ok: true,
-      users,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    });
+    let sortOption = { createdAt: -1 };
+    if (sort === 'oldest') sortOption = { createdAt: 1 };
+    if (sort === 'name') sortOption = { name: 1 };
+
+    const users = await User.find(query)
+      .select('-password')
+      .sort(sortOption)
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+
+    const total = await User.countDocuments(query);
+
+    res.json({ ok: true, users, total, page: parseInt(page), pages: Math.ceil(total / limit) });
   } catch (error) {
-    console.error('Admin users error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch users' });
+    console.error('Get users error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to get users' });
   }
 });
 
-// PUT /api/admin/users/:id - Update user (generic)
-router.put('/users/:id', verifyToken, isAdmin, async (req, res) => {
+// PUT /api/admin/users/:userId - Update user
+router.put('/users/:userId', verifyToken, adminOnly, async (req, res) => {
   try {
+    const { userId } = req.params;
+    const updates = req.body;
     const User = mongoose.model('User');
-    const { role, isBanned, isEmailVerified } = req.body;
-    
+
+    if (userId === req.user.id && updates.isAdmin === false) {
+      return res.status(400).json({ ok: false, error: 'Cannot remove your own admin status' });
+    }
+
+    const allowedUpdates = ['name', 'email', 'role', 'isAdmin', 'isVerified', 'isBanned', 'tokenBalance'];
     const updateData = {};
-    
-    if (role !== undefined) {
-      if (!['user', 'creator', 'moderator', 'admin'].includes(role)) {
-        return res.status(400).json({ ok: false, error: 'Invalid role' });
-      }
-      updateData.role = role;
-      // Also update isAdmin flag
-      updateData.isAdmin = role === 'admin';
-    }
-    
-    if (isBanned !== undefined) {
-      updateData.isBanned = isBanned;
-      if (isBanned) {
-        updateData.bannedAt = new Date();
-      }
-    }
-    
-    if (isEmailVerified !== undefined) {
-      updateData.isEmailVerified = isEmailVerified;
-    }
+    allowedUpdates.forEach(field => {
+      if (updates[field] !== undefined) updateData[field] = updates[field];
+    });
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true }
-    ).select('-password');
+    const user = await User.findByIdAndUpdate(userId, updateData, { new: true }).select('-password');
+    if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
 
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'User not found' });
-    }
-
-    console.log('✅ User updated:', user.email, '| Changes:', updateData);
     res.json({ ok: true, user });
   } catch (error) {
     console.error('Update user error:', error);
@@ -247,266 +201,228 @@ router.put('/users/:id', verifyToken, isAdmin, async (req, res) => {
   }
 });
 
-// PUT /api/admin/users/:id/role - Update user role
-router.put('/users/:id/role', verifyToken, isAdmin, async (req, res) => {
+// POST /api/admin/users/:userId/ban - Ban user
+router.post('/users/:userId/ban', verifyToken, adminOnly, async (req, res) => {
   try {
+    const { userId } = req.params;
+    const { reason } = req.body;
     const User = mongoose.model('User');
-    const { role } = req.body;
-    
-    if (!['user', 'creator', 'moderator', 'admin'].includes(role)) {
-      return res.status(400).json({ ok: false, error: 'Invalid role' });
+
+    if (userId === req.user.id) {
+      return res.status(400).json({ ok: false, error: 'Cannot ban yourself' });
     }
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { 
-        role,
-        isAdmin: role === 'admin' // Also update isAdmin flag
-      },
-      { new: true }
-    ).select('-password');
+    const user = await User.findByIdAndUpdate(userId, { 
+      isBanned: true, banReason: reason, bannedAt: new Date(), bannedBy: req.user.id
+    }, { new: true }).select('-password');
 
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'User not found' });
-    }
-
-    console.log('✅ User role updated:', user.email, '→', role);
-    res.json({ ok: true, user });
+    res.json({ ok: true, user, message: 'User banned' });
   } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to update role' });
+    res.status(500).json({ ok: false, error: 'Failed to ban user' });
   }
 });
 
-// PUT /api/admin/users/:id/ban - Ban/unban user
-router.put('/users/:id/ban', verifyToken, isAdmin, async (req, res) => {
+// POST /api/admin/users/:userId/unban - Unban user
+router.post('/users/:userId/unban', verifyToken, adminOnly, async (req, res) => {
   try {
+    const { userId } = req.params;
     const User = mongoose.model('User');
-    const { banned, reason } = req.body;
 
-    const user = await User.findByIdAndUpdate(
-      req.params.id,
-      { 
-        isBanned: !!banned,
-        banReason: reason || '',
-        bannedAt: banned ? new Date() : null
-      },
-      { new: true }
-    ).select('-password');
+    const user = await User.findByIdAndUpdate(userId, { 
+      isBanned: false, banReason: null, bannedAt: null
+    }, { new: true }).select('-password');
 
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'User not found' });
-    }
-
-    console.log(banned ? '🚫 User banned:' : '✅ User unbanned:', user.email);
-    res.json({ ok: true, user, message: banned ? 'User banned' : 'User unbanned' });
+    res.json({ ok: true, user, message: 'User unbanned' });
   } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to update ban status' });
+    res.status(500).json({ ok: false, error: 'Failed to unban user' });
   }
 });
 
-// DELETE /api/admin/users/:id - Delete user
-router.delete('/users/:id', verifyToken, isAdmin, async (req, res) => {
+// DELETE /api/admin/users/:userId - Delete user
+router.delete('/users/:userId', verifyToken, adminOnly, async (req, res) => {
   try {
-    const User = mongoose.model('User');
-    const Blog = mongoose.model('Blog');
-    
-    const user = await User.findById(req.params.id);
-    if (!user) {
-      return res.status(404).json({ ok: false, error: 'User not found' });
+    const { userId } = req.params;
+    if (userId === req.user.id) {
+      return res.status(400).json({ ok: false, error: 'Cannot delete yourself' });
     }
-
-    // Optionally delete user's content
-    if (req.query.deleteContent === 'true') {
-      await Blog.deleteMany({ author: req.params.id });
-      console.log('🗑️ Deleted all content for user:', user.email);
-    }
-
-    await User.findByIdAndDelete(req.params.id);
-    
-    console.log('🗑️ User deleted:', user.email);
+    await mongoose.model('User').findByIdAndDelete(userId);
     res.json({ ok: true, message: 'User deleted' });
   } catch (error) {
-    console.error('Delete user error:', error);
     res.status(500).json({ ok: false, error: 'Failed to delete user' });
   }
 });
 
-// GET /api/admin/blogs - List all blogs
-router.get('/blogs', verifyToken, isAdmin, async (req, res) => {
+// ==========================================
+// CONTENT MODERATION
+// ==========================================
+
+// GET /api/admin/content - Get all content
+router.get('/content', verifyToken, adminOnly, async (req, res) => {
   try {
-    const Blog = mongoose.model('Blog');
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-    const { status, search } = req.query;
+    const { type = 'all', page = 1, limit = 20 } = req.query;
+    const content = [];
 
-    let query = {};
-    
-    if (status && status !== 'all') {
-      query.status = status;
-    }
-    
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { authorName: { $regex: search, $options: 'i' } }
-      ];
+    if (type === 'all' || type === 'blogs') {
+      try {
+        const Blog = mongoose.model('Blog');
+        const blogs = await Blog.find().populate('author', 'name username').sort({ createdAt: -1 }).limit(10);
+        content.push(...blogs.map(b => ({ ...b.toObject(), contentType: 'blog' })));
+      } catch {}
     }
 
-    const [blogs, total] = await Promise.all([
-      Blog.find(query)
-        .populate('author', 'name username avatar')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Blog.countDocuments(query)
-    ]);
+    if (type === 'all' || type === 'nfts') {
+      try {
+        const NFT = mongoose.model('NFT');
+        const nfts = await NFT.find().populate('creator', 'name username').sort({ createdAt: -1 }).limit(10);
+        content.push(...nfts.map(n => ({ ...n.toObject(), contentType: 'nft' })));
+      } catch {}
+    }
 
-    res.json({
-      ok: true,
-      blogs,
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
-    });
+    content.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.json({ ok: true, content });
   } catch (error) {
-    console.error('Admin blogs error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch blogs' });
+    res.status(500).json({ ok: false, error: 'Failed to get content' });
   }
 });
 
-// GET /api/admin/content - Combined content (blogs + comments)
-router.get('/content', verifyToken, isAdmin, async (req, res) => {
+// POST /api/admin/content/:contentId/hide - Hide content
+router.post('/content/:contentId/hide', verifyToken, adminOnly, async (req, res) => {
   try {
-    const Blog = mongoose.model('Blog');
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const skip = (page - 1) * limit;
-    const { type, status } = req.query;
+    const { contentId } = req.params;
+    const { type, reason } = req.body;
 
-    let query = {};
-    
-    if (status === 'flagged') {
-      query.isFlagged = true;
-    } else if (status === 'hidden') {
-      query.isHidden = true;
-    }
+    let Model;
+    if (type === 'blog') Model = mongoose.model('Blog');
+    else if (type === 'nft') Model = mongoose.model('NFT');
+    else return res.status(400).json({ ok: false, error: 'Invalid type' });
 
-    // For now, just return blogs
-    const [blogs, total] = await Promise.all([
-      Blog.find(query)
-        .populate('author', 'name username avatar')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Blog.countDocuments(query)
-    ]);
-
-    const content = blogs.map(b => ({
-      ...b.toObject(),
-      contentType: 'blog'
-    }));
-
-    res.json({
-      ok: true,
-      content,
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
-    });
+    await Model.findByIdAndUpdate(contentId, { isHidden: true, hiddenReason: reason });
+    res.json({ ok: true, message: 'Content hidden' });
   } catch (error) {
-    console.error('Admin content error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch content' });
+    res.status(500).json({ ok: false, error: 'Failed to hide content' });
   }
 });
 
-// PUT /api/admin/moderate/:type/:id - Moderate content
-router.put('/moderate/:type/:id', verifyToken, isAdmin, async (req, res) => {
+// POST /api/admin/content/:contentId/feature - Feature content
+router.post('/content/:contentId/feature', verifyToken, adminOnly, async (req, res) => {
   try {
-    const { type, id } = req.params;
-    const { action, reason } = req.body;
-    
-    if (type !== 'blog' && type !== 'comment') {
-      return res.status(400).json({ ok: false, error: 'Invalid content type' });
+    const { contentId } = req.params;
+    const { type, featured } = req.body;
+
+    let Model;
+    if (type === 'blog') Model = mongoose.model('Blog');
+    else if (type === 'nft') Model = mongoose.model('NFT');
+    else return res.status(400).json({ ok: false, error: 'Invalid type' });
+
+    await Model.findByIdAndUpdate(contentId, { isFeatured: featured });
+    res.json({ ok: true, message: featured ? 'Featured' : 'Unfeatured' });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to update' });
+  }
+});
+
+// ==========================================
+// ANALYTICS
+// ==========================================
+
+// GET /api/admin/analytics - Get analytics
+router.get('/analytics', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { period = '7d' } = req.query;
+    const User = mongoose.model('User');
+
+    let startDate;
+    switch (period) {
+      case '24h': startDate = new Date(Date.now() - 24 * 60 * 60 * 1000); break;
+      case '7d': startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); break;
+      case '30d': startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); break;
+      default: startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     }
 
-    const Model = mongoose.model(type === 'blog' ? 'Blog' : 'Comment');
-    
-    let update = {};
+    const userSignups = await User.aggregate([
+      { $match: { createdAt: { $gte: startDate } } },
+      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } }
+    ]);
+
+    const topUsers = await User.find().sort({ tokenBalance: -1 }).limit(10).select('name username avatar tokenBalance');
+
+    res.json({ ok: true, analytics: { userSignups, topUsers } });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to get analytics' });
+  }
+});
+
+// ==========================================
+// PLATFORM SETTINGS
+// ==========================================
+
+let Settings;
+try { Settings = mongoose.model('Settings'); } catch {
+  const settingsSchema = new mongoose.Schema({
+    key: { type: String, unique: true, required: true },
+    value: mongoose.Schema.Types.Mixed,
+    updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  }, { timestamps: true });
+  Settings = mongoose.model('Settings', settingsSchema);
+}
+
+// GET /api/admin/settings
+router.get('/settings', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const settings = await Settings.find();
+    const settingsObj = {};
+    settings.forEach(s => { settingsObj[s.key] = s.value; });
+    res.json({ ok: true, settings: settingsObj });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to get settings' });
+  }
+});
+
+// PUT /api/admin/settings
+router.put('/settings', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const updates = req.body;
+    for (const [key, value] of Object.entries(updates)) {
+      await Settings.findOneAndUpdate({ key }, { value, updatedBy: req.user.id }, { upsert: true });
+    }
+    res.json({ ok: true, message: 'Settings updated' });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to update settings' });
+  }
+});
+
+// ==========================================
+// BULK ACTIONS
+// ==========================================
+
+router.post('/bulk/users', verifyToken, adminOnly, async (req, res) => {
+  try {
+    const { action, userIds } = req.body;
+    const User = mongoose.model('User');
+    const filteredIds = userIds.filter(id => id !== req.user.id);
+
+    let result;
     switch (action) {
-      case 'hide':
-        update = { isHidden: true, hiddenReason: reason };
+      case 'ban':
+        result = await User.updateMany({ _id: { $in: filteredIds } }, { isBanned: true });
         break;
-      case 'unhide':
-        update = { isHidden: false, hiddenReason: null };
+      case 'unban':
+        result = await User.updateMany({ _id: { $in: filteredIds } }, { isBanned: false });
         break;
-      case 'flag':
-        update = { isFlagged: true, flagReason: reason };
-        break;
-      case 'unflag':
-        update = { isFlagged: false, flagReason: null };
+      case 'verify':
+        result = await User.updateMany({ _id: { $in: filteredIds } }, { isVerified: true });
         break;
       case 'delete':
-        await Model.findByIdAndDelete(id);
-        return res.json({ ok: true, message: `${type} deleted` });
+        result = await User.deleteMany({ _id: { $in: filteredIds } });
+        break;
       default:
         return res.status(400).json({ ok: false, error: 'Invalid action' });
     }
 
-    const item = await Model.findByIdAndUpdate(id, update, { new: true });
-    
-    if (!item) {
-      return res.status(404).json({ ok: false, error: `${type} not found` });
-    }
-
-    console.log(`✅ Content moderated: ${type} ${id} → ${action}`);
-    res.json({ ok: true, item, message: `${type} ${action}d` });
+    res.json({ ok: true, message: `${action} completed`, result });
   } catch (error) {
-    console.error('Moderation error:', error);
-    res.status(500).json({ ok: false, error: 'Moderation failed' });
-  }
-});
-
-// DELETE /api/admin/blogs/:id - Delete blog
-router.delete('/blogs/:id', verifyToken, isAdmin, async (req, res) => {
-  try {
-    const Blog = mongoose.model('Blog');
-    const blog = await Blog.findByIdAndDelete(req.params.id);
-    
-    if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog not found' });
-    }
-
-    console.log('🗑️ Blog deleted:', blog.title);
-    res.json({ ok: true, message: 'Blog deleted' });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to delete blog' });
-  }
-});
-
-// GET /api/admin/reports - Get reported content
-router.get('/reports', verifyToken, isAdmin, async (req, res) => {
-  try {
-    // If you have a Report model, query it here
-    // For now, return flagged content
-    const Blog = mongoose.model('Blog');
-    
-    const flaggedContent = await Blog.find({ isFlagged: true })
-      .populate('author', 'name username')
-      .sort({ updatedAt: -1 })
-      .limit(50);
-
-    res.json({ 
-      ok: true, 
-      reports: flaggedContent.map(b => ({
-        _id: b._id,
-        type: 'blog',
-        title: b.title,
-        author: b.author,
-        reason: b.flagReason,
-        createdAt: b.createdAt
-      })),
-      message: 'Reports fetched' 
-    });
-  } catch (error) {
-    console.error('Reports error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to fetch reports' });
+    res.status(500).json({ ok: false, error: 'Bulk action failed' });
   }
 });
 
