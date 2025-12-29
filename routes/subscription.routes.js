@@ -1,217 +1,173 @@
 // ============================================
 // FILE: routes/subscription.routes.js
-// Premium Subscriptions & Creator Memberships
+// Premium Subscriptions API
 // ============================================
 const express = require('express');
 const router = express.Router();
-const verifyToken = require('../middleware/verifyToken');
 const mongoose = require('mongoose');
-const { createNotification } = require('../utils/notifications');
+const verifyToken = require('../middleware/verifyToken');
 
-// Subscription Plan Model
-const planSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  description: { type: String },
-  price: { type: Number, required: true }, // Monthly price in CYBEV
-  features: [String],
-  type: { type: String, enum: ['platform', 'creator'], default: 'platform' },
-  creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // For creator plans
-  active: { type: Boolean, default: true }
-}, { timestamps: true });
-
-// Subscription Model
+// Subscription Schema
 const subscriptionSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  plan: { type: mongoose.Schema.Types.ObjectId, ref: 'SubscriptionPlan', required: true },
-  creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // For creator subscriptions
-  status: { type: String, enum: ['active', 'cancelled', 'expired'], default: 'active' },
+  plan: { type: String, enum: ['free', 'pro', 'business'], default: 'free' },
+  price: { type: Number, default: 0 },
   startDate: { type: Date, default: Date.now },
-  endDate: { type: Date, required: true },
+  endDate: { type: Date },
   autoRenew: { type: Boolean, default: true },
-  lastPayment: { type: Date },
-  totalPaid: { type: Number, default: 0 }
+  transactionHash: { type: String },
+  status: { type: String, enum: ['active', 'expired', 'cancelled'], default: 'active' }
 }, { timestamps: true });
 
-let SubscriptionPlan, Subscription;
+let Subscription;
 try {
-  SubscriptionPlan = mongoose.model('SubscriptionPlan');
   Subscription = mongoose.model('Subscription');
 } catch {
-  SubscriptionPlan = mongoose.model('SubscriptionPlan', planSchema);
   Subscription = mongoose.model('Subscription', subscriptionSchema);
 }
 
-// Default platform plans
-const DEFAULT_PLANS = [
-  {
+// Plan configurations
+const PLANS = {
+  free: {
+    id: 'free',
     name: 'Basic',
-    description: 'Essential features for casual creators',
     price: 0,
-    features: ['Create up to 5 blogs', 'Basic analytics', 'Community support'],
-    type: 'platform'
+    features: [
+      'Create up to 5 blogs',
+      'Basic analytics',
+      'Community support',
+      'Standard AI assistance'
+    ]
   },
-  {
+  pro: {
+    id: 'pro',
     name: 'Pro',
-    description: 'Advanced features for serious creators',
-    price: 50,
+    price: 50, // 50 CYBEV/month
     features: [
       'Unlimited blogs',
       'Advanced analytics',
-      'AI writing assistant',
-      'Custom domain',
       'Priority support',
-      'No platform fees on tips'
-    ],
-    type: 'platform'
+      'Full AI assistant',
+      'Custom domain',
+      'No tip fees',
+      'NFT minting discount'
+    ]
   },
-  {
+  business: {
+    id: 'business',
     name: 'Business',
-    description: 'For teams and enterprises',
-    price: 200,
+    price: 200, // 200 CYBEV/month
     features: [
       'Everything in Pro',
       'Team collaboration',
       'API access',
-      'White-label options',
+      'White-label option',
+      'Revenue boost (+10%)',
       'Dedicated support',
-      'Revenue share boost'
-    ],
-    type: 'platform'
+      'Custom integrations'
+    ]
   }
-];
+};
 
-// Initialize default plans
-async function initDefaultPlans() {
-  try {
-    const existingPlans = await SubscriptionPlan.countDocuments({ type: 'platform' });
-    if (existingPlans === 0) {
-      await SubscriptionPlan.insertMany(DEFAULT_PLANS);
-      console.log('✅ Default subscription plans created');
-    }
-  } catch (e) {
-    console.log('Plans init error:', e.message);
-  }
-}
-initDefaultPlans();
-
-// GET /api/subscriptions/plans - Get all platform plans
-router.get('/plans', async (req, res) => {
-  try {
-    const plans = await SubscriptionPlan.find({ type: 'platform', active: true });
-    res.json({ ok: true, plans });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to fetch plans' });
-  }
+// GET /api/subscriptions/plans - Get available plans
+router.get('/plans', (req, res) => {
+  res.json({
+    ok: true,
+    plans: Object.values(PLANS),
+    tokenAddress: process.env.CYBEV_TOKEN_ADDRESS
+  });
 });
 
-// GET /api/subscriptions/creator/:creatorId/plans - Get creator's membership plans
-router.get('/creator/:creatorId/plans', async (req, res) => {
+// GET /api/subscriptions/my - Get user's subscription
+router.get('/my', verifyToken, async (req, res) => {
   try {
-    const plans = await SubscriptionPlan.find({ 
-      creator: req.params.creatorId, 
-      type: 'creator',
-      active: true 
-    });
-    res.json({ ok: true, plans });
+    let subscription = await Subscription.findOne({ 
+      user: req.user.id,
+      status: 'active'
+    }).sort({ createdAt: -1 });
+
+    // If no subscription, they're on free plan
+    if (!subscription) {
+      subscription = {
+        plan: 'free',
+        price: 0,
+        status: 'active',
+        features: PLANS.free.features
+      };
+    } else {
+      subscription = {
+        ...subscription.toObject(),
+        features: PLANS[subscription.plan]?.features || []
+      };
+    }
+
+    res.json({ ok: true, subscription });
   } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to fetch creator plans' });
+    res.status(500).json({ ok: false, error: 'Failed to fetch subscription' });
   }
 });
 
 // POST /api/subscriptions/subscribe - Subscribe to a plan
 router.post('/subscribe', verifyToken, async (req, res) => {
   try {
-    const { planId } = req.body;
-    const Wallet = require('../models/wallet.model');
-    const User = require('../models/user.model');
+    const { plan, transactionHash } = req.body;
 
-    const plan = await SubscriptionPlan.findById(planId);
-    if (!plan || !plan.active) {
-      return res.status(404).json({ ok: false, error: 'Plan not found' });
+    if (!plan || !PLANS[plan]) {
+      return res.status(400).json({ ok: false, error: 'Invalid plan' });
     }
 
-    // Check if already subscribed
-    const existingSub = await Subscription.findOne({
+    if (plan === 'free') {
+      return res.status(400).json({ ok: false, error: 'Cannot subscribe to free plan' });
+    }
+
+    // Check for existing active subscription
+    const existing = await Subscription.findOne({
       user: req.user.id,
-      plan: planId,
-      status: 'active'
+      status: 'active',
+      plan: { $ne: 'free' }
     });
-    if (existingSub) {
-      return res.status(400).json({ ok: false, error: 'Already subscribed to this plan' });
-    }
 
-    // Check balance if not free plan
-    if (plan.price > 0) {
-      const wallet = await Wallet.findOne({ user: req.user.id });
-      if (!wallet || wallet.balance < plan.price) {
-        return res.status(400).json({ ok: false, error: 'Insufficient balance' });
-      }
-
-      // Deduct payment
-      wallet.balance -= plan.price;
-      wallet.transactions.push({
-        type: 'SUBSCRIPTION',
-        amount: -plan.price,
-        description: `${plan.name} subscription`
+    if (existing) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'Already have an active subscription. Cancel first to switch plans.' 
       });
-      await wallet.save();
-
-      // If creator plan, pay creator
-      if (plan.type === 'creator' && plan.creator) {
-        const platformFee = plan.price * 0.1; // 10% platform fee
-        const creatorAmount = plan.price - platformFee;
-
-        let creatorWallet = await Wallet.findOne({ user: plan.creator });
-        if (!creatorWallet) {
-          creatorWallet = new Wallet({ user: plan.creator, balance: 0 });
-        }
-        creatorWallet.balance += creatorAmount;
-        creatorWallet.totalEarned = (creatorWallet.totalEarned || 0) + creatorAmount;
-        creatorWallet.transactions.push({
-          type: 'SUBSCRIPTION_EARNING',
-          amount: creatorAmount,
-          description: 'Membership subscription'
-        });
-        await creatorWallet.save();
-
-        // Notify creator
-        const subscriber = await User.findById(req.user.id);
-        await createNotification({
-          recipient: plan.creator,
-          sender: req.user.id,
-          type: 'subscription',
-          message: `${subscriber.name || subscriber.username} subscribed to your ${plan.name} membership!`
-        });
-      }
     }
 
-    // Create subscription
+    const planConfig = PLANS[plan];
     const endDate = new Date();
     endDate.setMonth(endDate.getMonth() + 1); // 1 month subscription
 
     const subscription = new Subscription({
       user: req.user.id,
-      plan: planId,
-      creator: plan.creator || null,
+      plan,
+      price: planConfig.price,
+      startDate: new Date(),
       endDate,
-      lastPayment: plan.price > 0 ? new Date() : null,
-      totalPaid: plan.price
+      transactionHash,
+      status: transactionHash ? 'active' : 'pending'
     });
+
     await subscription.save();
 
-    // Update user premium status
-    await User.findByIdAndUpdate(req.user.id, {
-      isPremium: plan.price > 0,
-      subscriptionPlan: plan.name
+    // Update user's subscription status
+    const User = mongoose.model('User');
+    await User.findByIdAndUpdate(req.user.id, { 
+      subscriptionPlan: plan,
+      subscriptionExpires: endDate
     });
 
     res.json({
       ok: true,
       subscription: {
         _id: subscription._id,
-        plan: plan.name,
+        plan: subscription.plan,
+        planName: planConfig.name,
+        price: planConfig.price,
+        features: planConfig.features,
+        startDate: subscription.startDate,
         endDate: subscription.endDate,
-        features: plan.features
+        status: subscription.status
       }
     });
   } catch (error) {
@@ -220,151 +176,92 @@ router.post('/subscribe', verifyToken, async (req, res) => {
   }
 });
 
+// PUT /api/subscriptions/confirm/:id - Confirm subscription payment
+router.put('/confirm/:id', verifyToken, async (req, res) => {
+  try {
+    const { transactionHash } = req.body;
+    
+    const subscription = await Subscription.findById(req.params.id);
+    if (!subscription) {
+      return res.status(404).json({ ok: false, error: 'Subscription not found' });
+    }
+
+    if (subscription.user.toString() !== req.user.id) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+
+    subscription.transactionHash = transactionHash;
+    subscription.status = 'active';
+    await subscription.save();
+
+    // Update user
+    const User = mongoose.model('User');
+    await User.findByIdAndUpdate(req.user.id, { 
+      subscriptionPlan: subscription.plan,
+      subscriptionExpires: subscription.endDate
+    });
+
+    res.json({ ok: true, subscription });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: 'Failed to confirm subscription' });
+  }
+});
+
 // POST /api/subscriptions/cancel - Cancel subscription
 router.post('/cancel', verifyToken, async (req, res) => {
   try {
-    const { subscriptionId } = req.body;
-
     const subscription = await Subscription.findOne({
-      _id: subscriptionId,
       user: req.user.id,
-      status: 'active'
+      status: 'active',
+      plan: { $ne: 'free' }
     });
 
     if (!subscription) {
-      return res.status(404).json({ ok: false, error: 'Subscription not found' });
+      return res.status(404).json({ ok: false, error: 'No active subscription found' });
     }
 
     subscription.status = 'cancelled';
     subscription.autoRenew = false;
     await subscription.save();
 
+    // Update user
+    const User = mongoose.model('User');
+    await User.findByIdAndUpdate(req.user.id, { 
+      subscriptionPlan: 'free',
+      subscriptionExpires: null
+    });
+
     res.json({ 
       ok: true, 
-      message: 'Subscription cancelled. Access continues until ' + subscription.endDate.toLocaleDateString()
+      message: 'Subscription cancelled. You can still use features until ' + subscription.endDate.toDateString()
     });
   } catch (error) {
     res.status(500).json({ ok: false, error: 'Failed to cancel subscription' });
   }
 });
 
-// GET /api/subscriptions/my - Get user's subscriptions
-router.get('/my', verifyToken, async (req, res) => {
+// GET /api/subscriptions/check-feature/:feature - Check if user has feature access
+router.get('/check-feature/:feature', verifyToken, async (req, res) => {
   try {
-    const subscriptions = await Subscription.find({ user: req.user.id })
-      .populate('plan')
-      .populate('creator', 'name username avatar')
-      .sort({ createdAt: -1 });
-
-    res.json({ ok: true, subscriptions });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to fetch subscriptions' });
-  }
-});
-
-// GET /api/subscriptions/subscribers - Get creator's subscribers
-router.get('/subscribers', verifyToken, async (req, res) => {
-  try {
-    const plans = await SubscriptionPlan.find({ creator: req.user.id });
-    const planIds = plans.map(p => p._id);
-
-    const subscribers = await Subscription.find({
-      plan: { $in: planIds },
+    const subscription = await Subscription.findOne({
+      user: req.user.id,
       status: 'active'
-    }).populate('user', 'name username avatar email');
+    }).sort({ createdAt: -1 });
 
-    const totalEarnings = await Subscription.aggregate([
-      { $match: { plan: { $in: planIds } } },
-      { $group: { _id: null, total: { $sum: '$totalPaid' } } }
-    ]);
+    const plan = subscription?.plan || 'free';
+    const planFeatures = PLANS[plan]?.features || [];
+    
+    // Simple feature check - you can make this more sophisticated
+    const hasAccess = plan !== 'free' || req.params.feature === 'basic';
 
-    res.json({
-      ok: true,
-      subscribers,
-      stats: {
-        count: subscribers.length,
-        totalEarnings: totalEarnings[0]?.total || 0
-      }
+    res.json({ 
+      ok: true, 
+      hasAccess,
+      plan,
+      features: planFeatures
     });
   } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to fetch subscribers' });
-  }
-});
-
-// POST /api/subscriptions/creator/plan - Create creator membership plan
-router.post('/creator/plan', verifyToken, async (req, res) => {
-  try {
-    const { name, description, price, features } = req.body;
-
-    if (!name || price === undefined) {
-      return res.status(400).json({ ok: false, error: 'Name and price required' });
-    }
-
-    // Check if creator already has 3 plans
-    const existingPlans = await SubscriptionPlan.countDocuments({ creator: req.user.id });
-    if (existingPlans >= 3) {
-      return res.status(400).json({ ok: false, error: 'Maximum 3 membership tiers allowed' });
-    }
-
-    const plan = new SubscriptionPlan({
-      name,
-      description,
-      price,
-      features: features || [],
-      type: 'creator',
-      creator: req.user.id
-    });
-    await plan.save();
-
-    res.json({ ok: true, plan });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to create plan' });
-  }
-});
-
-// PUT /api/subscriptions/creator/plan/:id - Update creator plan
-router.put('/creator/plan/:id', verifyToken, async (req, res) => {
-  try {
-    const { name, description, price, features, active } = req.body;
-
-    const plan = await SubscriptionPlan.findOne({
-      _id: req.params.id,
-      creator: req.user.id
-    });
-
-    if (!plan) {
-      return res.status(404).json({ ok: false, error: 'Plan not found' });
-    }
-
-    if (name) plan.name = name;
-    if (description !== undefined) plan.description = description;
-    if (price !== undefined) plan.price = price;
-    if (features) plan.features = features;
-    if (active !== undefined) plan.active = active;
-
-    await plan.save();
-
-    res.json({ ok: true, plan });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to update plan' });
-  }
-});
-
-// DELETE /api/subscriptions/creator/plan/:id - Delete creator plan
-router.delete('/creator/plan/:id', verifyToken, async (req, res) => {
-  try {
-    const plan = await SubscriptionPlan.findOneAndDelete({
-      _id: req.params.id,
-      creator: req.user.id
-    });
-
-    if (!plan) {
-      return res.status(404).json({ ok: false, error: 'Plan not found' });
-    }
-
-    res.json({ ok: true, message: 'Plan deleted' });
-  } catch (error) {
-    res.status(500).json({ ok: false, error: 'Failed to delete plan' });
+    res.status(500).json({ ok: false, error: 'Failed to check feature' });
   }
 });
 
