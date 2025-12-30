@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 3.0.0 - December 29, 2024 Update 2
+// VERSION: 3.1.0 - December 30, 2024 Update
 // ============================================
 
 const express = require('express');
@@ -25,6 +25,7 @@ const io = socketIO(server, {
 
 // Make io accessible to routes
 app.set('io', io);
+global.io = io; // Also make globally available
 
 // ==========================================
 // MIDDLEWARE
@@ -98,21 +99,30 @@ try {
 try {
   const blogRoutes = require('./routes/blog.routes');
   app.use('/api/blogs', blogRoutes);
+  app.use('/blogs', blogRoutes); // Also mount at /blogs for backward compatibility
   console.log('✅ Blog routes loaded');
 } catch (err) {
   console.log('⚠️ Blog routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - POSTS
+// ROUTES - POSTS (using posts.routes.js - the original)
 // ==========================================
 
 try {
-  const postRoutes = require('./routes/post.routes');
-  app.use('/api/posts', postRoutes);
-  console.log('✅ Post routes loaded');
+  // Try posts.routes first (original file with authorId schema)
+  const postsRoutes = require('./routes/posts.routes');
+  app.use('/api/posts', postsRoutes);
+  console.log('✅ Posts routes loaded');
 } catch (err) {
-  console.log('⚠️ Post routes not found:', err.message);
+  // Fallback to post.routes if posts.routes doesn't exist
+  try {
+    const postRoutes = require('./routes/post.routes');
+    app.use('/api/posts', postRoutes);
+    console.log('✅ Post routes loaded (fallback)');
+  } catch (err2) {
+    console.log('⚠️ Post routes not found:', err.message);
+  }
 }
 
 // ==========================================
@@ -152,7 +162,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - NOTIFICATIONS (singular!)
+// ROUTES - NOTIFICATIONS
 // ==========================================
 
 try {
@@ -164,7 +174,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - REACTIONS (NEW)
+// ROUTES - REACTIONS
 // ==========================================
 
 try {
@@ -176,7 +186,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - MESSAGES (NEW)
+// ROUTES - MESSAGES
 // ==========================================
 
 try {
@@ -188,7 +198,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - LIVE STREAMING (NEW)
+// ROUTES - LIVE STREAMING
 // ==========================================
 
 try {
@@ -200,7 +210,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - NFT (NEW)
+// ROUTES - NFT
 // ==========================================
 
 try {
@@ -212,7 +222,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - STAKING (NEW)
+// ROUTES - STAKING
 // ==========================================
 
 try {
@@ -224,7 +234,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - ADMIN (NEW)
+// ROUTES - ADMIN
 // ==========================================
 
 try {
@@ -233,6 +243,30 @@ try {
   console.log('✅ Admin routes loaded');
 } catch (err) {
   console.log('⚠️ Admin routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - PUSH NOTIFICATIONS (NEW)
+// ==========================================
+
+try {
+  const pushRoutes = require('./routes/push.routes');
+  app.use('/api/push', pushRoutes);
+  console.log('✅ Push notification routes loaded');
+} catch (err) {
+  console.log('⚠️ Push routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - MONETIZATION (NEW)
+// ==========================================
+
+try {
+  const monetizationRoutes = require('./routes/monetization.routes');
+  app.use('/api/monetization', monetizationRoutes);
+  console.log('✅ Monetization routes loaded');
+} catch (err) {
+  console.log('⚠️ Monetization routes not found:', err.message);
 }
 
 // ==========================================
@@ -284,6 +318,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - ANALYTICS (NEW)
+// ==========================================
+
+try {
+  const analyticsRoutes = require('./routes/analytics.routes');
+  app.use('/api/analytics', analyticsRoutes);
+  console.log('✅ Analytics routes loaded');
+} catch (err) {
+  console.log('⚠️ Analytics routes not found:', err.message);
+}
+
+// ==========================================
 // HEALTH CHECK
 // ==========================================
 
@@ -291,13 +337,15 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.0.0',
+    version: '3.1.0',
     timestamp: new Date().toISOString(),
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     features: [
       'auth', 'users', 'blogs', 'posts', 'feed',
       'comments', 'bookmarks', 'notifications',
       'reactions', 'messages', 'live-streaming',
-      'nft', 'staking', 'admin', 'wallet', 'upload'
+      'nft', 'staking', 'admin', 'wallet', 'upload',
+      'push-notifications', 'monetization', 'analytics'
     ]
   });
 });
@@ -305,7 +353,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v3.0.0',
+    message: 'CYBEV API Server v3.1.0',
     documentation: '/api/health',
     status: 'running'
   });
@@ -391,10 +439,10 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v3.0.0           ║
+║         CYBEV API Server v3.1.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
-║  📦 MongoDB: ${process.env.MONGODB_URI ? 'Connected' : 'Connecting...'}            ║
+║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
 ║  🔌 Socket.IO: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
