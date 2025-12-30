@@ -9,25 +9,12 @@ const router = express.Router();
 const mongoose = require('mongoose');
 const verifyToken = require('../middleware/verifyToken');
 
-// Get models (don't redefine - use existing)
+// Get Post model - don't redefine if exists
 const getPostModel = () => {
   try {
     return mongoose.model('Post');
   } catch {
-    // Only create if doesn't exist
-    const postSchema = new mongoose.Schema({
-      author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-      content: { type: String, maxlength: 5000 },
-      images: [String],
-      video: String,
-      likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-      comments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }],
-      shares: { type: Number, default: 0 },
-      views: { type: Number, default: 0 },
-      isHidden: { type: Boolean, default: false },
-      isFeatured: { type: Boolean, default: false }
-    }, { timestamps: true });
-    return mongoose.model('Post', postSchema);
+    return null; // Model doesn't exist yet
   }
 };
 
@@ -65,20 +52,26 @@ router.get('/', async (req, res) => {
 
     // Build query
     const baseQuery = { isHidden: { $ne: true } };
-    if (userId) baseQuery.author = userId;
+    if (userId) {
+      baseQuery.$or = [{ author: userId }, { authorId: userId }];
+    }
 
     // Get posts
     let posts = [];
-    try {
-      posts = await Post.find(baseQuery)
-        .populate('author', 'name username avatar isVerified')
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .lean();
-      
-      posts = posts.map(p => ({ ...p, type: 'post' }));
-    } catch (e) {
-      console.log('Posts fetch error:', e.message);
+    if (Post) {
+      try {
+        // Try both author field names
+        posts = await Post.find(baseQuery)
+          .populate('author', 'name username avatar isVerified')
+          .populate('authorId', 'name username avatar isVerified email')
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .lean();
+        
+        posts = posts.map(p => ({ ...p, type: 'post' }));
+      } catch (e) {
+        console.log('Posts fetch error:', e.message);
+      }
     }
 
     // Get blogs
@@ -151,15 +144,22 @@ router.get('/following', verifyToken, async (req, res) => {
     const Post = getPostModel();
     const Blog = getBlogModel();
 
-    // Get posts from followed users
-    const posts = await Post.find({ 
-      author: { $in: followingIds }, 
-      isHidden: { $ne: true } 
-    })
-      .populate('author', 'name username avatar isVerified')
-      .sort({ createdAt: -1 })
-      .limit(30)
-      .lean();
+    // Get posts from followed users (support both author fields)
+    let posts = [];
+    if (Post) {
+      posts = await Post.find({ 
+        $or: [
+          { author: { $in: followingIds } },
+          { authorId: { $in: followingIds } }
+        ],
+        isHidden: { $ne: true } 
+      })
+        .populate('author', 'name username avatar isVerified')
+        .populate('authorId', 'name username avatar isVerified email')
+        .sort({ createdAt: -1 })
+        .limit(30)
+        .lean();
+    }
 
     // Get blogs from followed users
     const blogs = await Blog.find({ 
