@@ -1,145 +1,221 @@
+// ============================================
+// FILE: routes/feed.routes.js
+// PATH: cybev-backend/routes/feed.routes.js
+// PURPOSE: Unified feed from posts and blogs
+// ============================================
+
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
+const verifyToken = require('../middleware/verifyToken');
 
-const { authenticateToken } = require('../middleware/auth');
-const Follow = require('../models/follow.model');
-const Post = require('../models/post.model');
-
-/**
- * Feed API
- * Mounted at: /api/feed
- *
- * NOTE: The primary feed endpoint used by the frontend is /posts/feed.
- * This router exists for backward-compat and for future expansion.
- */
-
-// GET /api/feed?scope=all|following&limit=50&page=1
-router.get('/', authenticateToken, async (req, res) => {
+// Get models (don't redefine - use existing)
+const getPostModel = () => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 100);
-    const skip = (page - 1) * limit;
+    return mongoose.model('Post');
+  } catch {
+    // Only create if doesn't exist
+    const postSchema = new mongoose.Schema({
+      author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      content: { type: String, maxlength: 5000 },
+      images: [String],
+      video: String,
+      likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+      comments: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Comment' }],
+      shares: { type: Number, default: 0 },
+      views: { type: Number, default: 0 },
+      isHidden: { type: Boolean, default: false },
+      isFeatured: { type: Boolean, default: false }
+    }, { timestamps: true });
+    return mongoose.model('Post', postSchema);
+  }
+};
 
-    const scope = String(req.query.scope || 'all').toLowerCase();
+const getBlogModel = () => {
+  try {
+    return mongoose.model('Blog');
+  } catch {
+    const blogSchema = new mongoose.Schema({
+      author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      title: { type: String, required: true },
+      slug: String,
+      content: String,
+      excerpt: String,
+      featuredImage: String,
+      coverImage: String,
+      tags: [String],
+      status: { type: String, enum: ['draft', 'published'], default: 'published' },
+      likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+      views: { type: Number, default: 0 },
+      isHidden: { type: Boolean, default: false },
+      isFeatured: { type: Boolean, default: false }
+    }, { timestamps: true });
+    return mongoose.model('Blog', blogSchema);
+  }
+};
 
-    const query = {};
-    if (scope === 'following') {
-      const follows = await Follow.find({ follower: req.user.id }).select('following');
-      const followingIds = follows.map((f) => f.following);
-      query.authorId = { $in: [...followingIds, req.user.id] };
+// GET /api/feed - Get unified feed
+router.get('/', async (req, res) => {
+  try {
+    const { page = 1, limit = 20, sort = 'latest', userId } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const Post = getPostModel();
+    const Blog = getBlogModel();
+
+    // Build query
+    const baseQuery = { isHidden: { $ne: true } };
+    if (userId) baseQuery.author = userId;
+
+    // Get posts
+    let posts = [];
+    try {
+      posts = await Post.find(baseQuery)
+        .populate('author', 'name username avatar isVerified')
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+      
+      posts = posts.map(p => ({ ...p, type: 'post' }));
+    } catch (e) {
+      console.log('Posts fetch error:', e.message);
     }
 
-    const [posts, total] = await Promise.all([
-      Post.find(query)
-        .populate('authorId', 'username displayName avatar')
+    // Get blogs
+    let blogs = [];
+    try {
+      const blogQuery = { ...baseQuery, status: 'published' };
+      blogs = await Blog.find(blogQuery)
+        .populate('author', 'name username avatar isVerified')
         .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Post.countDocuments(query),
-    ]);
+        .limit(50)
+        .lean();
+      
+      blogs = blogs.map(b => ({ ...b, type: 'blog' }));
+    } catch (e) {
+      console.log('Blogs fetch error:', e.message);
+    }
+
+    // Combine and sort
+    let feed = [...posts, ...blogs];
+
+    // Sort based on filter
+    switch (sort) {
+      case 'trending':
+        feed.sort((a, b) => {
+          const scoreA = (a.views || 0) + (a.likes?.length || 0) * 10;
+          const scoreB = (b.views || 0) + (b.likes?.length || 0) * 10;
+          return scoreB - scoreA;
+        });
+        break;
+      case 'popular':
+        feed.sort((a, b) => (b.likes?.length || 0) - (a.likes?.length || 0));
+        break;
+      case 'latest':
+      default:
+        feed.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+
+    // Paginate
+    const total = feed.length;
+    feed = feed.slice(skip, skip + parseInt(limit));
 
     res.json({
       ok: true,
-      posts,
-      pagination: {
-        page,
-        limit,
-        total,
-        hasMore: skip + posts.length < total,
-      },
+      posts: feed,
+      total,
+      page: parseInt(page),
+      pages: Math.ceil(total / parseInt(limit))
     });
-  } catch (err) {
-    console.error('feed error:', err);
-    res.status(500).json({ ok: false, message: 'Failed to load feed' });
+  } catch (error) {
+    console.error('Feed error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to get feed', posts: [] });
   }
 });
 
-// GET /api/feed/following - Posts from followed users only
-router.get('/following', authenticateToken, async (req, res) => {
+// GET /api/feed/following - Get feed from followed users
+router.get('/following', verifyToken, async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
-    const skip = (page - 1) * limit;
+    const { page = 1, limit = 20 } = req.query;
+    const userId = req.user.id;
 
-    const follows = await Follow.find({ follower: req.user.id }).select('following');
-    const followingIds = follows.map((f) => f.following);
-
-    if (followingIds.length === 0) {
-      return res.json({
-        ok: true,
-        posts: [],
-        pagination: { page, limit, total: 0, hasMore: false },
-        message: 'Follow users to see their posts here'
-      });
+    // Get user's following list
+    const User = mongoose.model('User');
+    const user = await User.findById(userId).select('following');
+    
+    if (!user || !user.following || user.following.length === 0) {
+      return res.json({ ok: true, posts: [], message: 'Follow some users to see their posts' });
     }
 
-    const [posts, total] = await Promise.all([
-      Post.find({ authorId: { $in: followingIds } })
-        .populate('authorId', 'username displayName avatar')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Post.countDocuments({ authorId: { $in: followingIds } }),
-    ]);
+    const followingIds = user.following;
+    const Post = getPostModel();
+    const Blog = getBlogModel();
 
-    res.json({
-      ok: true,
-      posts,
-      pagination: {
-        page,
-        limit,
-        total,
-        hasMore: skip + posts.length < total,
-      },
-    });
-  } catch (err) {
-    console.error('feed/following error:', err);
-    res.status(500).json({ ok: false, message: 'Failed to load following feed' });
+    // Get posts from followed users
+    const posts = await Post.find({ 
+      author: { $in: followingIds }, 
+      isHidden: { $ne: true } 
+    })
+      .populate('author', 'name username avatar isVerified')
+      .sort({ createdAt: -1 })
+      .limit(30)
+      .lean();
+
+    // Get blogs from followed users
+    const blogs = await Blog.find({ 
+      author: { $in: followingIds }, 
+      status: 'published',
+      isHidden: { $ne: true } 
+    })
+      .populate('author', 'name username avatar isVerified')
+      .sort({ createdAt: -1 })
+      .limit(30)
+      .lean();
+
+    // Combine and sort
+    let feed = [
+      ...posts.map(p => ({ ...p, type: 'post' })),
+      ...blogs.map(b => ({ ...b, type: 'blog' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Paginate
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    feed = feed.slice(skip, skip + parseInt(limit));
+
+    res.json({ ok: true, posts: feed });
+  } catch (error) {
+    console.error('Following feed error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to get feed', posts: [] });
   }
 });
 
-// GET /api/feed/mixed - Mix of followed users and trending content
-router.get('/mixed', authenticateToken, async (req, res) => {
+// GET /api/feed/featured - Get featured content
+router.get('/featured', async (req, res) => {
   try {
-    const page = Math.max(parseInt(req.query.page || '1', 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || '20', 10), 1), 100);
-    const skip = (page - 1) * limit;
+    const Post = getPostModel();
+    const Blog = getBlogModel();
 
-    const follows = await Follow.find({ follower: req.user.id }).select('following');
-    const followingIds = follows.map((f) => f.following);
+    const posts = await Post.find({ isFeatured: true, isHidden: { $ne: true } })
+      .populate('author', 'name username avatar')
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
 
-    // Get posts - prioritize followed users but include others
-    const [posts, total] = await Promise.all([
-      Post.find({})
-        .populate('authorId', 'username displayName avatar')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      Post.countDocuments({}),
-    ]);
+    const blogs = await Blog.find({ isFeatured: true, status: 'published', isHidden: { $ne: true } })
+      .populate('author', 'name username avatar')
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
 
-    // Sort to prioritize followed users' posts
-    const sortedPosts = posts.sort((a, b) => {
-      const aIsFollowed = followingIds.some(id => id.equals(a.authorId?._id));
-      const bIsFollowed = followingIds.some(id => id.equals(b.authorId?._id));
-      if (aIsFollowed && !bIsFollowed) return -1;
-      if (!aIsFollowed && bIsFollowed) return 1;
-      return new Date(b.createdAt) - new Date(a.createdAt);
-    });
+    const feed = [
+      ...posts.map(p => ({ ...p, type: 'post' })),
+      ...blogs.map(b => ({ ...b, type: 'blog' }))
+    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    res.json({
-      ok: true,
-      posts: sortedPosts,
-      pagination: {
-        page,
-        limit,
-        total,
-        hasMore: skip + posts.length < total,
-      },
-    });
-  } catch (err) {
-    console.error('feed/mixed error:', err);
-    res.status(500).json({ ok: false, message: 'Failed to load mixed feed' });
+    res.json({ ok: true, posts: feed });
+  } catch (error) {
+    console.error('Featured feed error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to get featured', posts: [] });
   }
 });
 
