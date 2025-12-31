@@ -600,4 +600,213 @@ router.get('/:id/share-data', async (req, res) => {
   }
 });
 
+// ==========================================
+// PIN/UNPIN POST
+// ==========================================
+
+// POST /api/blogs/:id/pin - Toggle pin status
+router.post('/:id/pin', verifyToken, async (req, res) => {
+  try {
+    console.log('📌 Toggling pin for blog:', req.params.id);
+    
+    const blog = await Blog.findOne({
+      _id: req.params.id,
+      author: req.user.id
+    });
+    
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        ok: false,
+        message: 'Blog not found or unauthorized'
+      });
+    }
+    
+    // If pinning, unpin all other posts by this user first
+    if (!blog.isPinned) {
+      await Blog.updateMany(
+        { author: req.user.id, isPinned: true },
+        { isPinned: false, pinnedAt: null }
+      );
+    }
+    
+    // Toggle pin status
+    blog.isPinned = !blog.isPinned;
+    blog.pinnedAt = blog.isPinned ? new Date() : null;
+    await blog.save();
+    
+    console.log(`✅ Blog ${blog.isPinned ? 'pinned' : 'unpinned'}:`, blog.title);
+    
+    res.json({
+      success: true,
+      ok: true,
+      isPinned: blog.isPinned,
+      message: blog.isPinned ? 'Post pinned to your profile' : 'Post unpinned'
+    });
+  } catch (error) {
+    console.error('❌ Error toggling pin:', error);
+    res.status(500).json({
+      success: false,
+      ok: false,
+      message: 'Failed to toggle pin'
+    });
+  }
+});
+
+// GET /api/blogs/pinned/:userId - Get pinned post for a user
+router.get('/pinned/:userId', async (req, res) => {
+  try {
+    const blog = await Blog.findOne({
+      author: req.params.userId,
+      isPinned: true
+    }).populate('author', 'name username profilePicture');
+    
+    res.json({
+      success: true,
+      ok: true,
+      blog: blog || null
+    });
+  } catch (error) {
+    console.error('❌ Error fetching pinned post:', error);
+    res.status(500).json({
+      success: false,
+      ok: false,
+      message: 'Failed to fetch pinned post'
+    });
+  }
+});
+
+// ==========================================
+// EMOJI REACTIONS
+// ==========================================
+
+const REACTION_TYPES = ['like', 'love', 'haha', 'wow', 'sad', 'angry', 'fire', 'clap'];
+
+// POST /api/blogs/:id/react - Add/remove emoji reaction
+router.post('/:id/react', verifyToken, async (req, res) => {
+  try {
+    const { type = 'like' } = req.body;
+    
+    if (!REACTION_TYPES.includes(type)) {
+      return res.status(400).json({
+        success: false,
+        ok: false,
+        message: 'Invalid reaction type'
+      });
+    }
+    
+    console.log(`😀 Adding ${type} reaction to blog:`, req.params.id);
+    
+    const blog = await Blog.findById(req.params.id);
+    
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        ok: false,
+        message: 'Blog not found'
+      });
+    }
+    
+    // Initialize reactions if needed
+    if (!blog.reactions) {
+      blog.reactions = {};
+    }
+    if (!blog.reactions[type]) {
+      blog.reactions[type] = [];
+    }
+    
+    const userId = req.user.id.toString();
+    const hasReacted = blog.reactions[type].some(id => id.toString() === userId);
+    
+    if (hasReacted) {
+      // Remove reaction
+      blog.reactions[type] = blog.reactions[type].filter(id => id.toString() !== userId);
+    } else {
+      // Add reaction
+      blog.reactions[type].push(req.user.id);
+      
+      // Also add to likes array if type is 'like' for compatibility
+      if (type === 'like') {
+        if (!blog.likes) blog.likes = [];
+        if (!blog.likes.some(id => id.toString() === userId)) {
+          blog.likes.push(req.user.id);
+        }
+      }
+    }
+    
+    blog.markModified('reactions');
+    await blog.save();
+    
+    // Send notification
+    if (!hasReacted && blog.author && String(blog.author) !== userId) {
+      try {
+        await createNotification({
+          recipient: blog.author,
+          sender: req.user.id,
+          type: 'reaction',
+          message: `reacted ${type} to your post`,
+          entityId: blog._id,
+          entityModel: 'Blog'
+        });
+      } catch (notifyErr) {
+        console.warn('Reaction notification failed:', notifyErr.message);
+      }
+    }
+    
+    // Calculate total reactions
+    const totalReactions = Object.values(blog.reactions).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+    
+    res.json({
+      success: true,
+      ok: true,
+      reacted: !hasReacted,
+      type,
+      reactions: blog.reactions,
+      totalReactions,
+      likeCount: blog.likes?.length || 0
+    });
+  } catch (error) {
+    console.error('❌ Error adding reaction:', error);
+    res.status(500).json({
+      success: false,
+      ok: false,
+      message: 'Failed to add reaction'
+    });
+  }
+});
+
+// GET /api/blogs/:id/reactions - Get all reactions for a blog
+router.get('/:id/reactions', async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id).select('reactions likes');
+    
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        ok: false,
+        message: 'Blog not found'
+      });
+    }
+    
+    const totalReactions = blog.reactions 
+      ? Object.values(blog.reactions).reduce((sum, arr) => sum + (arr?.length || 0), 0)
+      : 0;
+    
+    res.json({
+      success: true,
+      ok: true,
+      reactions: blog.reactions || {},
+      likeCount: blog.likes?.length || 0,
+      totalReactions
+    });
+  } catch (error) {
+    console.error('❌ Error fetching reactions:', error);
+    res.status(500).json({
+      success: false,
+      ok: false,
+      message: 'Failed to fetch reactions'
+    });
+  }
+});
+
 module.exports = router;
