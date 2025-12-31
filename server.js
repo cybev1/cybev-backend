@@ -3,6 +3,7 @@
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
 // VERSION: 3.2.0 - December 31, 2024 Update
+// ADDED: Content routes for AI blog generation
 // ============================================
 
 const express = require('express');
@@ -106,7 +107,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - CONTENT (AI Blog Generation) ⭐ NEW
+// ROUTES - CONTENT (AI BLOG GENERATION) - NEW!
 // ==========================================
 
 try {
@@ -258,7 +259,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - PUSH NOTIFICATIONS
+// ROUTES - PUSH NOTIFICATIONS (NEW)
 // ==========================================
 
 try {
@@ -270,7 +271,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - MONETIZATION
+// ROUTES - MONETIZATION (NEW)
 // ==========================================
 
 try {
@@ -330,7 +331,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - ANALYTICS
+// ROUTES - ANALYTICS (NEW)
 // ==========================================
 
 try {
@@ -457,6 +458,7 @@ server.listen(PORT, () => {
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
 ║  🔌 Socket.IO: Enabled                    ║
+║  🤖 AI Blog: Enabled                      ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
