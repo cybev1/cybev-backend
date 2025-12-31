@@ -1,409 +1,547 @@
 // ============================================
-// FILE: services/content-creator.service.js
-// PATH: cybev-backend/services/content-creator.service.js
-// PURPOSE: AI content generation with DeepSeek/OpenAI
+// FILE: routes/content.routes.js
+// Content Creation API with SEO, Images, NFT
 // ============================================
 
-const fetch = require('node-fetch');
+const express = require('express');
+const router = express.Router();
+const contentCreator = require('../services/content-creator.service');
+const verifyToken = require('../middleware/verifyToken');
 
-class ContentCreatorService {
-  constructor() {
-    this.apiKey = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY;
-    this.isDeepSeek = !!process.env.DEEPSEEK_API_KEY;
-    this.apiUrl = this.isDeepSeek 
-      ? 'https://api.deepseek.com/v1/chat/completions'
-      : 'https://api.openai.com/v1/chat/completions';
-    this.model = this.isDeepSeek ? 'deepseek-chat' : 'gpt-3.5-turbo';
+// Blog model - optional for now
+let Blog;
+try {
+  Blog = require('../models/blog.model');
+} catch (error) {
+  console.log('⚠️ Blog model not found - publish feature will be limited');
+}
+
+// Handle OPTIONS
+router.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', req.headers.origin);
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
+
+/**
+ * POST /api/content/create-blog
+ * Create complete blog post with AI
+ * 
+ * Features:
+ * - AI-generated content
+ * - SEO optimization
+ * - Featured image
+ * - Content images
+ * - Viral hashtags
+ * - NFT metadata
+ */
+router.post('/create-blog', verifyToken, async (req, res) => {
+  try {
+    const { topic, tone, length, niche, targetAudience } = req.body;
     
-    console.log(`🤖 Content Creator initialized with ${this.isDeepSeek ? 'DeepSeek' : 'OpenAI'}`);
-  }
-
-  /**
-   * Make API call to AI service
-   */
-  async callAI(systemPrompt, userPrompt, maxTokens = 4000) {
-    if (!this.apiKey) {
-      throw new Error('AI API key not configured. Please set DEEPSEEK_API_KEY in environment variables.');
+    if (!topic || !niche) {
+      return res.status(400).json({
+        success: false,
+        error: 'Topic and niche are required'
+      });
     }
 
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.7,
-        max_tokens: maxTokens
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ AI API Error:', response.status, errorText);
-      
-      if (response.status === 401) throw new Error('AI API authentication failed');
-      if (response.status === 402) throw new Error('AI API account has insufficient balance');
-      if (response.status === 429) throw new Error('AI API rate limit reached. Try again later.');
-      
-      throw new Error(`AI API error: ${response.status}`);
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
-  }
-
-  /**
-   * Parse JSON from AI response (handles markdown code blocks)
-   */
-  parseJSON(content, fallback = {}) {
-    try {
-      let jsonStr = content;
-      
-      // Remove markdown code blocks
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (jsonMatch) jsonStr = jsonMatch[1];
-      
-      // Find JSON object
-      const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-      if (objectMatch) jsonStr = objectMatch[0];
-      
-      return JSON.parse(jsonStr.trim());
-    } catch (error) {
-      console.warn('⚠️ JSON parse failed, using fallback');
-      return fallback;
-    }
-  }
-
-  /**
-   * Generate complete blog post with all features
-   */
-  async createCompleteBlog({ topic, tone, length, niche, targetAudience }) {
-    console.log('📝 Generating complete blog...');
+    console.log('📝 Creating complete blog post...');
+    console.log(`   User: ${req.user.id}`);
+    console.log(`   Topic: ${topic}`);
+    console.log(`   Niche: ${niche}`);
     
-    // Determine word count
-    let wordCount = 1200;
-    if (length === 'short') wordCount = 800;
-    else if (length === 'long') wordCount = 2500;
-
-    const systemPrompt = `You are an expert ${niche} content writer. Create engaging, SEO-optimized blog posts that captivate readers and drive engagement.
-
-Return your response as valid JSON with this exact structure:
-{
-  "title": "Catchy SEO-optimized title",
-  "content": "Full blog content with HTML formatting (<h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>, <blockquote>)",
-  "excerpt": "Compelling 1-2 sentence summary",
-  "seo": {
-    "metaTitle": "SEO title (60 chars max)",
-    "metaDescription": "Meta description (160 chars max)",
-    "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
-    "slug": "url-friendly-slug"
-  },
-  "hashtags": {
-    "primary": ["#hashtag1", "#hashtag2", "#hashtag3"],
-    "trending": ["#trending1", "#trending2"],
-    "niche": ["#niche1", "#niche2"]
-  },
-  "readTime": 5,
-  "viralityScore": 85
-}`;
-
-    const userPrompt = `Create a ${length} blog post (approximately ${wordCount} words) about: "${topic}"
-
-Niche: ${niche}
-Tone: ${tone}
-Target Audience: ${targetAudience}
-
-Requirements:
-1. Catchy, SEO-optimized title
-2. Engaging hook in introduction
-3. Well-structured sections with H2/H3 headers
-4. Practical insights and examples
-5. Strong call-to-action conclusion
-6. SEO metadata
-7. Viral hashtags for social sharing
-
-Format content with proper HTML tags. Return only valid JSON.`;
-
-    const aiResponse = await this.callAI(systemPrompt, userPrompt);
+    const startTime = Date.now();
     
-    const blogData = this.parseJSON(aiResponse, {
-      title: topic,
-      content: `<h2>${topic}</h2><p>Content generation in progress...</p>`,
-      excerpt: topic,
-      seo: { keywords: [niche], slug: this.slugify(topic) },
-      hashtags: { primary: [`#${niche}`], trending: [], niche: [] },
-      readTime: 5,
-      viralityScore: 70
-    });
-
-    // Get featured image
-    const featuredImage = await this.getFeaturedImage(topic, niche);
-    
-    // Get content images
-    const contentImages = await this.getContentImages(topic, niche, 3);
-
-    // Calculate tokens earned
-    const initialTokens = this.calculateTokens(blogData);
-
-    return {
-      ...blogData,
+    // Generate complete blog with everything
+    const completeBlog = await contentCreator.createCompleteBlog({
+      topic,
+      tone: tone || 'professional',
+      length: length || 'medium',
       niche,
-      tone,
-      targetAudience,
-      featuredImage,
-      contentImages,
-      initialTokens,
-      nftMetadata: this.generateNFTMetadata(blogData, featuredImage),
-      createdAt: new Date().toISOString()
-    };
-  }
-
-  /**
-   * Generate blog with SEO optimization
-   */
-  async generateBlogWithSEO(title, tone, length, niche) {
-    const systemPrompt = `You are an SEO expert. Generate comprehensive SEO metadata for blog content.
-
-Return JSON:
-{
-  "seoTitle": "SEO optimized title (60 chars)",
-  "seoDescription": "Meta description (160 chars)",
-  "slug": "url-friendly-slug",
-  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
-  "metaTags": [
-    {"name": "author", "content": "CYBEV"},
-    {"property": "og:title", "content": "..."},
-    {"property": "og:description", "content": "..."}
-  ]
-}`;
-
-    const userPrompt = `Generate SEO metadata for a ${niche} blog titled: "${title}"
-Tone: ${tone}
-Length: ${length}`;
-
-    const response = await this.callAI(systemPrompt, userPrompt, 1000);
-    return this.parseJSON(response, {
-      seoTitle: title,
-      seoDescription: title,
-      slug: this.slugify(title),
-      keywords: [niche],
-      metaTags: []
+      targetAudience: targetAudience || 'general'
     });
-  }
-
-  /**
-   * Generate viral hashtags
-   */
-  async generateViralHashtags(topic, niche) {
-    const systemPrompt = `You are a social media expert. Generate viral hashtags for content.
-
-Return JSON:
-{
-  "primary": ["#hashtag1", "#hashtag2", "#hashtag3"],
-  "trending": ["#trending1", "#trending2", "#trending3"],
-  "niche": ["#niche1", "#niche2", "#niche3"],
-  "all": ["#tag1", "#tag2", ...]
-}`;
-
-    const userPrompt = `Generate viral hashtags for: "${topic}" in the ${niche} niche.
-Include trending, niche-specific, and general hashtags.`;
-
-    const response = await this.callAI(systemPrompt, userPrompt, 500);
-    return this.parseJSON(response, {
-      primary: [`#${niche}`, `#${topic.split(' ')[0]}`],
-      trending: ['#viral', '#trending'],
-      niche: [`#${niche}content`],
-      all: []
-    });
-  }
-
-  /**
-   * Get featured image from Unsplash
-   */
-  async getFeaturedImage(topic, niche) {
-    try {
-      // Create search query from topic
-      const searchTerms = `${niche} ${topic}`.replace(/[^a-zA-Z0-9 ]/g, '').split(' ').slice(0, 3).join(',');
-      
-      const imageUrl = `https://source.unsplash.com/1200x630/?${encodeURIComponent(searchTerms)}`;
-      
-      return {
-        url: imageUrl,
-        alt: `${topic} - ${niche}`,
-        source: 'unsplash',
-        width: 1200,
-        height: 630
-      };
-    } catch (error) {
-      console.warn('⚠️ Featured image fetch failed:', error.message);
-      return {
-        url: `https://source.unsplash.com/1200x630/?${encodeURIComponent(niche)}`,
-        alt: niche,
-        source: 'unsplash',
-        width: 1200,
-        height: 630
-      };
-    }
-  }
-
-  /**
-   * Get content images
-   */
-  async getContentImages(topic, niche, count = 3) {
-    const images = [];
-    const searchTerms = topic.split(' ').slice(0, 2).join(' ');
     
-    for (let i = 0; i < count; i++) {
-      images.push({
-        url: `https://source.unsplash.com/800x600/?${encodeURIComponent(searchTerms)}&sig=${i}`,
-        alt: `${topic} image ${i + 1}`,
-        source: 'unsplash'
+    const duration = Date.now() - startTime;
+    
+    // TODO: Save to database
+    // const savedBlog = await Blog.create({
+    //   ...completeBlog,
+    //   author: req.user.id,
+    //   status: 'draft'
+    // });
+    
+    console.log(`✅ Blog created in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      message: `🎉 Blog post created! You earned ${completeBlog.initialTokens} tokens!`,
+      data: completeBlog,
+      tokensEarned: completeBlog.initialTokens,
+      generationTime: duration,
+      viralityScore: completeBlog.viralityScore
+    });
+    
+  } catch (error) {
+    console.error('❌ Blog creation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create blog post'
+    });
+  }
+});
+
+/**
+ * POST /api/content/publish-blog
+ * Publish AI-generated blog to database
+ */
+router.post('/publish-blog', verifyToken, async (req, res) => {
+  try {
+    const { blogData } = req.body;
+    
+    if (!blogData) {
+      return res.status(400).json({
+        success: false,
+        error: 'Blog data is required'
+      });
+    }
+
+    console.log('📤 Publishing blog...');
+    console.log(`   User: ${req.user.id}`);
+    console.log(`   Title: ${blogData.title}`);
+    
+    // Check if Blog model exists
+    if (!Blog) {
+      return res.status(503).json({
+        success: false,
+        error: 'Blog model not available - contact support'
+      });
+    }
+
+    // Map niche to valid category enum from Blog model
+    const categoryMap = {
+      'technology': 'Technology',
+      'business': 'Business & Finance',
+      'health': 'Health & Wellness',
+      'lifestyle': 'Lifestyle',
+      'education': 'Education',
+      'finance': 'Business & Finance',
+      'entertainment': 'Entertainment',
+      'food': 'Food & Cooking',
+      'travel': 'Travel',
+      'science': 'Science',
+      'sports': 'Sports',
+      'fashion': 'Fashion & Beauty',
+      'personal-development': 'Personal Development',
+      'news': 'News & Politics',
+      'environment': 'Environment'
+    };
+    
+    const validCategory = categoryMap[blogData.niche?.toLowerCase()] || 'Other';
+
+    // Create blog in database
+    const newBlog = await Blog.create({
+      title: blogData.title,
+      content: blogData.content,
+      author: req.user.id,
+      authorName: req.user.name || req.user.username || 'Anonymous',
+      category: validCategory,
+      tags: blogData.seo?.keywords?.slice(0, 10) || [],
+      readTime: parseInt(blogData.readTime) || 5,
+      featuredImage: blogData.featuredImage?.url || blogData.featuredImage || '',
+      status: 'published'
+      // Note: Model will auto-calculate readTime in pre-save hook
+      // Note: likes, views, featured, timestamps are handled by model defaults
+    });
+
+    console.log(`✅ Blog published with ID: ${newBlog._id}`);
+
+    res.json({
+      success: true,
+      message: '🎉 Blog published successfully!',
+      data: {
+        blogId: newBlog._id,
+        slug: newBlog.slug,
+        url: `/blog/${newBlog.slug}`,
+        tokensEarned: blogData.initialTokens || 50
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Blog publish error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to publish blog'
+    });
+  }
+});
+
+/**
+ * POST /api/content/create-template
+ * Generate website template with demo content
+ * 
+ * Features:
+ * - AI-generated template
+ * - Demo images
+ * - Demo blog posts
+ * - SEO for all pages
+ * - NFT ready
+ */
+router.post('/create-template', verifyToken, async (req, res) => {
+  try {
+    const {
+      templateType,
+      businessName,
+      description,
+      style,
+      colors,
+      niche
+    } = req.body;
+    
+    if (!templateType || !businessName || !description) {
+      return res.status(400).json({
+        success: false,
+        error: 'Template type, business name, and description are required'
+      });
+    }
+
+    console.log('🏗️ Generating template with demo content...');
+    console.log(`   User: ${req.user.id}`);
+    console.log(`   Type: ${templateType}`);
+    console.log(`   Business: ${businessName}`);
+    
+    const startTime = Date.now();
+    
+    // Generate complete template
+    const completeTemplate = await contentCreator.generateTemplateWithDemo({
+      templateType,
+      businessName,
+      description,
+      style: style || 'modern',
+      colors: colors || 'vibrant',
+      niche: niche || templateType
+    });
+    
+    const duration = Date.now() - startTime;
+    
+    console.log(`✅ Template created in ${duration}ms`);
+    
+    res.json({
+      success: true,
+      message: `🎉 Template created! You earned ${completeTemplate.initialTokens} tokens!`,
+      data: completeTemplate,
+      tokensEarned: completeTemplate.initialTokens,
+      generationTime: duration
+    });
+    
+  } catch (error) {
+    console.error('❌ Template creation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create template'
+    });
+  }
+});
+
+/**
+ * POST /api/content/generate-seo
+ * Generate SEO metadata for existing content
+ */
+router.post('/generate-seo', verifyToken, async (req, res) => {
+  try {
+    const { title, content, niche } = req.body;
+    
+    if (!title || !content) {
+      return res.status(400).json({
+        success: false,
+        error: 'Title and content are required'
+      });
+    }
+
+    console.log('🔍 Generating SEO metadata...');
+    
+    const seo = await contentCreator.generateBlogWithSEO(
+      title,
+      'professional',
+      'medium',
+      niche || 'general'
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        seoTitle: seo.seoTitle,
+        seoDescription: seo.seoDescription,
+        slug: seo.slug,
+        keywords: seo.keywords,
+        metaTags: seo.metaTags
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ SEO generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/content/generate-hashtags
+ * Generate viral hashtags for content
+ */
+router.post('/generate-hashtags', verifyToken, async (req, res) => {
+  try {
+    const { topic, niche } = req.body;
+    
+    if (!topic) {
+      return res.status(400).json({
+        success: false,
+        error: 'Topic is required'
+      });
+    }
+
+    console.log('🔥 Generating viral hashtags...');
+    
+    const hashtags = await contentCreator.generateViralHashtags(
+      topic,
+      niche || 'general'
+    );
+    
+    res.json({
+      success: true,
+      data: hashtags
+    });
+    
+  } catch (error) {
+    console.error('❌ Hashtag generation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/content/get-featured-image
+ * Get featured image for topic
+ */
+router.post('/get-featured-image', verifyToken, async (req, res) => {
+  try {
+    const { topic, niche } = req.body;
+    
+    if (!topic) {
+      return res.status(400).json({
+        success: false,
+        error: 'Topic is required'
+      });
+    }
+
+    console.log('🖼️ Fetching featured image...');
+    
+    const image = await contentCreator.getFeaturedImage(topic, niche || topic);
+    
+    res.json({
+      success: true,
+      data: image
+    });
+    
+  } catch (error) {
+    console.error('❌ Image fetch error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/content/mint-nft
+ * Prepare content for NFT minting
+ */
+router.post('/mint-nft', verifyToken, async (req, res) => {
+  try {
+    const { blogId, contentType } = req.body;
+    
+    if (!blogId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Blog ID is required'
+      });
+    }
+
+    console.log('💎 Preparing NFT metadata...');
+    
+    // TODO: Fetch blog from database
+    // const blog = await Blog.findById(blogId);
+    
+    // For now, return mock response
+    const nftMetadata = {
+      name: 'Sample Blog Post',
+      description: 'NFT of blog content',
+      image: 'https://source.unsplash.com/800x600/?blog',
+      attributes: [
+        { trait_type: 'Content Type', value: contentType || 'blog' },
+        { trait_type: 'Mintable', value: 'Yes' }
+      ]
+    };
+    
+    res.json({
+      success: true,
+      message: 'NFT metadata prepared! Ready to mint.',
+      data: {
+        nftMetadata,
+        mintPrice: '0.01 ETH',
+        estimatedGas: '0.002 ETH',
+        earnings: {
+          creator: '90%',
+          platform: '10%'
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ NFT preparation error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/content/stake
+ * Stake tokens on content for boosting
+ */
+router.post('/stake', verifyToken, async (req, res) => {
+  try {
+    const { blogId, amount, duration } = req.body;
+    
+    if (!blogId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Blog ID and amount are required'
+      });
+    }
+
+    console.log('💰 Staking tokens...');
+    console.log(`   Amount: ${amount} tokens`);
+    console.log(`   Duration: ${duration || 7} days`);
+    
+    // TODO: Implement actual staking logic
+    const stakingReward = Math.floor(amount * 0.1); // 10% APY estimate
+    
+    res.json({
+      success: true,
+      message: `Successfully staked ${amount} tokens!`,
+      data: {
+        stakedAmount: amount,
+        duration: duration || 7,
+        estimatedReward: stakingReward,
+        boostMultiplier: 1.5,
+        withdrawDate: new Date(Date.now() + (duration || 7) * 24 * 60 * 60 * 1000)
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Staking error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/content/viral-score/:blogId
+ * Calculate viral potential score
+ */
+router.get('/viral-score/:blogId', verifyToken, async (req, res) => {
+  try {
+    const { blogId } = req.params;
+    
+    // TODO: Fetch blog and calculate real score
+    const viralScore = Math.floor(Math.random() * 40) + 60; // Mock: 60-100
+    
+    res.json({
+      success: true,
+      data: {
+        viralScore,
+        factors: {
+          seoOptimization: 85,
+          contentQuality: 90,
+          engagement: 75,
+          shareability: 80
+        },
+        recommendations: viralScore < 80 ? [
+          'Add more trending hashtags',
+          'Optimize SEO title',
+          'Include more images',
+          'Add social sharing prompts'
+        ] : [
+          'Content is optimized for virality!',
+          'Share on social media',
+          'Stake tokens for boost'
+        ]
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Viral score error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/blogs/:id - Get single blog by ID or slug
+ */
+router.get('/blogs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log(`📖 Fetching blog: ${id}`);
+    
+    // Try to find by MongoDB ID first, then by slug
+    let blog = await Blog.findById(id).populate('author', 'name username email');
+    
+    if (!blog) {
+      // Try finding by slug (title-based)
+      blog = await Blog.findOne({ slug: id }).populate('author', 'name username email');
+    }
+    
+    if (!blog) {
+      return res.status(404).json({
+        success: false,
+        error: 'Blog not found'
       });
     }
     
-    return images;
-  }
-
-  /**
-   * Generate template with demo content
-   */
-  async generateTemplateWithDemo({ templateType, businessName, description, style, colors, niche }) {
-    console.log('🏗️ Generating template with demo content...');
-
-    const systemPrompt = `You are a web designer and content creator. Generate a complete website template structure with demo content.
-
-Return JSON:
-{
-  "templateName": "Template Name",
-  "pages": [
-    {
-      "name": "Home",
-      "slug": "/",
-      "sections": [
-        {
-          "type": "hero",
-          "title": "...",
-          "subtitle": "...",
-          "cta": "..."
-        }
-      ]
-    }
-  ],
-  "demoPosts": [
-    {
-      "title": "Blog Post Title",
-      "excerpt": "Brief description",
-      "content": "Full content..."
-    }
-  ],
-  "colors": {
-    "primary": "#...",
-    "secondary": "#...",
-    "accent": "#..."
-  },
-  "seo": {
-    "title": "...",
-    "description": "..."
-  }
-}`;
-
-    const userPrompt = `Create a ${templateType} website template for "${businessName}".
-Description: ${description}
-Style: ${style}
-Color scheme: ${colors}
-Niche: ${niche}
-
-Include:
-- Multiple page layouts
-- Demo blog posts
-- SEO optimization
-- Color scheme`;
-
-    const response = await this.callAI(systemPrompt, userPrompt, 3000);
-    const templateData = this.parseJSON(response, {
-      templateName: `${businessName} Template`,
-      pages: [],
-      demoPosts: [],
-      colors: { primary: '#8B5CF6', secondary: '#EC4899', accent: '#10B981' },
-      seo: { title: businessName, description }
+    // Increment view count
+    blog.views = (blog.views || 0) + 1;
+    await blog.save();
+    
+    console.log(`✅ Blog found: ${blog.title}`);
+    
+    res.json({
+      ok: true,
+      success: true,
+      blog: blog,
+      data: blog
     });
-
-    return {
-      ...templateData,
-      businessName,
-      niche,
-      style,
-      initialTokens: 100,
-      createdAt: new Date().toISOString()
-    };
+    
+  } catch (error) {
+    console.error('❌ Error fetching blog:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
   }
+});
 
-  /**
-   * Calculate tokens earned for content
-   */
-  calculateTokens(blogData) {
-    let tokens = 50; // Base tokens
-    
-    // Bonus for length
-    const contentLength = blogData.content?.length || 0;
-    if (contentLength > 2000) tokens += 20;
-    if (contentLength > 5000) tokens += 30;
-    
-    // Bonus for SEO
-    if (blogData.seo?.keywords?.length >= 5) tokens += 10;
-    if (blogData.seo?.metaDescription) tokens += 5;
-    
-    // Bonus for hashtags
-    if (blogData.hashtags?.primary?.length >= 3) tokens += 10;
-    
-    // Bonus for virality score
-    if (blogData.viralityScore >= 80) tokens += 15;
-    if (blogData.viralityScore >= 90) tokens += 10;
-    
-    return tokens;
-  }
-
-  /**
-   * Generate NFT metadata
-   */
-  generateNFTMetadata(blogData, featuredImage) {
-    return {
-      name: blogData.title,
-      description: blogData.excerpt || blogData.seo?.metaDescription,
-      image: featuredImage?.url,
-      attributes: [
-        { trait_type: 'Content Type', value: 'Blog Post' },
-        { trait_type: 'Niche', value: blogData.niche || 'General' },
-        { trait_type: 'Virality Score', value: blogData.viralityScore || 70 },
-        { trait_type: 'Word Count', value: Math.floor((blogData.content?.length || 0) / 5) },
-        { trait_type: 'Created', value: new Date().toISOString().split('T')[0] }
-      ],
-      properties: {
-        category: 'blog',
-        creators: [{ address: '', share: 100 }]
-      }
-    };
-  }
-
-  /**
-   * Create URL-friendly slug
-   */
-  slugify(text) {
-    return text
-      .toLowerCase()
-      .trim()
-      .replace(/[^\w\s-]/g, '')
-      .replace(/[\s_-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 60);
-  }
-}
-
-// Export singleton instance
-module.exports = new ContentCreatorService();
+module.exports = router;
