@@ -1,4 +1,8 @@
-// routes/blog.routes.js - CLEAN VERSION (No verification on public routes)
+// ============================================
+// FILE: routes/blog.routes.js
+// PURPOSE: Blog CRUD + AI Generation with DeepSeek
+// ============================================
+
 const express = require('express');
 const router = express.Router();
 const Blog = require('../models/blog.model');
@@ -17,12 +21,10 @@ router.get('/trending', async (req, res) => {
   try {
     console.log('🔥 Fetching trending blogs');
     
-    // Calculate trending score: views + (likes * 3) + recency bonus
     const blogs = await Blog.aggregate([
       {
         $addFields: {
           likeCount: { $size: { $ifNull: ['$likes', []] } },
-          // Recency: blogs from last 7 days get bonus
           recencyBonus: {
             $cond: {
               if: { $gte: ['$createdAt', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)] },
@@ -47,31 +49,20 @@ router.get('/trending', async (req, res) => {
       { $limit: 10 }
     ]);
 
-    // Populate author info
     await Blog.populate(blogs, { path: 'author', select: 'name username profilePicture' });
     
     console.log(`✅ Found ${blogs.length} trending blogs`);
     
-    res.json({
-      success: true,
-      ok: true,
-      blogs
-    });
+    res.json({ success: true, ok: true, blogs });
   } catch (error) {
     console.error('❌ Error fetching trending blogs:', error);
-    res.status(500).json({
-      success: false,
-      ok: false,
-      message: 'Failed to fetch trending blogs'
-    });
+    res.status(500).json({ success: false, ok: false, message: 'Failed to fetch trending blogs' });
   }
 });
 
 // GET /api/blogs/trending-tags - Get trending tags
 router.get('/trending-tags', async (req, res) => {
   try {
-    console.log('🏷️ Fetching trending tags');
-    
     const tags = await Blog.aggregate([
       { $unwind: '$tags' },
       { $group: { _id: '$tags', count: { $sum: 1 } } },
@@ -80,20 +71,9 @@ router.get('/trending-tags', async (req, res) => {
       { $project: { tag: '$_id', count: 1, _id: 0 } }
     ]);
     
-    console.log(`✅ Found ${tags.length} trending tags`);
-    
-    res.json({
-      success: true,
-      ok: true,
-      tags
-    });
+    res.json({ success: true, ok: true, tags });
   } catch (error) {
-    console.error('❌ Error fetching trending tags:', error);
-    res.status(500).json({
-      success: false,
-      ok: false,
-      message: 'Failed to fetch trending tags'
-    });
+    res.status(500).json({ success: false, ok: false, message: 'Failed to fetch trending tags' });
   }
 });
 
@@ -102,11 +82,8 @@ router.get('/search', async (req, res) => {
   try {
     const { q, tag, category, author, sort = 'recent', limit = 20, skip = 0 } = req.query;
     
-    console.log('🔍 Searching blogs:', { q, tag, category, author });
-    
     const query = {};
     
-    // Text search
     if (q) {
       query.$or = [
         { title: { $regex: q, $options: 'i' } },
@@ -115,30 +92,14 @@ router.get('/search', async (req, res) => {
       ];
     }
     
-    // Filter by tag
-    if (tag) {
-      query.tags = { $in: [tag] };
-    }
+    if (tag) query.tags = { $in: [tag] };
+    if (category) query.category = category;
+    if (author) query.author = author;
     
-    // Filter by category
-    if (category) {
-      query.category = category;
-    }
-    
-    // Filter by author
-    if (author) {
-      query.author = author;
-    }
-    
-    // Sorting options
     let sortOption = { createdAt: -1 };
-    if (sort === 'popular') {
-      sortOption = { views: -1 };
-    } else if (sort === 'likes') {
-      sortOption = { 'likes.length': -1 };
-    } else if (sort === 'oldest') {
-      sortOption = { createdAt: 1 };
-    }
+    if (sort === 'popular') sortOption = { views: -1 };
+    else if (sort === 'likes') sortOption = { 'likes.length': -1 };
+    else if (sort === 'oldest') sortOption = { createdAt: 1 };
     
     const blogs = await Blog.find(query)
       .sort(sortOption)
@@ -148,38 +109,23 @@ router.get('/search', async (req, res) => {
     
     const total = await Blog.countDocuments(query);
     
-    console.log(`✅ Found ${blogs.length} blogs matching search`);
-    
     res.json({
       success: true,
       ok: true,
       blogs,
-      pagination: {
-        total,
-        limit: parseInt(limit),
-        skip: parseInt(skip),
-        hasMore: parseInt(skip) + blogs.length < total
-      }
+      pagination: { total, limit: parseInt(limit), skip: parseInt(skip), hasMore: parseInt(skip) + blogs.length < total }
     });
   } catch (error) {
-    console.error('❌ Search error:', error);
-    res.status(500).json({
-      success: false,
-      ok: false,
-      message: 'Search failed'
-    });
+    res.status(500).json({ success: false, ok: false, message: 'Search failed' });
   }
 });
 
 // GET /api/blogs - Get all blogs (PUBLIC - for feed)
 router.get('/', async (req, res) => {
   try {
-    const limit = parseInt(req.query.limit) || 50;  // Increased from 10!
+    const limit = parseInt(req.query.limit) || 50;
     const skip = parseInt(req.query.skip) || 0;
     
-    console.log(`📚 Fetching blogs - limit: ${limit}, skip: ${skip}`);
-    
-    // Show ALL blogs for feed (not just published)
     const blogs = await Blog.find({})
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -188,30 +134,15 @@ router.get('/', async (req, res) => {
     
     const total = await Blog.countDocuments({});
     
-    console.log(`✅ Found ${blogs.length} blogs (${total} total)`);
-    
-    res.json({
-      success: true,
-      data: {
-        blogs,
-        total,
-        limit,
-        skip
-      }
-    });
+    res.json({ success: true, data: { blogs, total, limit, skip } });
   } catch (error) {
-    console.error('❌ Error fetching blogs:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch blogs'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch blogs' });
   }
 });
 
-// ========== PROTECTED ROUTES (User-specific - Email verified) ==========
+// ========== PROTECTED ROUTES (User-specific) ==========
 
 // GET /api/blogs/my-blogs - Get current user's blogs
-// ⭐ MUST BE BEFORE /:id ROUTE!
 router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     console.log('📚 Fetching my blogs for user:', req.user.id);
@@ -222,22 +153,13 @@ router.get('/my-blogs', verifyToken, requireEmailVerification, async (req, res) 
     
     console.log(`✅ Found ${blogs.length} blogs for user`);
     
-    res.json({
-      success: true,
-      blogs,
-      count: blogs.length
-    });
+    res.json({ success: true, blogs, count: blogs.length });
   } catch (error) {
-    console.error('❌ Error fetching user blogs:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch blogs'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch blogs' });
   }
 });
 
 // GET /api/blogs/stats - Get user's blog statistics
-// ⭐ MUST BE BEFORE /:id ROUTE!
 router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => {
   try {
     console.log('📊 Fetching blog stats for user:', req.user.id);
@@ -254,20 +176,185 @@ router.get('/stats', verifyToken, requireEmailVerification, async (req, res) => 
     
     console.log('✅ Blog stats:', stats);
     
-    res.json({
-      success: true,
-      stats
-    });
+    res.json({ success: true, stats });
   } catch (error) {
-    console.error('❌ Error fetching stats:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch statistics'
+    res.status(500).json({ success: false, message: 'Failed to fetch statistics' });
+  }
+});
+
+// ============================================
+// 🤖 AI BLOG GENERATION - DEEPSEEK
+// ============================================
+
+router.post('/generate', verifyToken, async (req, res) => {
+  try {
+    console.log('🤖 AI Blog generation started for user:', req.user.id);
+    
+    const { topic, tone = 'professional', length = 'medium', autoPublish = false } = req.body;
+    
+    if (!topic || topic.trim().length < 3) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'Please provide a topic (at least 3 characters)' 
+      });
+    }
+
+    // Check for DeepSeek API key
+    const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY;
+    
+    if (!DEEPSEEK_API_KEY) {
+      console.error('❌ DEEPSEEK_API_KEY not configured');
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'AI service not configured. Please add DEEPSEEK_API_KEY to environment variables.' 
+      });
+    }
+
+    // Determine word count based on length
+    let wordCount = 800;
+    if (length === 'short') wordCount = 400;
+    else if (length === 'long') wordCount = 1500;
+
+    // Build the prompt
+    const systemPrompt = `You are an expert blog writer. Write engaging, well-structured blog posts with proper HTML formatting.
+
+Output format:
+- Use <h2> for main sections (2-4 sections)
+- Use <h3> for subsections if needed
+- Use <p> for paragraphs
+- Use <ul> or <ol> for lists when appropriate
+- Use <strong> for emphasis
+- Use <blockquote> for quotes or key points
+- Do NOT include the title in the content (it will be added separately)
+- Do NOT use <h1> tags
+- Make the content engaging and informative`;
+
+    const userPrompt = `Write a ${length} blog post (approximately ${wordCount} words) about: "${topic}"
+
+Tone: ${tone}
+
+Requirements:
+1. Create an engaging title (return it separately)
+2. Write a compelling excerpt/summary (2-3 sentences)
+3. Generate 3-5 relevant tags
+4. Write the full blog content with proper HTML formatting
+
+Respond in this exact JSON format:
+{
+  "title": "Your Blog Title Here",
+  "excerpt": "A compelling 2-3 sentence summary of the blog post.",
+  "tags": ["tag1", "tag2", "tag3"],
+  "content": "<h2>First Section</h2><p>Content here...</p>..."
+}`;
+
+    console.log('📤 Sending request to DeepSeek API...');
+
+    // Call DeepSeek API
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        temperature: 0.7,
+        max_tokens: 4000
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('❌ DeepSeek API error:', response.status, errorText);
+      return res.status(500).json({ 
+        ok: false, 
+        error: `AI service error: ${response.status}` 
+      });
+    }
+
+    const data = await response.json();
+    console.log('📥 DeepSeek response received');
+
+    // Extract the content
+    const aiContent = data.choices?.[0]?.message?.content;
+    
+    if (!aiContent) {
+      console.error('❌ No content in AI response');
+      return res.status(500).json({ ok: false, error: 'AI returned empty response' });
+    }
+
+    // Parse the JSON response
+    let blogData;
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = aiContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        blogData = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('No JSON found in response');
+      }
+    } catch (parseError) {
+      console.error('❌ Failed to parse AI response:', parseError);
+      console.log('Raw AI response:', aiContent.substring(0, 500));
+      
+      // Fallback: Use the raw content
+      blogData = {
+        title: topic,
+        excerpt: `A blog post about ${topic}`,
+        tags: [topic.split(' ')[0].toLowerCase()],
+        content: `<p>${aiContent}</p>`
+      };
+    }
+
+    // Validate required fields
+    if (!blogData.title || !blogData.content) {
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'AI generated incomplete content' 
+      });
+    }
+
+    // Create the blog post
+    const blog = new Blog({
+      title: blogData.title,
+      content: blogData.content,
+      excerpt: blogData.excerpt || blogData.content.replace(/<[^>]*>/g, '').substring(0, 160),
+      tags: blogData.tags || [],
+      author: req.user.id,
+      status: autoPublish ? 'published' : 'draft',
+      aiGenerated: true,
+      aiPrompt: topic
+    });
+
+    await blog.save();
+    await blog.populate('author', 'name username profilePicture');
+
+    console.log('✅ AI blog created:', blog._id, blog.title);
+
+    res.json({
+      ok: true,
+      success: true,
+      message: 'Blog generated successfully!',
+      blog,
+      blogId: blog._id
+    });
+
+  } catch (error) {
+    console.error('❌ AI generation error:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: error.message || 'Failed to generate blog' 
     });
   }
 });
 
-// ========== :id ROUTES (After specific routes) ==========
+// ============================================
+// :id ROUTES (After specific routes)
+// ============================================
 
 // GET /api/blogs/:id - Get single blog by ID (PUBLIC)
 router.get('/:id', async (req, res) => {
@@ -278,33 +365,20 @@ router.get('/:id', async (req, res) => {
       .populate('author', 'name username profilePicture');
     
     if (!blog) {
-      console.log('❌ Blog not found:', req.params.id);
-      return res.status(404).json({
-        success: false,
-        message: 'Blog not found'
-      });
+      return res.status(404).json({ success: false, message: 'Blog not found' });
     }
     
     // Increment view count
     blog.views = (blog.views || 0) + 1;
     await blog.save();
     
-    console.log('✅ Blog found:', blog.title);
-    
-    res.json({
-      success: true,
-      blog
-    });
+    res.json({ success: true, blog });
   } catch (error) {
-    console.error('❌ Get blog error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch blog'
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch blog' });
   }
 });
 
-// POST /api/blogs - Create new blog (AUTH REQUIRED - No email verification)
+// POST /api/blogs - Create new blog
 router.post('/', verifyToken, async (req, res) => {
   try {
     console.log('📝 Creating blog for user:', req.user.id);
@@ -319,92 +393,53 @@ router.post('/', verifyToken, async (req, res) => {
     
     console.log('✅ Blog created:', blog._id);
     
-    res.status(201).json({
-      success: true,
-      message: 'Blog created successfully',
-      blog
-    });
+    res.status(201).json({ success: true, message: 'Blog created successfully', blog });
   } catch (error) {
-    console.error('❌ Error creating blog:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to create blog'
-    });
+    res.status(500).json({ success: false, message: 'Failed to create blog' });
   }
 });
 
-// PUT /api/blogs/:id - Update blog (AUTH REQUIRED - No email verification)
+// PUT /api/blogs/:id - Update blog
 router.put('/:id', verifyToken, async (req, res) => {
   try {
-    const blog = await Blog.findOne({
-      _id: req.params.id,
-      author: req.user.id
-    });
+    const blog = await Blog.findOne({ _id: req.params.id, author: req.user.id });
     
     if (!blog) {
-      return res.status(404).json({
-        success: false,
-        message: 'Blog not found or unauthorized'
-      });
+      return res.status(404).json({ success: false, message: 'Blog not found or unauthorized' });
     }
     
     Object.assign(blog, req.body);
     await blog.save();
     await blog.populate('author', 'name username profilePicture');
     
-    res.json({
-      success: true,
-      message: 'Blog created successfully',
-      blog
-    });
+    res.json({ success: true, ok: true, message: 'Blog updated successfully', blog });
   } catch (error) {
-    console.error('❌ Error updating blog:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to update blog'
-    });
+    res.status(500).json({ success: false, message: 'Failed to update blog' });
   }
 });
 
-// DELETE /api/blogs/:id - Delete blog (AUTH REQUIRED - No email verification)
+// DELETE /api/blogs/:id - Delete blog
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
-    const blog = await Blog.findOneAndDelete({
-      _id: req.params.id,
-      author: req.user.id
-    });
+    const blog = await Blog.findOneAndDelete({ _id: req.params.id, author: req.user.id });
     
     if (!blog) {
-      return res.status(404).json({
-        success: false,
-        message: 'Blog not found or unauthorized'
-      });
+      return res.status(404).json({ success: false, message: 'Blog not found or unauthorized' });
     }
     
-    res.json({
-      success: true,
-      message: 'Blog deleted successfully'
-    });
+    res.json({ success: true, message: 'Blog deleted successfully' });
   } catch (error) {
-    console.error('❌ Error deleting blog:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to delete blog'
-    });
+    res.status(500).json({ success: false, message: 'Failed to delete blog' });
   }
 });
 
-// POST /api/blogs/:id/like - Toggle like (AUTH REQUIRED - No email verification)
+// POST /api/blogs/:id/like - Toggle like
 router.post('/:id/like', verifyToken, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
     
     if (!blog) {
-      return res.status(404).json({
-        success: false,
-        ok: false,
-        message: 'Blog not found'
-      });
+      return res.status(404).json({ success: false, ok: false, message: 'Blog not found' });
     }
     
     const likes = blog.likes || [];
@@ -422,7 +457,7 @@ router.post('/:id/like', verifyToken, async (req, res) => {
     blog.likes = likes;
     await blog.save();
     
-    // Send notification when liked (not unliked)
+    // Send notification when liked
     if (liked && blog.author && String(blog.author) !== String(req.user.id)) {
       try {
         await createNotification({
@@ -438,23 +473,13 @@ router.post('/:id/like', verifyToken, async (req, res) => {
       }
     }
     
-    res.json({
-      success: true,
-      ok: true,
-      liked,
-      likeCount: likes.length
-    });
+    res.json({ success: true, ok: true, liked, likeCount: likes.length });
   } catch (error) {
-    console.error('❌ Error toggling like:', error);
-    res.status(500).json({
-      success: false,
-      ok: false,
-      message: 'Failed to toggle like'
-    });
+    res.status(500).json({ success: false, ok: false, message: 'Failed to toggle like' });
   }
 });
 
-// POST /api/blogs/:id/share - Track share (PUBLIC - no auth needed)
+// POST /api/blogs/:id/share - Track share
 router.post('/:id/share', async (req, res) => {
   try {
     const { platform } = req.body;
@@ -464,15 +489,12 @@ router.post('/:id/share', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Blog not found' });
     }
     
-    // Initialize shares object if needed
     if (!blog.shares) {
       blog.shares = { total: 0, platforms: {} };
     }
     
-    // Increment total
     blog.shares.total = (blog.shares.total || 0) + 1;
     
-    // Track by platform
     if (platform) {
       blog.shares.platforms = blog.shares.platforms || {};
       blog.shares.platforms[platform] = (blog.shares.platforms[platform] || 0) + 1;
@@ -480,12 +502,8 @@ router.post('/:id/share', async (req, res) => {
     
     await blog.save();
     
-    res.json({
-      ok: true,
-      shares: blog.shares
-    });
+    res.json({ ok: true, shares: blog.shares });
   } catch (error) {
-    console.error('Share tracking error:', error);
     res.status(500).json({ ok: false, error: 'Failed to track share' });
   }
 });
