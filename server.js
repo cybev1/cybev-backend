@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 3.1.0 - December 30, 2024 Update
+// VERSION: 3.2.0 - December 31, 2024 Update
 // ============================================
 
 const express = require('express');
@@ -103,6 +103,18 @@ try {
   console.log('✅ Blog routes loaded');
 } catch (err) {
   console.log('⚠️ Blog routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - CONTENT (AI Blog Generation) ⭐ NEW
+// ==========================================
+
+try {
+  const contentRoutes = require('./routes/content.routes');
+  app.use('/api/content', contentRoutes);
+  console.log('✅ Content routes loaded');
+} catch (err) {
+  console.log('⚠️ Content routes not found:', err.message);
 }
 
 // ==========================================
@@ -246,7 +258,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - PUSH NOTIFICATIONS (NEW)
+// ROUTES - PUSH NOTIFICATIONS
 // ==========================================
 
 try {
@@ -258,7 +270,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - MONETIZATION (NEW)
+// ROUTES - MONETIZATION
 // ==========================================
 
 try {
@@ -318,7 +330,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - ANALYTICS (NEW)
+// ROUTES - ANALYTICS
 // ==========================================
 
 try {
@@ -337,7 +349,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.1.0',
+    version: '3.2.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     features: [
@@ -345,7 +357,8 @@ app.get('/api/health', (req, res) => {
       'comments', 'bookmarks', 'notifications',
       'reactions', 'messages', 'live-streaming',
       'nft', 'staking', 'admin', 'wallet', 'upload',
-      'push-notifications', 'monetization', 'analytics'
+      'push-notifications', 'monetization', 'analytics',
+      'content', 'ai-blog-generation'
     ]
   });
 });
@@ -353,7 +366,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v3.1.0',
+    message: 'CYBEV API Server v3.2.0',
     documentation: '/api/health',
     status: 'running'
   });
@@ -439,7 +452,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v3.1.0           ║
+║         CYBEV API Server v3.2.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
