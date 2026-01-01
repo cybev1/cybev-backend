@@ -1,221 +1,378 @@
 // ============================================
 // FILE: routes/feed.routes.js
-// PATH: cybev-backend/routes/feed.routes.js
-// PURPOSE: Unified feed from posts and blogs
+// CYBEV Feed Routes - Fixed Populate Issues
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
-const verifyToken = require('../middleware/verifyToken');
 
-// Get Post model - don't redefine if exists
-const getPostModel = () => {
+// Models - Try to load them safely
+let Blog, Post, User;
+
+try {
+  Blog = require('../models/blog.model');
+} catch (e) {
+  console.log('Blog model not found');
+}
+
+try {
+  Post = require('../models/post.model');
+} catch (e) {
+  console.log('Post model not found');
+}
+
+try {
+  User = require('../models/user.model');
+} catch (e) {
+  console.log('User model not found');
+}
+
+// Auth middleware
+const verifyToken = require('../middleware/auth.middleware');
+
+// Helper: Safe populate
+const safePopulate = async (query, populateOptions) => {
   try {
-    return mongoose.model('Post');
-  } catch {
-    return null; // Model doesn't exist yet
+    return await query.populate(populateOptions);
+  } catch (error) {
+    // If populate fails, return without populate
+    console.log('Populate warning:', error.message);
+    return query;
   }
 };
 
-const getBlogModel = () => {
-  try {
-    return mongoose.model('Blog');
-  } catch {
-    const blogSchema = new mongoose.Schema({
-      author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-      title: { type: String, required: true },
-      slug: String,
-      content: String,
-      excerpt: String,
-      featuredImage: String,
-      coverImage: String,
-      tags: [String],
-      status: { type: String, enum: ['draft', 'published'], default: 'published' },
-      likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-      views: { type: Number, default: 0 },
-      isHidden: { type: Boolean, default: false },
-      isFeatured: { type: Boolean, default: false }
-    }, { timestamps: true });
-    return mongoose.model('Blog', blogSchema);
-  }
-};
-
-// GET /api/feed - Get unified feed
+// ==========================================
+// GET /api/feed - Main Feed
+// ==========================================
 router.get('/', async (req, res) => {
   try {
-    const { page = 1, limit = 20, sort = 'latest', userId } = req.query;
+    const { tab = 'latest', page = 1, limit = 20 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const Post = getPostModel();
-    const Blog = getBlogModel();
-
-    // Build query
-    const baseQuery = { isHidden: { $ne: true } };
-    if (userId) {
-      baseQuery.$or = [{ author: userId }, { authorId: userId }];
-    }
-
-    // Get posts
-    let posts = [];
-    if (Post) {
+    
+    let feed = [];
+    
+    // Try to fetch from Blog model first (primary content)
+    if (Blog) {
       try {
-        // Try both author field names
-        posts = await Post.find(baseQuery)
-          .populate('author', 'name username avatar isVerified')
-          .populate('authorId', 'name username avatar isVerified email')
+        let query = Blog.find({ status: 'published' })
           .sort({ createdAt: -1 })
-          .limit(50)
-          .lean();
+          .skip(skip)
+          .limit(parseInt(limit))
+          .lean(); // Use lean for better performance
         
-        posts = posts.map(p => ({ ...p, type: 'post' }));
-      } catch (e) {
-        console.log('Posts fetch error:', e.message);
+        // Try to populate author, but don't fail if it doesn't work
+        try {
+          const blogs = await Blog.find({ status: 'published' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .populate('author', 'name username avatar profileImage profilePicture')
+            .lean();
+          
+          feed = blogs.map(blog => ({
+            ...blog,
+            contentType: 'blog',
+            author: blog.author || blog.authorId || { name: 'Anonymous' }
+          }));
+        } catch (populateError) {
+          // Populate failed, fetch without it
+          console.log('Blog populate failed, fetching without:', populateError.message);
+          
+          const blogs = await Blog.find({ status: 'published' })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+          
+          // Manually fetch authors
+          const authorIds = [...new Set(blogs.map(b => b.author || b.authorId).filter(Boolean))];
+          let authors = {};
+          
+          if (User && authorIds.length > 0) {
+            try {
+              const users = await User.find({ _id: { $in: authorIds } })
+                .select('name username avatar profileImage profilePicture')
+                .lean();
+              
+              users.forEach(u => {
+                authors[u._id.toString()] = u;
+              });
+            } catch (e) {
+              console.log('Failed to fetch authors:', e.message);
+            }
+          }
+          
+          feed = blogs.map(blog => {
+            const authorId = (blog.author || blog.authorId)?.toString();
+            return {
+              ...blog,
+              contentType: 'blog',
+              author: authors[authorId] || { name: blog.authorName || 'Anonymous' }
+            };
+          });
+        }
+      } catch (blogError) {
+        console.log('Blog fetch error:', blogError.message);
       }
     }
-
-    // Get blogs
-    let blogs = [];
-    try {
-      const blogQuery = { ...baseQuery, status: 'published' };
-      blogs = await Blog.find(blogQuery)
-        .populate('author', 'name username avatar isVerified')
-        .sort({ createdAt: -1 })
-        .limit(50)
-        .lean();
-      
-      blogs = blogs.map(b => ({ ...b, type: 'blog' }));
-    } catch (e) {
-      console.log('Blogs fetch error:', e.message);
+    
+    // Also try Post model if feed is empty
+    if (feed.length === 0 && Post) {
+      try {
+        // Check if Post model has author or user field
+        const postSchema = Post.schema.paths;
+        const authorField = postSchema.author ? 'author' : (postSchema.user ? 'user' : null);
+        
+        let posts;
+        if (authorField) {
+          try {
+            posts = await Post.find({ status: { $ne: 'draft' } })
+              .sort({ createdAt: -1 })
+              .skip(skip)
+              .limit(parseInt(limit))
+              .populate(authorField, 'name username avatar profileImage profilePicture')
+              .lean();
+          } catch (e) {
+            posts = await Post.find({ status: { $ne: 'draft' } })
+              .sort({ createdAt: -1 })
+              .skip(skip)
+              .limit(parseInt(limit))
+              .lean();
+          }
+        } else {
+          posts = await Post.find({ status: { $ne: 'draft' } })
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+        }
+        
+        feed = posts.map(post => ({
+          ...post,
+          contentType: 'post',
+          author: post.author || post.user || { name: 'Anonymous' }
+        }));
+      } catch (postError) {
+        console.log('Posts fetch error:', postError.message);
+      }
     }
-
-    // Combine and sort
-    let feed = [...posts, ...blogs];
-
-    // Sort based on filter
-    switch (sort) {
-      case 'trending':
-        feed.sort((a, b) => {
-          const scoreA = (a.views || 0) + (a.likes?.length || 0) * 10;
-          const scoreB = (b.views || 0) + (b.likes?.length || 0) * 10;
-          return scoreB - scoreA;
-        });
-        break;
-      case 'popular':
-        feed.sort((a, b) => (b.likes?.length || 0) - (a.likes?.length || 0));
-        break;
-      case 'latest':
-      default:
-        feed.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    }
-
-    // Paginate
-    const total = feed.length;
-    feed = feed.slice(skip, skip + parseInt(limit));
-
+    
+    // Sort by pinned first, then by date
+    feed.sort((a, b) => {
+      if (a.isPinned && !b.isPinned) return -1;
+      if (!a.isPinned && b.isPinned) return 1;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+    
     res.json({
       ok: true,
+      feed,
+      items: feed,
       posts: feed,
-      total,
       page: parseInt(page),
-      pages: Math.ceil(total / parseInt(limit))
+      hasMore: feed.length === parseInt(limit)
     });
+    
   } catch (error) {
     console.error('Feed error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get feed', posts: [] });
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Failed to load feed',
+      feed: [],
+      items: [],
+      posts: []
+    });
   }
 });
 
-// GET /api/feed/following - Get feed from followed users
+// ==========================================
+// GET /api/feed/trending - Trending Posts
+// ==========================================
+router.get('/trending', async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    
+    let trending = [];
+    
+    if (Blog) {
+      try {
+        const blogs = await Blog.find({ status: 'published' })
+          .sort({ views: -1, likesCount: -1, createdAt: -1 })
+          .limit(parseInt(limit))
+          .lean();
+        
+        // Fetch authors manually
+        const authorIds = [...new Set(blogs.map(b => b.author || b.authorId).filter(Boolean))];
+        let authors = {};
+        
+        if (User && authorIds.length > 0) {
+          const users = await User.find({ _id: { $in: authorIds } })
+            .select('name username avatar profileImage profilePicture')
+            .lean();
+          
+          users.forEach(u => {
+            authors[u._id.toString()] = u;
+          });
+        }
+        
+        trending = blogs.map(blog => {
+          const authorId = (blog.author || blog.authorId)?.toString();
+          return {
+            ...blog,
+            contentType: 'blog',
+            author: authors[authorId] || { name: blog.authorName || 'Anonymous' }
+          };
+        });
+      } catch (e) {
+        console.log('Trending fetch error:', e.message);
+      }
+    }
+    
+    res.json({
+      ok: true,
+      trending,
+      items: trending
+    });
+    
+  } catch (error) {
+    console.error('Trending error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to load trending', trending: [] });
+  }
+});
+
+// ==========================================
+// GET /api/feed/following - Following Feed
+// ==========================================
 router.get('/following', verifyToken, async (req, res) => {
   try {
+    const userId = req.user._id || req.user.id;
     const { page = 1, limit = 20 } = req.query;
-    const userId = req.user.id;
-
-    // Get user's following list
-    const User = mongoose.model('User');
-    const user = await User.findById(userId).select('following');
-    
-    if (!user || !user.following || user.following.length === 0) {
-      return res.json({ ok: true, posts: [], message: 'Follow some users to see their posts' });
-    }
-
-    const followingIds = user.following;
-    const Post = getPostModel();
-    const Blog = getBlogModel();
-
-    // Get posts from followed users (support both author fields)
-    let posts = [];
-    if (Post) {
-      posts = await Post.find({ 
-        $or: [
-          { author: { $in: followingIds } },
-          { authorId: { $in: followingIds } }
-        ],
-        isHidden: { $ne: true } 
-      })
-        .populate('author', 'name username avatar isVerified')
-        .populate('authorId', 'name username avatar isVerified email')
-        .sort({ createdAt: -1 })
-        .limit(30)
-        .lean();
-    }
-
-    // Get blogs from followed users
-    const blogs = await Blog.find({ 
-      author: { $in: followingIds }, 
-      status: 'published',
-      isHidden: { $ne: true } 
-    })
-      .populate('author', 'name username avatar isVerified')
-      .sort({ createdAt: -1 })
-      .limit(30)
-      .lean();
-
-    // Combine and sort
-    let feed = [
-      ...posts.map(p => ({ ...p, type: 'post' })),
-      ...blogs.map(b => ({ ...b, type: 'blog' }))
-    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    // Paginate
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    feed = feed.slice(skip, skip + parseInt(limit));
-
-    res.json({ ok: true, posts: feed });
+    
+    // Get user's following list
+    let followingIds = [];
+    
+    if (User) {
+      try {
+        const user = await User.findById(userId).select('following').lean();
+        followingIds = user?.following || [];
+      } catch (e) {
+        console.log('Failed to get following list:', e.message);
+      }
+    }
+    
+    let feed = [];
+    
+    if (Blog && followingIds.length > 0) {
+      try {
+        const blogs = await Blog.find({
+          author: { $in: followingIds },
+          status: 'published'
+        })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .lean();
+        
+        // Fetch authors
+        const authorIds = [...new Set(blogs.map(b => b.author || b.authorId).filter(Boolean))];
+        let authors = {};
+        
+        if (User && authorIds.length > 0) {
+          const users = await User.find({ _id: { $in: authorIds } })
+            .select('name username avatar profileImage profilePicture')
+            .lean();
+          
+          users.forEach(u => {
+            authors[u._id.toString()] = u;
+          });
+        }
+        
+        feed = blogs.map(blog => {
+          const authorId = (blog.author || blog.authorId)?.toString();
+          return {
+            ...blog,
+            contentType: 'blog',
+            author: authors[authorId] || { name: blog.authorName || 'Anonymous' }
+          };
+        });
+      } catch (e) {
+        console.log('Following feed error:', e.message);
+      }
+    }
+    
+    res.json({
+      ok: true,
+      feed,
+      items: feed,
+      page: parseInt(page),
+      hasMore: feed.length === parseInt(limit)
+    });
+    
   } catch (error) {
     console.error('Following feed error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get feed', posts: [] });
+    res.status(500).json({ ok: false, error: 'Failed to load following feed', feed: [] });
   }
 });
 
-// GET /api/feed/featured - Get featured content
-router.get('/featured', async (req, res) => {
+// ==========================================
+// GET /api/feed/personalized - AI Personalized
+// ==========================================
+router.get('/personalized', verifyToken, async (req, res) => {
   try {
-    const Post = getPostModel();
-    const Blog = getBlogModel();
-
-    const posts = await Post.find({ isFeatured: true, isHidden: { $ne: true } })
-      .populate('author', 'name username avatar')
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .lean();
-
-    const blogs = await Blog.find({ isFeatured: true, status: 'published', isHidden: { $ne: true } })
-      .populate('author', 'name username avatar')
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .lean();
-
-    const feed = [
-      ...posts.map(p => ({ ...p, type: 'post' })),
-      ...blogs.map(b => ({ ...b, type: 'blog' }))
-    ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    res.json({ ok: true, posts: feed });
+    const userId = req.user._id || req.user.id;
+    const { limit = 20 } = req.query;
+    
+    // For now, return trending + some randomization
+    let feed = [];
+    
+    if (Blog) {
+      try {
+        const blogs = await Blog.find({ status: 'published' })
+          .sort({ views: -1, createdAt: -1 })
+          .limit(parseInt(limit) * 2)
+          .lean();
+        
+        // Shuffle and take limit
+        const shuffled = blogs.sort(() => Math.random() - 0.5);
+        
+        // Fetch authors
+        const authorIds = [...new Set(shuffled.map(b => b.author || b.authorId).filter(Boolean))];
+        let authors = {};
+        
+        if (User && authorIds.length > 0) {
+          const users = await User.find({ _id: { $in: authorIds } })
+            .select('name username avatar profileImage profilePicture')
+            .lean();
+          
+          users.forEach(u => {
+            authors[u._id.toString()] = u;
+          });
+        }
+        
+        feed = shuffled.slice(0, parseInt(limit)).map(blog => {
+          const authorId = (blog.author || blog.authorId)?.toString();
+          return {
+            ...blog,
+            contentType: 'blog',
+            author: authors[authorId] || { name: blog.authorName || 'Anonymous' }
+          };
+        });
+      } catch (e) {
+        console.log('Personalized feed error:', e.message);
+      }
+    }
+    
+    res.json({
+      ok: true,
+      feed,
+      items: feed
+    });
+    
   } catch (error) {
-    console.error('Featured feed error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get featured', posts: [] });
+    console.error('Personalized feed error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to load personalized feed', feed: [] });
   }
 });
 
