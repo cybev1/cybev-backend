@@ -682,7 +682,7 @@ router.get('/pinned/:userId', async (req, res) => {
 
 const REACTION_TYPES = ['like', 'love', 'haha', 'wow', 'sad', 'angry', 'fire', 'clap'];
 
-// POST /api/blogs/:id/react - Add/remove emoji reaction
+// POST /api/blogs/:id/react - Add/remove emoji reaction (ACCUMULATES - users can have multiple reaction types)
 router.post('/:id/react', verifyToken, async (req, res) => {
   try {
     const { type = 'like' } = req.body;
@@ -691,11 +691,11 @@ router.post('/:id/react', verifyToken, async (req, res) => {
       return res.status(400).json({
         success: false,
         ok: false,
-        message: 'Invalid reaction type'
+        message: 'Invalid reaction type. Valid types: ' + REACTION_TYPES.join(', ')
       });
     }
     
-    console.log(`😀 Adding ${type} reaction to blog:`, req.params.id);
+    console.log(`😀 Toggling ${type} reaction on blog:`, req.params.id);
     
     const blog = await Blog.findById(req.params.id);
     
@@ -707,25 +707,32 @@ router.post('/:id/react', verifyToken, async (req, res) => {
       });
     }
     
-    // Initialize reactions if needed
+    // Initialize reactions object if needed
     if (!blog.reactions) {
       blog.reactions = {};
     }
+    
+    // Initialize this reaction type array if needed
     if (!blog.reactions[type]) {
       blog.reactions[type] = [];
     }
     
     const userId = req.user.id.toString();
-    const hasReacted = blog.reactions[type].some(id => id.toString() === userId);
+    const hasThisReaction = blog.reactions[type].some(id => id.toString() === userId);
     
-    if (hasReacted) {
-      // Remove reaction
+    if (hasThisReaction) {
+      // Remove THIS specific reaction only (user can still have other reactions)
       blog.reactions[type] = blog.reactions[type].filter(id => id.toString() !== userId);
+      
+      // Also remove from likes array if removing 'like' reaction
+      if (type === 'like' && blog.likes) {
+        blog.likes = blog.likes.filter(id => id.toString() !== userId);
+      }
     } else {
-      // Add reaction
+      // Add THIS reaction (doesn't remove other reactions - user can have multiple!)
       blog.reactions[type].push(req.user.id);
       
-      // Also add to likes array if type is 'like' for compatibility
+      // Also add to likes array if type is 'like' for backward compatibility
       if (type === 'like') {
         if (!blog.likes) blog.likes = [];
         if (!blog.likes.some(id => id.toString() === userId)) {
@@ -737,14 +744,15 @@ router.post('/:id/react', verifyToken, async (req, res) => {
     blog.markModified('reactions');
     await blog.save();
     
-    // Send notification
-    if (!hasReacted && blog.author && String(blog.author) !== userId) {
+    // Send notification only when adding (not removing)
+    if (!hasThisReaction && blog.author && String(blog.author) !== userId) {
       try {
+        const reactionEmojis = { like: '👍', love: '❤️', haha: '😂', wow: '😮', sad: '😢', angry: '😠', fire: '🔥', clap: '👏' };
         await createNotification({
           recipient: blog.author,
           sender: req.user.id,
           type: 'reaction',
-          message: `reacted ${type} to your post`,
+          message: `reacted ${reactionEmojis[type] || type} to your post`,
           entityId: blog._id,
           entityModel: 'Blog'
         });
@@ -753,24 +761,31 @@ router.post('/:id/react', verifyToken, async (req, res) => {
       }
     }
     
-    // Calculate total reactions
+    // Calculate total reactions (counting each unique user-reaction pair)
     const totalReactions = Object.values(blog.reactions).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+    
+    // Get user's current reactions on this post
+    const userReactions = {};
+    for (const [reactionType, users] of Object.entries(blog.reactions)) {
+      userReactions[reactionType] = users.some(id => id.toString() === userId);
+    }
     
     res.json({
       success: true,
       ok: true,
-      reacted: !hasReacted,
+      reacted: !hasThisReaction,
       type,
       reactions: blog.reactions,
+      userReactions, // All reactions this user has on this post
       totalReactions,
       likeCount: blog.likes?.length || 0
     });
   } catch (error) {
-    console.error('❌ Error adding reaction:', error);
+    console.error('❌ Error toggling reaction:', error);
     res.status(500).json({
       success: false,
       ok: false,
-      message: 'Failed to add reaction'
+      message: 'Failed to toggle reaction'
     });
   }
 });
