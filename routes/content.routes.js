@@ -1,19 +1,81 @@
 // ============================================
 // FILE: routes/content.routes.js
-// Content Creation API with SEO, Images, NFT
+// Content Creation API with WALLET CREDITING
 // ============================================
 
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const contentCreator = require('../services/content-creator.service');
 const verifyToken = require('../middleware/verifyToken');
 
-// Blog model - optional for now
+// Blog model
 let Blog;
 try {
   Blog = require('../models/blog.model');
 } catch (error) {
-  console.log('⚠️ Blog model not found - publish feature will be limited');
+  console.log('⚠️ Blog model not found');
+}
+
+// ==========================================
+// UTILITY: Credit tokens to user's wallet
+// ==========================================
+async function creditUserTokens(userId, amount, description, referenceId = null) {
+  try {
+    const User = mongoose.model('User');
+    
+    // Update user's token balance
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { tokenBalance: amount } },
+      { new: true }
+    );
+    
+    if (!user) {
+      console.log('❌ User not found for token credit:', userId);
+      return { success: false, error: 'User not found' };
+    }
+    
+    // Record transaction
+    let Transaction;
+    try {
+      Transaction = mongoose.model('Transaction');
+    } catch {
+      const transactionSchema = new mongoose.Schema({
+        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        type: { type: String, required: true },
+        amount: { type: Number, required: true },
+        balance: Number,
+        description: String,
+        reference: mongoose.Schema.Types.ObjectId,
+        referenceType: String,
+        status: { type: String, default: 'completed' }
+      }, { timestamps: true });
+      Transaction = mongoose.model('Transaction', transactionSchema);
+    }
+    
+    await Transaction.create({
+      user: userId,
+      type: 'reward',
+      amount: amount,
+      balance: user.tokenBalance,
+      description: description,
+      reference: referenceId,
+      referenceType: 'Blog',
+      status: 'completed'
+    });
+    
+    console.log(`💰 Credited ${amount} tokens to user ${userId}. New balance: ${user.tokenBalance}`);
+    
+    return { 
+      success: true, 
+      newBalance: user.tokenBalance,
+      amount: amount
+    };
+  } catch (error) {
+    console.error('❌ Token credit error:', error);
+    return { success: false, error: error.message };
+  }
 }
 
 // Handle OPTIONS
@@ -28,14 +90,6 @@ router.options('*', (req, res) => {
 /**
  * POST /api/content/create-blog
  * Create complete blog post with AI
- * 
- * Features:
- * - AI-generated content
- * - SEO optimization
- * - Featured image
- * - Content images
- * - Viral hashtags
- * - NFT metadata
  */
 router.post('/create-blog', verifyToken, async (req, res) => {
   try {
@@ -65,21 +119,15 @@ router.post('/create-blog', verifyToken, async (req, res) => {
     });
     
     const duration = Date.now() - startTime;
-    
-    // TODO: Save to database
-    // const savedBlog = await Blog.create({
-    //   ...completeBlog,
-    //   author: req.user.id,
-    //   status: 'draft'
-    // });
+    const tokensEarned = completeBlog.initialTokens || 50;
     
     console.log(`✅ Blog created in ${duration}ms`);
     
     res.json({
       success: true,
-      message: `🎉 Blog post created! You earned ${completeBlog.initialTokens} tokens!`,
+      message: `🎉 Blog post created! You earned ${tokensEarned} tokens!`,
       data: completeBlog,
-      tokensEarned: completeBlog.initialTokens,
+      tokensEarned: tokensEarned,
       generationTime: duration,
       viralityScore: completeBlog.viralityScore
     });
@@ -95,7 +143,7 @@ router.post('/create-blog', verifyToken, async (req, res) => {
 
 /**
  * POST /api/content/publish-blog
- * Publish AI-generated blog to database
+ * Publish AI-generated blog to database AND credit tokens
  */
 router.post('/publish-blog', verifyToken, async (req, res) => {
   try {
@@ -120,52 +168,64 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
       });
     }
 
-    // Map niche to valid category enum from Blog model
-    const categoryMap = {
-      'technology': 'Technology',
-      'business': 'Business & Finance',
-      'health': 'Health & Wellness',
-      'lifestyle': 'Lifestyle',
-      'education': 'Education',
-      'finance': 'Business & Finance',
-      'entertainment': 'Entertainment',
-      'food': 'Food & Cooking',
-      'travel': 'Travel',
-      'science': 'Science',
-      'sports': 'Sports',
-      'fashion': 'Fashion & Beauty',
-      'personal-development': 'Personal Development',
-      'news': 'News & Politics',
-      'environment': 'Environment'
-    };
-    
-    const validCategory = categoryMap[blogData.niche?.toLowerCase()] || 'Other';
+    // Get user name
+    let authorName = req.user.name || 'Anonymous';
+    try {
+      const User = mongoose.model('User');
+      const user = await User.findById(req.user.id).select('name username');
+      if (user) {
+        authorName = user.name || user.username || 'Anonymous';
+      }
+    } catch {}
 
     // Create blog in database
     const newBlog = await Blog.create({
       title: blogData.title,
       content: blogData.content,
+      excerpt: blogData.summary || blogData.content?.replace(/<[^>]*>/g, '').slice(0, 200),
       author: req.user.id,
-      authorName: req.user.name || req.user.username || 'Anonymous',
-      category: validCategory,
-      tags: blogData.seo?.keywords?.slice(0, 10) || [],
+      authorName: authorName,
+      category: blogData.niche || 'general',
+      tags: blogData.seo?.keywords?.slice(0, 10) || blogData.hashtags || [],
       readTime: parseInt(blogData.readTime) || 5,
       featuredImage: blogData.featuredImage?.url || blogData.featuredImage || '',
-      status: 'published'
-      // Note: Model will auto-calculate readTime in pre-save hook
-      // Note: likes, views, featured, timestamps are handled by model defaults
+      isAIGenerated: true,
+      status: 'published',
+      seo: {
+        metaTitle: blogData.seo?.title || blogData.title,
+        metaDescription: blogData.seo?.description || blogData.summary,
+        keywords: blogData.seo?.keywords || []
+      }
     });
 
     console.log(`✅ Blog published with ID: ${newBlog._id}`);
+
+    // ==========================================
+    // 💰 CREDIT TOKENS TO USER'S WALLET
+    // ==========================================
+    const tokensToCredit = blogData.initialTokens || 50;
+    const creditResult = await creditUserTokens(
+      req.user.id,
+      tokensToCredit,
+      `Earned for publishing: "${blogData.title?.slice(0, 50)}..."`,
+      newBlog._id
+    );
+    
+    if (creditResult.success) {
+      console.log(`💰 User earned ${tokensToCredit} CYBEV tokens!`);
+    } else {
+      console.log('⚠️ Token credit failed but blog was published');
+    }
 
     res.json({
       success: true,
       message: '🎉 Blog published successfully!',
       data: {
         blogId: newBlog._id,
-        slug: newBlog.slug,
-        url: `/blog/${newBlog.slug}`,
-        tokensEarned: blogData.initialTokens || 50
+        slug: newBlog.slug || newBlog._id,
+        url: `/blog/${newBlog._id}`,
+        tokensEarned: tokensToCredit,
+        newBalance: creditResult.newBalance
       }
     });
     
@@ -179,77 +239,154 @@ router.post('/publish-blog', verifyToken, async (req, res) => {
 });
 
 /**
- * POST /api/content/create-template
- * Generate website template with demo content
- * 
- * Features:
- * - AI-generated template
- * - Demo images
- * - Demo blog posts
- * - SEO for all pages
- * - NFT ready
+ * POST /api/content/quick-post
+ * Create a short blog/micro post and earn tokens
  */
-router.post('/create-template', verifyToken, async (req, res) => {
+router.post('/quick-post', verifyToken, async (req, res) => {
   try {
-    const {
-      templateType,
-      businessName,
-      description,
-      style,
-      colors,
-      niche
-    } = req.body;
+    const { content, images } = req.body;
     
-    if (!templateType || !businessName || !description) {
+    if (!content || content.trim().length < 10) {
       return res.status(400).json({
         success: false,
-        error: 'Template type, business name, and description are required'
+        error: 'Content must be at least 10 characters'
       });
     }
 
-    console.log('🏗️ Generating template with demo content...');
-    console.log(`   User: ${req.user.id}`);
-    console.log(`   Type: ${templateType}`);
-    console.log(`   Business: ${businessName}`);
-    
-    const startTime = Date.now();
-    
-    // Generate complete template
-    const completeTemplate = await contentCreator.generateTemplateWithDemo({
-      templateType,
-      businessName,
-      description,
-      style: style || 'modern',
-      colors: colors || 'vibrant',
-      niche: niche || templateType
+    // Get user info
+    let authorName = 'Anonymous';
+    try {
+      const User = mongoose.model('User');
+      const user = await User.findById(req.user.id).select('name username');
+      authorName = user?.name || user?.username || 'Anonymous';
+    } catch {}
+
+    // Create short blog post
+    const newPost = await Blog.create({
+      title: '', // Short posts don't have titles
+      content: content,
+      excerpt: content.slice(0, 200),
+      author: req.user.id,
+      authorName: authorName,
+      category: 'general',
+      readTime: 1,
+      images: images || [],
+      status: 'published'
     });
-    
-    const duration = Date.now() - startTime;
-    
-    console.log(`✅ Template created in ${duration}ms`);
-    
+
+    // Credit tokens for posting (smaller amount for quick posts)
+    const tokensEarned = 5;
+    const creditResult = await creditUserTokens(
+      req.user.id,
+      tokensEarned,
+      'Short blog post reward',
+      newPost._id
+    );
+
     res.json({
       success: true,
-      message: `🎉 Template created! You earned ${completeTemplate.initialTokens} tokens!`,
-      data: completeTemplate,
-      tokensEarned: completeTemplate.initialTokens,
-      generationTime: duration
+      ok: true,
+      message: 'Short blog posted!',
+      data: {
+        postId: newPost._id,
+        tokensEarned: tokensEarned,
+        newBalance: creditResult.newBalance
+      }
     });
-    
+
   } catch (error) {
-    console.error('❌ Template creation error:', error);
+    console.error('❌ Quick post error:', error);
     res.status(500).json({
       success: false,
-      error: error.message || 'Failed to create template'
+      error: error.message || 'Failed to create post'
     });
   }
 });
 
 /**
- * POST /api/content/generate-seo
- * Generate SEO metadata for existing content
+ * GET /api/content/topics
+ * Get trending topics suggestions
  */
-router.post('/generate-seo', verifyToken, async (req, res) => {
+router.get('/topics', async (req, res) => {
+  try {
+    const { niche = 'technology' } = req.query;
+    const topics = await contentCreator.getTrendingTopics(niche);
+    
+    res.json({
+      success: true,
+      topics
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get topics'
+    });
+  }
+});
+
+/**
+ * GET /api/content/image
+ * Get a relevant image for a topic
+ */
+router.get('/image', async (req, res) => {
+  try {
+    const { query } = req.query;
+    
+    if (!query) {
+      return res.status(400).json({
+        success: false,
+        error: 'Query is required'
+      });
+    }
+
+    const image = await contentCreator.getFeaturedImage(query, 'general');
+    
+    res.json({
+      success: true,
+      image
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get image'
+    });
+  }
+});
+
+/**
+ * POST /api/content/hashtags
+ * Generate viral hashtags for a topic
+ */
+router.post('/hashtags', async (req, res) => {
+  try {
+    const { topic, niche } = req.body;
+    
+    if (!topic) {
+      return res.status(400).json({
+        success: false,
+        error: 'Topic is required'
+      });
+    }
+
+    const hashtags = await contentCreator.generateViralHashtags(topic, niche || 'general');
+    
+    res.json({
+      success: true,
+      hashtags
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate hashtags'
+    });
+  }
+});
+
+/**
+ * POST /api/content/seo
+ * Generate SEO metadata for content
+ */
+router.post('/seo', async (req, res) => {
   try {
     const { title, content, niche } = req.body;
     
@@ -260,286 +397,55 @@ router.post('/generate-seo', verifyToken, async (req, res) => {
       });
     }
 
-    console.log('🔍 Generating SEO metadata...');
-    
-    const seo = await contentCreator.generateBlogWithSEO(
-      title,
-      'professional',
-      'medium',
-      niche || 'general'
-    );
+    const seo = await contentCreator.generateSEOMetadata(title, content, niche || 'general');
     
     res.json({
       success: true,
-      data: {
-        seoTitle: seo.seoTitle,
-        seoDescription: seo.seoDescription,
-        slug: seo.slug,
-        keywords: seo.keywords,
-        metaTags: seo.metaTags
-      }
+      seo
     });
-    
   } catch (error) {
-    console.error('❌ SEO generation error:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: 'Failed to generate SEO'
     });
   }
 });
 
 /**
- * POST /api/content/generate-hashtags
- * Generate viral hashtags for content
+ * GET /api/content/earnings
+ * Get user's content earnings summary
  */
-router.post('/generate-hashtags', verifyToken, async (req, res) => {
+router.get('/earnings', verifyToken, async (req, res) => {
   try {
-    const { topic, niche } = req.body;
+    const User = mongoose.model('User');
+    const user = await User.findById(req.user.id).select('tokenBalance');
     
-    if (!topic) {
-      return res.status(400).json({
-        success: false,
-        error: 'Topic is required'
-      });
-    }
-
-    console.log('🔥 Generating viral hashtags...');
+    // Get transaction history
+    let transactions = [];
+    try {
+      const Transaction = mongoose.model('Transaction');
+      transactions = await Transaction.find({
+        user: req.user.id,
+        type: 'reward'
+      })
+      .sort({ createdAt: -1 })
+      .limit(20);
+    } catch {}
     
-    const hashtags = await contentCreator.generateViralHashtags(
-      topic,
-      niche || 'general'
-    );
+    // Calculate total earned from content
+    const totalEarned = transactions.reduce((sum, t) => sum + t.amount, 0);
     
     res.json({
       success: true,
-      data: hashtags
-    });
-    
-  } catch (error) {
-    console.error('❌ Hashtag generation error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * POST /api/content/get-featured-image
- * Get featured image for topic
- */
-router.post('/get-featured-image', verifyToken, async (req, res) => {
-  try {
-    const { topic, niche } = req.body;
-    
-    if (!topic) {
-      return res.status(400).json({
-        success: false,
-        error: 'Topic is required'
-      });
-    }
-
-    console.log('🖼️ Fetching featured image...');
-    
-    const image = await contentCreator.getFeaturedImage(topic, niche || topic);
-    
-    res.json({
-      success: true,
-      data: image
-    });
-    
-  } catch (error) {
-    console.error('❌ Image fetch error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * POST /api/content/mint-nft
- * Prepare content for NFT minting
- */
-router.post('/mint-nft', verifyToken, async (req, res) => {
-  try {
-    const { blogId, contentType } = req.body;
-    
-    if (!blogId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Blog ID is required'
-      });
-    }
-
-    console.log('💎 Preparing NFT metadata...');
-    
-    // TODO: Fetch blog from database
-    // const blog = await Blog.findById(blogId);
-    
-    // For now, return mock response
-    const nftMetadata = {
-      name: 'Sample Blog Post',
-      description: 'NFT of blog content',
-      image: 'https://source.unsplash.com/800x600/?blog',
-      attributes: [
-        { trait_type: 'Content Type', value: contentType || 'blog' },
-        { trait_type: 'Mintable', value: 'Yes' }
-      ]
-    };
-    
-    res.json({
-      success: true,
-      message: 'NFT metadata prepared! Ready to mint.',
-      data: {
-        nftMetadata,
-        mintPrice: '0.01 ETH',
-        estimatedGas: '0.002 ETH',
-        earnings: {
-          creator: '90%',
-          platform: '10%'
-        }
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ NFT preparation error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * POST /api/content/stake
- * Stake tokens on content for boosting
- */
-router.post('/stake', verifyToken, async (req, res) => {
-  try {
-    const { blogId, amount, duration } = req.body;
-    
-    if (!blogId || !amount) {
-      return res.status(400).json({
-        success: false,
-        error: 'Blog ID and amount are required'
-      });
-    }
-
-    console.log('💰 Staking tokens...');
-    console.log(`   Amount: ${amount} tokens`);
-    console.log(`   Duration: ${duration || 7} days`);
-    
-    // TODO: Implement actual staking logic
-    const stakingReward = Math.floor(amount * 0.1); // 10% APY estimate
-    
-    res.json({
-      success: true,
-      message: `Successfully staked ${amount} tokens!`,
-      data: {
-        stakedAmount: amount,
-        duration: duration || 7,
-        estimatedReward: stakingReward,
-        boostMultiplier: 1.5,
-        withdrawDate: new Date(Date.now() + (duration || 7) * 24 * 60 * 60 * 1000)
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Staking error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * GET /api/content/viral-score/:blogId
- * Calculate viral potential score
- */
-router.get('/viral-score/:blogId', verifyToken, async (req, res) => {
-  try {
-    const { blogId } = req.params;
-    
-    // TODO: Fetch blog and calculate real score
-    const viralScore = Math.floor(Math.random() * 40) + 60; // Mock: 60-100
-    
-    res.json({
-      success: true,
-      data: {
-        viralScore,
-        factors: {
-          seoOptimization: 85,
-          contentQuality: 90,
-          engagement: 75,
-          shareability: 80
-        },
-        recommendations: viralScore < 80 ? [
-          'Add more trending hashtags',
-          'Optimize SEO title',
-          'Include more images',
-          'Add social sharing prompts'
-        ] : [
-          'Content is optimized for virality!',
-          'Share on social media',
-          'Stake tokens for boost'
-        ]
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Viral score error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-/**
- * GET /api/blogs/:id - Get single blog by ID or slug
- */
-router.get('/blogs/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    console.log(`📖 Fetching blog: ${id}`);
-    
-    // Try to find by MongoDB ID first, then by slug
-    let blog = await Blog.findById(id).populate('author', 'name username email');
-    
-    if (!blog) {
-      // Try finding by slug (title-based)
-      blog = await Blog.findOne({ slug: id }).populate('author', 'name username email');
-    }
-    
-    if (!blog) {
-      return res.status(404).json({
-        success: false,
-        error: 'Blog not found'
-      });
-    }
-    
-    // Increment view count
-    blog.views = (blog.views || 0) + 1;
-    await blog.save();
-    
-    console.log(`✅ Blog found: ${blog.title}`);
-    
-    res.json({
       ok: true,
-      success: true,
-      blog: blog,
-      data: blog
+      currentBalance: user?.tokenBalance || 0,
+      totalEarned: totalEarned,
+      recentTransactions: transactions
     });
-    
   } catch (error) {
-    console.error('❌ Error fetching blog:', error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: 'Failed to get earnings'
     });
   }
 });
