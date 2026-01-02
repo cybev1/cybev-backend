@@ -5,7 +5,65 @@
 // UPDATED: Generates Markdown instead of HTML
 // ============================================
 
-const fetch = require('node-fetch');
+// Try axios first (likely installed), then https module
+let httpClient;
+try {
+  const axios = require('axios');
+  httpClient = {
+    post: async (url, data, config) => {
+      const response = await axios.post(url, data, config);
+      return { ok: true, data: response.data };
+    }
+  };
+  console.log('🔌 Using axios for HTTP requests');
+} catch (e) {
+  // Fallback to https module
+  const https = require('https');
+  httpClient = {
+    post: (url, data, config) => {
+      return new Promise((resolve, reject) => {
+        const urlObj = new URL(url);
+        const postData = JSON.stringify(data);
+        
+        const options = {
+          hostname: urlObj.hostname,
+          path: urlObj.pathname,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(postData),
+            ...config?.headers
+          }
+        };
+        
+        const req = https.request(options, (res) => {
+          let responseData = '';
+          res.on('data', chunk => responseData += chunk);
+          res.on('end', () => {
+            try {
+              resolve({
+                ok: res.statusCode >= 200 && res.statusCode < 300,
+                status: res.statusCode,
+                data: JSON.parse(responseData)
+              });
+            } catch (e) {
+              resolve({
+                ok: false,
+                status: res.statusCode,
+                data: { error: responseData }
+              });
+            }
+          });
+        });
+        
+        req.on('error', reject);
+        req.write(postData);
+        req.end();
+      });
+    }
+  };
+  console.log('🔌 Using https module for HTTP requests');
+}
 
 class ContentCreatorService {
   constructor() {
@@ -38,31 +96,27 @@ class ContentCreatorService {
       throw new Error('DeepSeek API key not configured');
     }
 
-    const response = await fetch(this.deepseekUrl, {
-      method: 'POST',
+    const response = await httpClient.post(this.deepseekUrl, {
+      model: this.deepseekModel,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.7,
+      max_tokens: maxTokens
+    }, {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.deepseekKey}`
-      },
-      body: JSON.stringify({
-        model: this.deepseekModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.7,
-        max_tokens: maxTokens
-      })
+      }
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ DeepSeek API Error:', response.status, errorText);
+      console.error('❌ DeepSeek API Error:', response.status, response.data);
       throw new Error(`DeepSeek API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return response.data.choices?.[0]?.message?.content || '';
   }
 
   /**
@@ -73,31 +127,27 @@ class ContentCreatorService {
       throw new Error('Claude API key not configured');
     }
 
-    const response = await fetch(this.claudeUrl, {
-      method: 'POST',
+    const response = await httpClient.post(this.claudeUrl, {
+      model: this.claudeModel,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages: [
+        { role: 'user', content: userPrompt }
+      ]
+    }, {
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': this.claudeKey,
         'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: this.claudeModel,
-        max_tokens: maxTokens,
-        system: systemPrompt,
-        messages: [
-          { role: 'user', content: userPrompt }
-        ]
-      })
+      }
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ Claude API Error:', response.status, errorText);
+      console.error('❌ Claude API Error:', response.status, response.data);
       throw new Error(`Claude API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data.content?.[0]?.text || '';
+    return response.data.content?.[0]?.text || '';
   }
 
   /**
@@ -108,31 +158,27 @@ class ContentCreatorService {
       throw new Error('OpenAI API key not configured');
     }
 
-    const response = await fetch(this.openaiUrl, {
-      method: 'POST',
+    const response = await httpClient.post(this.openaiUrl, {
+      model: this.openaiModel,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      temperature: 0.7,
+      max_tokens: maxTokens
+    }, {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.openaiKey}`
-      },
-      body: JSON.stringify({
-        model: this.openaiModel,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        temperature: 0.7,
-        max_tokens: maxTokens
-      })
+      }
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('❌ OpenAI API Error:', response.status, errorText);
+      console.error('❌ OpenAI API Error:', response.status, response.data);
       throw new Error(`OpenAI API error: ${response.status}`);
     }
 
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
+    return response.data.choices?.[0]?.message?.content || '';
   }
 
   /**
