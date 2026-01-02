@@ -8,7 +8,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Models - Try to load them safely
-let Blog, Post, User;
+let Blog, Post, User, SharedPost;
 
 try {
   Blog = require('../models/blog.model');
@@ -26,6 +26,12 @@ try {
   User = require('../models/user.model');
 } catch (e) {
   console.log('User model not found');
+}
+
+try {
+  SharedPost = require('../models/sharedPost.model');
+} catch (e) {
+  console.log('SharedPost model not found');
 }
 
 // Auth middleware - try multiple paths
@@ -182,6 +188,57 @@ router.get('/', async (req, res) => {
         }));
       } catch (postError) {
         console.log('Posts fetch error:', postError.message);
+      }
+    }
+    
+    // Also fetch shared posts (timeline shares)
+    if (SharedPost) {
+      try {
+        const sharedPosts = await SharedPost.find({ isActive: true })
+          .populate('user', 'name username avatar profileImage profilePicture')
+          .populate({
+            path: 'originalBlog',
+            select: 'title content excerpt featuredImage images author createdAt readTime views shares tags',
+            populate: { path: 'author', select: 'name username avatar profileImage profilePicture' }
+          })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .lean();
+        
+        // Transform shared posts for feed display
+        const transformedShares = sharedPosts.map(share => ({
+          _id: share._id,
+          contentType: 'shared',
+          isSharedPost: true,
+          sharedBy: share.user,
+          shareComment: share.comment,
+          shareVisibility: share.visibility,
+          sharedAt: share.createdAt,
+          reactions: share.reactions,
+          commentsCount: share.commentsCount,
+          // Original post data
+          originalPost: share.originalBlog,
+          title: share.originalBlog?.title,
+          content: share.originalBlog?.content,
+          excerpt: share.originalBlog?.excerpt,
+          featuredImage: share.originalBlog?.featuredImage,
+          images: share.originalBlog?.images,
+          author: share.originalBlog?.author,
+          originalAuthor: share.originalBlog?.author,
+          createdAt: share.createdAt,
+          originalCreatedAt: share.originalBlog?.createdAt,
+          readTime: share.originalBlog?.readTime,
+          views: share.originalBlog?.views,
+          tags: share.originalBlog?.tags
+        }));
+        
+        // Merge with existing feed
+        feed = [...feed, ...transformedShares];
+        
+        console.log(`📤 Added ${transformedShares.length} shared posts to feed`);
+      } catch (sharedError) {
+        console.log('SharedPosts fetch error:', sharedError.message);
       }
     }
     
