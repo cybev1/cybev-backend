@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 3.2.0 - December 31, 2024 Update
-// ADDED: Content routes for AI blog generation
+// VERSION: 3.3.0 - January 2, 2026 Update
+// ADDED: Share to Timeline routes
 // ============================================
 
 const express = require('express');
@@ -107,7 +107,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - CONTENT (AI BLOG GENERATION) - NEW!
+// ROUTES - CONTENT (AI BLOG GENERATION)
 // ==========================================
 
 try {
@@ -199,6 +199,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - SHARE (Timeline Sharing) - NEW!
+// ==========================================
+
+try {
+  const shareRoutes = require('./routes/share.routes');
+  app.use('/api/share', shareRoutes);
+  console.log('✅ Share routes loaded');
+} catch (err) {
+  console.log('⚠️ Share routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - MESSAGES
 // ==========================================
 
@@ -259,7 +271,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - PUSH NOTIFICATIONS (NEW)
+// ROUTES - PUSH NOTIFICATIONS
 // ==========================================
 
 try {
@@ -271,7 +283,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - MONETIZATION (NEW)
+// ROUTES - MONETIZATION
 // ==========================================
 
 try {
@@ -331,7 +343,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - ANALYTICS (NEW)
+// ROUTES - ANALYTICS
 // ==========================================
 
 try {
@@ -350,7 +362,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.2.0',
+    version: '3.3.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     features: [
@@ -359,7 +371,7 @@ app.get('/api/health', (req, res) => {
       'reactions', 'messages', 'live-streaming',
       'nft', 'staking', 'admin', 'wallet', 'upload',
       'push-notifications', 'monetization', 'analytics',
-      'content', 'ai-blog-generation'
+      'content', 'ai-blog-generation', 'share-to-timeline'
     ]
   });
 });
@@ -367,7 +379,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v3.2.0',
+    message: 'CYBEV API Server v3.3.0',
     documentation: '/api/health',
     status: 'running'
   });
@@ -453,12 +465,13 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v3.2.0           ║
+║         CYBEV API Server v3.3.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
 ║  🔌 Socket.IO: Enabled                    ║
 ║  🤖 AI Blog: Enabled                      ║
+║  📤 Share to Timeline: Enabled            ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
