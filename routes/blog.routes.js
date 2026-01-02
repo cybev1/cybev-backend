@@ -579,6 +579,55 @@ router.post('/:id/share', async (req, res) => {
   }
 });
 
+// POST /api/blogs/:id/view - Track view (PUBLIC)
+router.post('/:id/view', async (req, res) => {
+  try {
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'unknown';
+    const blogId = req.params.id;
+    
+    // Check if this IP recently viewed this blog
+    if (!shouldCountView(ip, blogId)) {
+      return res.json({
+        ok: true,
+        success: true,
+        counted: false,
+        message: 'View already counted recently'
+      });
+    }
+    
+    const blog = await Blog.findById(blogId);
+    
+    if (!blog) {
+      return res.status(404).json({ 
+        ok: false, 
+        success: false,
+        error: 'Blog not found' 
+      });
+    }
+    
+    // Increment view count
+    blog.views = (blog.views || 0) + 1;
+    await blog.save();
+    
+    console.log(`👁️ View tracked for blog: ${blog.title} (total: ${blog.views})`);
+    
+    res.json({
+      ok: true,
+      success: true,
+      counted: true,
+      views: blog.views,
+      message: 'View tracked successfully'
+    });
+  } catch (error) {
+    console.error('❌ View tracking error:', error);
+    res.status(500).json({ 
+      ok: false, 
+      success: false,
+      error: 'Failed to track view' 
+    });
+  }
+});
+
 // GET /api/blogs/:id/share-data - Get share data for a blog
 router.get('/:id/share-data', async (req, res) => {
   try {
