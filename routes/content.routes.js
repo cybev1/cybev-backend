@@ -6,8 +6,50 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
-const contentCreator = require('../services/content-creator.service');
-const verifyToken = require('../middleware/verifyToken');
+
+// Try to load content creator service
+let contentCreator;
+try {
+  contentCreator = require('../services/content-creator.service');
+} catch (error) {
+  console.log('⚠️ Content creator service error:', error.message);
+  // Create a fallback
+  contentCreator = {
+    createCompleteBlog: async () => {
+      throw new Error('AI service not available. Please contact support.');
+    }
+  };
+}
+
+// Try to load verifyToken middleware
+let verifyToken;
+try {
+  verifyToken = require('../middleware/verifyToken');
+} catch (e) {
+  try {
+    verifyToken = require('../middleware/auth.middleware');
+  } catch (e2) {
+    try {
+      verifyToken = require('../middleware/auth');
+    } catch (e3) {
+      // Fallback middleware
+      verifyToken = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+          return res.status(401).json({ error: 'No token provided' });
+        }
+        try {
+          const jwt = require('jsonwebtoken');
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+          req.user = decoded;
+          next();
+        } catch (err) {
+          return res.status(401).json({ error: 'Invalid token' });
+        }
+      };
+    }
+  }
+}
 
 // Blog model
 let Blog;
