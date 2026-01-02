@@ -28,8 +28,35 @@ try {
   console.log('User model not found');
 }
 
-// Auth middleware
-const verifyToken = require('../middleware/auth.middleware');
+// Auth middleware - try multiple paths
+let verifyToken;
+try {
+  verifyToken = require('../middleware/verifyToken');
+} catch (e) {
+  try {
+    verifyToken = require('../middleware/auth.middleware');
+  } catch (e2) {
+    try {
+      verifyToken = require('../middleware/auth');
+    } catch (e3) {
+      // Fallback middleware
+      verifyToken = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+          return res.status(401).json({ error: 'No token provided' });
+        }
+        try {
+          const jwt = require('jsonwebtoken');
+          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+          req.user = decoded;
+          next();
+        } catch (err) {
+          return res.status(401).json({ error: 'Invalid token' });
+        }
+      };
+    }
+  }
+}
 
 // Helper: Safe populate
 const safePopulate = async (query, populateOptions) => {
