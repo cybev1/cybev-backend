@@ -346,26 +346,48 @@ router.post('/', verifyToken, async (req, res) => {
   try {
     console.log('📝 Creating blog for user:', req.user.id);
     
+    // Get user's name for authorName field
+    let authorName = req.body.authorName;
+    if (!authorName) {
+      try {
+        const User = require('mongoose').model('User');
+        const user = await User.findById(req.user.id).select('name username');
+        authorName = user?.name || user?.username || 'Anonymous';
+      } catch (e) {
+        authorName = req.user.name || req.user.username || 'Anonymous';
+      }
+    }
+    
     const blog = new Blog({
       ...req.body,
-      author: req.user.id
+      author: req.user.id,
+      authorName: authorName
     });
     
     await blog.save();
-    await blog.populate('author', 'name username profilePicture');
+    
+    // Try to populate, but don't fail if it doesn't work
+    try {
+      await blog.populate('author', 'name username profilePicture');
+    } catch (e) {
+      console.log('Populate warning:', e.message);
+    }
     
     console.log('✅ Blog created:', blog._id);
     
     res.status(201).json({
       success: true,
       message: 'Blog created successfully',
-      blog
+      blog,
+      data: blog,
+      _id: blog._id
     });
   } catch (error) {
     console.error('❌ Error creating blog:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to create blog'
+      message: error.message || 'Failed to create blog',
+      error: error.message
     });
   }
 });
