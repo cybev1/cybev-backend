@@ -269,64 +269,88 @@ router.get('/suggestions', optionalAuth, async (req, res) => {
     const { limit = 5 } = req.query;
     
     let excludeIds = [];
-    let currentUserFollowing = [];
     
     if (req.user) {
       const currentUser = await User.findById(req.user.id).select('following');
-      currentUserFollowing = currentUser?.following?.map(id => id.toString()) || [];
-      excludeIds = [...currentUserFollowing, req.user.id];
+      const following = currentUser?.following?.map(id => id.toString()) || [];
+      excludeIds = [...following, req.user.id];
     }
     
-    // Find popular users to suggest (by followers count and content)
-    const suggestions = await User.aggregate([
-      // Exclude self and already following
-      { $match: { _id: { $nin: excludeIds.map(id => mongoose.Types.ObjectId(id)) } } },
-      
-      // Add score based on followers and activity
-      {
-        $addFields: {
-          score: {
-            $add: [
-              { $ifNull: ['$followersCount', 0] },
-              { $multiply: [{ $ifNull: ['$blogsCount', 0] }, 5] },
-              { $multiply: [{ $ifNull: ['$totalViews', 0] }, 0.01] }
-            ]
+    // Convert to ObjectIds safely
+    const excludeObjectIds = excludeIds
+      .filter(id => mongoose.Types.ObjectId.isValid(id))
+      .map(id => new mongoose.Types.ObjectId(id));
+    
+    // Find popular users to suggest
+    let suggestions = [];
+    
+    try {
+      suggestions = await User.aggregate([
+        // Exclude self and already following
+        { $match: excludeObjectIds.length > 0 ? { _id: { $nin: excludeObjectIds } } : {} },
+        
+        // Add score based on followers and activity
+        {
+          $addFields: {
+            score: {
+              $add: [
+                { $ifNull: ['$followersCount', 0] },
+                { $multiply: [{ $ifNull: ['$blogsCount', 0] }, 5] },
+                { $multiply: [{ $ifNull: ['$totalViews', 0] }, 0.01] }
+              ]
+            }
+          }
+        },
+        
+        // Sort by score
+        { $sort: { score: -1, createdAt: -1 } },
+        
+        // Limit
+        { $limit: parseInt(limit) },
+        
+        // Project fields
+        {
+          $project: {
+            name: 1,
+            username: 1,
+            profilePicture: 1,
+            avatar: 1,
+            bio: 1,
+            followersCount: 1,
+            blogsCount: 1,
+            verified: 1,
+            score: 1
           }
         }
-      },
-      
-      // Sort by score
-      { $sort: { score: -1 } },
-      
-      // Limit
-      { $limit: parseInt(limit) },
-      
-      // Project fields
-      {
-        $project: {
-          name: 1,
-          username: 1,
-          profilePicture: 1,
-          avatar: 1,
-          bio: 1,
-          followersCount: 1,
-          blogsCount: 1,
-          verified: 1,
-          score: 1
-        }
-      }
-    ]);
+      ]);
+    } catch (aggError) {
+      console.log('Aggregate error, falling back to simple query:', aggError.message);
+      // Fallback to simple query
+      suggestions = await User.find(
+        excludeObjectIds.length > 0 ? { _id: { $nin: excludeObjectIds } } : {}
+      )
+      .select('name username profilePicture avatar bio followersCount')
+      .sort({ followersCount: -1, createdAt: -1 })
+      .limit(parseInt(limit))
+      .lean();
+    }
     
-    // If not enough suggestions, get random active users
+    // If not enough suggestions, get recent users
     if (suggestions.length < parseInt(limit)) {
-      const additional = await User.find({
-        _id: { $nin: [...excludeIds, ...suggestions.map(s => s._id.toString())].map(id => mongoose.Types.ObjectId(id)) }
-      })
+      const existingIds = [...excludeIds, ...suggestions.map(s => s._id.toString())];
+      const validExistingIds = existingIds
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+      
+      const additional = await User.find(
+        validExistingIds.length > 0 ? { _id: { $nin: validExistingIds } } : {}
+      )
       .select('name username profilePicture avatar bio followersCount')
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit) - suggestions.length);
+      .limit(parseInt(limit) - suggestions.length)
+      .lean();
       
-      suggestions.push(...additional.map(u => u.toObject()));
+      suggestions.push(...additional);
     }
     
     res.json({
