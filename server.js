@@ -211,6 +211,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - VLOGS (Video Stories) - NEW!
+// ==========================================
+
+try {
+  const vlogRoutes = require('./routes/vlog.routes');
+  app.use('/api/vlogs', vlogRoutes);
+  console.log('✅ Vlog routes loaded');
+} catch (err) {
+  console.log('⚠️ Vlog routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - MESSAGES
 // ==========================================
 
@@ -362,7 +374,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.3.0',
+    version: '3.4.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     features: [
@@ -371,7 +383,8 @@ app.get('/api/health', (req, res) => {
       'reactions', 'messages', 'live-streaming',
       'nft', 'staking', 'admin', 'wallet', 'upload',
       'push-notifications', 'monetization', 'analytics',
-      'content', 'ai-blog-generation', 'share-to-timeline'
+      'content', 'ai-blog-generation', 'share-to-timeline',
+      'vlogs', 'follow-system', 'token-wallet'
     ]
   });
 });
