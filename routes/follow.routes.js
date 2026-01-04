@@ -176,10 +176,15 @@ router.get('/check/:userId', verifyToken, async (req, res) => {
       id => id.toString() === req.params.userId
     ) || false;
     
-    res.json({ success: true, following: isFollowing });
+    res.json({ 
+      success: true, 
+      following: isFollowing,
+      isFollowing: isFollowing  // Alias for compatibility
+    });
     
   } catch (error) {
-    res.status(500).json({ success: false, following: false });
+    console.error('Check follow error:', error);
+    res.status(500).json({ success: false, following: false, isFollowing: false });
   }
 });
 
