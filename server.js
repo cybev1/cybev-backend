@@ -2,8 +2,9 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 3.6.0 - January 4, 2026 Update
-// ADDED: Mux Live Streaming Integration
+// VERSION: 4.0.0 - January 4, 2026 Update
+// ADDED: Mux Webhooks for Recording Capture
+// ADDED: WebRTC Browser Streaming Support
 // ============================================
 
 const express = require('express');
@@ -29,13 +30,32 @@ app.set('io', io);
 global.io = io; // Also make globally available
 
 // ==========================================
-// MIDDLEWARE
+// CORS MIDDLEWARE (Before everything)
 // ==========================================
 
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*',
   credentials: true
 }));
+
+// ==========================================
+// CRITICAL: WEBHOOK ROUTES (BEFORE json middleware)
+// Mux webhooks require raw body for signature verification
+// ==========================================
+
+app.use('/api/webhooks/mux', express.raw({ type: 'application/json' }));
+
+try {
+  const webhookRoutes = require('./routes/webhooks.routes');
+  app.use('/api/webhooks', webhookRoutes);
+  console.log('✅ Webhook routes loaded (Mux recording capture)');
+} catch (err) {
+  console.log('⚠️ Webhook routes not found:', err.message);
+}
+
+// ==========================================
+// JSON MIDDLEWARE (After webhooks)
+// ==========================================
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
@@ -74,10 +94,18 @@ mongoose.connection.on('disconnected', () => console.log('📦 MongoDB disconnec
 // ==========================================
 
 const MUX_CONFIGURED = !!(process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET);
+const MUX_WEBHOOK_CONFIGURED = !!process.env.MUX_WEBHOOK_SECRET;
+
 if (MUX_CONFIGURED) {
   console.log('🎬 Mux Live Streaming: Configured');
 } else {
   console.log('⚠️ Mux Live Streaming: Not configured (set MUX_TOKEN_ID and MUX_TOKEN_SECRET)');
+}
+
+if (MUX_WEBHOOK_CONFIGURED) {
+  console.log('📼 Mux Recording Capture: Configured');
+} else {
+  console.log('⚠️ Mux Recording Capture: Not configured (set MUX_WEBHOOK_SECRET)');
 }
 
 // ==========================================
@@ -266,7 +294,7 @@ try {
   app.use('/api/webrtc', webrtcRouter);
   // Initialize WebRTC signaling with Socket.IO
   initializeWebRTC(io);
-  console.log('✅ WebRTC routes loaded');
+  console.log('✅ WebRTC routes loaded (browser streaming)');
 } catch (err) {
   console.log('⚠️ WebRTC routes not found:', err.message);
 }
@@ -423,10 +451,11 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.6.0',
+    version: '4.0.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
+    muxWebhooks: MUX_WEBHOOK_CONFIGURED ? 'configured' : 'not configured',
     features: [
       'auth', 'users', 'blogs', 'posts', 'feed',
       'comments', 'bookmarks', 'notifications',
@@ -436,7 +465,7 @@ app.get('/api/health', (req, res) => {
       'content', 'ai-blog-generation', 'share-to-timeline',
       'vlogs', 'follow-system', 'token-wallet', 'groups',
       'marketplace', 'group-moderation', 'profile-editing',
-      'mux-streaming'
+      'mux-streaming', 'mux-recording-capture', 'webrtc-streaming'
     ]
   });
 });
@@ -444,10 +473,11 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v3.6.0',
+    message: 'CYBEV API Server v4.0.0',
     documentation: '/api/health',
     status: 'running',
-    mux: MUX_CONFIGURED ? 'enabled' : 'disabled'
+    mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
+    webhooks: MUX_WEBHOOK_CONFIGURED ? 'enabled' : 'disabled'
   });
 });
 
@@ -539,7 +569,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v3.6.0           ║
+║         CYBEV API Server v4.0.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -547,6 +577,7 @@ server.listen(PORT, () => {
 ║  🤖 AI Blog: Enabled                      ║
 ║  📤 Share to Timeline: Enabled            ║
 ║  🎬 Mux Streaming: ${MUX_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
+║  📼 Mux Recording: ${MUX_WEBHOOK_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
