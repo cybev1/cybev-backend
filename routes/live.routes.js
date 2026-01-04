@@ -89,6 +89,10 @@ const liveStreamSchema = new mongoose.Schema({
   autoDeleteAfterDays: { type: Number, default: 30 },
   deleteScheduledAt: Date,
   
+  // Persistent key support
+  isPersistentKey: { type: Boolean, default: false },
+  privacy: { type: String, enum: ['public', 'followers', 'private'], default: 'public' },
+  
   // Feed post
   feedPostId: { type: mongoose.Schema.Types.ObjectId, ref: 'Blog' },
   
@@ -104,6 +108,291 @@ const liveStreamSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const LiveStream = mongoose.models.LiveStream || mongoose.model('LiveStream', liveStreamSchema);
+
+// ==========================================
+// POST /api/live/create-stream-key - Create stream key without going live
+// ==========================================
+router.post('/create-stream-key', verifyToken, async (req, res) => {
+  try {
+    const { persistent, title, description } = req.body;
+    const userId = req.user.id || req.user._id;
+    
+    // Check for existing preparing stream
+    const existingPreparing = await LiveStream.findOne({
+      streamer: userId,
+      status: 'preparing'
+    });
+    
+    if (existingPreparing) {
+      // Return existing stream key
+      return res.json({
+        success: true,
+        streamKey: existingPreparing.muxStreamKey,
+        rtmpUrl: existingPreparing.muxRtmpUrl || 'rtmps://global-live.mux.com:443/app',
+        playbackId: existingPreparing.muxPlaybackId,
+        muxStreamId: existingPreparing.muxStreamId,
+        streamId: existingPreparing._id,
+        message: 'Using existing stream key'
+      });
+    }
+    
+    // Create Mux live stream
+    let muxData = null;
+    if (muxService && muxService.isAvailable()) {
+      muxData = await muxService.createLiveStream({ lowLatency: true });
+      if (!muxData.success) {
+        console.log('⚠️ Mux stream creation failed:', muxData.error);
+        return res.status(500).json({ success: false, error: 'Failed to create stream key' });
+      }
+    } else {
+      return res.status(500).json({ success: false, error: 'Streaming service not configured' });
+    }
+    
+    // Create stream record in "preparing" status
+    const stream = new LiveStream({
+      streamer: userId,
+      title: title || 'Untitled Stream',
+      description,
+      streamType: 'mux',
+      
+      // Mux details
+      muxStreamId: muxData.streamId,
+      muxStreamKey: muxData.streamKey,
+      muxPlaybackId: muxData.playbackId,
+      muxRtmpUrl: muxData.rtmpUrl,
+      
+      status: 'preparing',
+      isPersistentKey: persistent || false
+    });
+    
+    await stream.save();
+    
+    console.log(`🔑 Stream key created for user ${userId}: ${stream._id}`);
+    
+    res.json({
+      success: true,
+      streamKey: muxData.streamKey,
+      rtmpUrl: muxData.rtmpUrl,
+      playbackId: muxData.playbackId,
+      muxStreamId: muxData.streamId,
+      streamId: stream._id,
+      message: 'Stream key generated successfully'
+    });
+    
+  } catch (error) {
+    console.error('Create stream key error:', error);
+    res.status(500).json({ success: false, error: 'Failed to create stream key' });
+  }
+});
+
+// ==========================================
+// GET /api/live/stream-key - Get user's persistent stream key
+// ==========================================
+router.get('/stream-key', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    // Find persistent key or most recent preparing stream
+    const stream = await LiveStream.findOne({
+      streamer: userId,
+      $or: [
+        { isPersistentKey: true },
+        { status: 'preparing' }
+      ]
+    }).sort({ createdAt: -1 });
+    
+    if (stream && stream.muxStreamKey) {
+      res.json({
+        success: true,
+        streamKey: stream.muxStreamKey,
+        rtmpUrl: stream.muxRtmpUrl || 'rtmps://global-live.mux.com:443/app',
+        playbackId: stream.muxPlaybackId,
+        muxStreamId: stream.muxStreamId,
+        streamId: stream._id,
+        isPersistent: stream.isPersistentKey
+      });
+    } else {
+      res.json({ success: false, message: 'No stream key found' });
+    }
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to get stream key' });
+  }
+});
+
+// ==========================================
+// GET /api/live/check-stream/:muxStreamId - Check if OBS is streaming
+// ==========================================
+router.get('/check-stream/:muxStreamId', verifyToken, async (req, res) => {
+  try {
+    const { muxStreamId } = req.params;
+    
+    if (!muxService || !muxService.isAvailable()) {
+      return res.json({ success: false, status: 'unknown', error: 'Mux not configured' });
+    }
+    
+    const status = await muxService.getLiveStreamStatus(muxStreamId);
+    
+    if (status.success) {
+      res.json({
+        success: true,
+        status: status.status, // 'idle', 'active', 'disabled'
+        isStreaming: status.status === 'active',
+        playbackId: status.playbackId
+      });
+    } else {
+      res.json({ success: false, status: 'unknown', error: status.error });
+    }
+    
+  } catch (error) {
+    console.error('Check stream error:', error);
+    res.status(500).json({ success: false, error: 'Failed to check stream status' });
+  }
+});
+
+// ==========================================
+// POST /api/live/:id/go-live - Activate a preparing stream
+// ==========================================
+router.post('/:id/go-live', verifyToken, async (req, res) => {
+  try {
+    const { title, description, privacy } = req.body;
+    const userId = req.user.id || req.user._id;
+    
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    if (stream.streamer.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    
+    if (stream.status !== 'preparing') {
+      return res.status(400).json({ success: false, error: 'Stream is not in preparing state' });
+    }
+    
+    // Update stream to live
+    stream.status = 'live';
+    stream.startedAt = new Date();
+    stream.title = title || stream.title;
+    stream.description = description || stream.description;
+    stream.privacy = privacy || 'public';
+    
+    await stream.save();
+    
+    // Create feed post for the live stream
+    try {
+      let Blog, User;
+      try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      
+      const user = await User.findById(userId).select('name username');
+      const authorName = user?.name || user?.username || 'Anonymous';
+      
+      const feedPost = new Blog({
+        author: userId,
+        authorId: userId,
+        authorName: authorName,
+        title: `🔴 LIVE: ${stream.title}`,
+        content: stream.description || 'I am now live! Join me!',
+        contentType: 'live',
+        liveStreamId: stream._id,
+        visibility: 'public',
+        isLive: true
+      });
+      
+      await feedPost.save();
+      stream.feedPostId = feedPost._id;
+      await stream.save();
+      
+      console.log(`📺 Live stream posted to feed: ${feedPost._id}`);
+    } catch (postError) {
+      console.log('Could not create feed post:', postError.message);
+    }
+    
+    // Notify followers
+    try {
+      let User, Notification;
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      try { Notification = require('../models/notification.model'); } catch { Notification = mongoose.model('Notification'); }
+      
+      const user = await User.findById(userId).select('followers name username');
+      
+      if (user?.followers?.length > 0) {
+        const notifications = user.followers.slice(0, 100).map(followerId => ({
+          recipient: followerId,
+          sender: userId,
+          type: 'live_started',
+          message: `${user.name || user.username} started a live stream: ${stream.title}`,
+          data: { streamId: stream._id },
+          isRead: false
+        }));
+        
+        await Notification.insertMany(notifications);
+        console.log(`🔔 Notified ${notifications.length} followers about live stream`);
+      }
+    } catch (notifyError) {
+      console.log('Could not notify followers:', notifyError.message);
+    }
+    
+    await stream.populate('streamer', 'name username profilePicture');
+    
+    console.log(`🔴 Stream went live: ${stream._id}`);
+    
+    res.json({
+      success: true,
+      stream,
+      message: 'You are now LIVE!'
+    });
+    
+  } catch (error) {
+    console.error('Go live error:', error);
+    res.status(500).json({ success: false, error: 'Failed to go live' });
+  }
+});
+
+// ==========================================
+// POST /api/live/:id/cancel - Cancel a preparing stream
+// ==========================================
+router.post('/:id/cancel', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    if (stream.streamer.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    
+    // Delete Mux stream if exists
+    if (stream.muxStreamId && muxService && muxService.isAvailable()) {
+      try {
+        await muxService.deleteLiveStream(stream.muxStreamId);
+      } catch (e) {
+        console.log('Could not delete Mux stream:', e.message);
+      }
+    }
+    
+    // Remove the stream record
+    await LiveStream.findByIdAndDelete(req.params.id);
+    
+    console.log(`🗑️ Stream cancelled: ${req.params.id}`);
+    
+    res.json({
+      success: true,
+      message: 'Stream cancelled'
+    });
+    
+  } catch (error) {
+    console.error('Cancel stream error:', error);
+    res.status(500).json({ success: false, error: 'Failed to cancel stream' });
+  }
+});
 
 // ==========================================
 // POST /api/live/start - Start a live stream with Mux
@@ -658,6 +947,259 @@ router.post('/:id/comment', verifyToken, async (req, res) => {
     
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to add comment' });
+  }
+});
+
+// ==========================================
+// POST /api/live/generate-key - Generate stream credentials for OBS
+// Creates Mux stream but doesn't make it public yet
+// ==========================================
+router.post('/generate-key', verifyToken, async (req, res) => {
+  try {
+    const { keyType, title } = req.body;
+    const userId = req.user.id || req.user._id;
+    
+    // Check for existing preparing stream
+    let existingStream = await LiveStream.findOne({
+      streamer: userId,
+      status: 'preparing'
+    });
+    
+    if (existingStream && existingStream.muxStreamKey) {
+      // Return existing credentials
+      return res.json({
+        success: true,
+        streamKey: existingStream.muxStreamKey,
+        rtmpUrl: existingStream.muxRtmpUrl || 'rtmps://global-live.mux.com:443/app',
+        playbackId: existingStream.muxPlaybackId,
+        muxStreamId: existingStream.muxStreamId,
+        streamId: existingStream._id,
+        message: 'Existing credentials returned'
+      });
+    }
+    
+    // Create Mux live stream
+    let muxData = null;
+    if (muxService && muxService.isAvailable()) {
+      muxData = await muxService.createLiveStream({ lowLatency: true });
+      if (!muxData.success) {
+        console.log('⚠️ Mux stream creation failed:', muxData.error);
+        return res.status(500).json({ success: false, error: 'Failed to create stream credentials' });
+      }
+    } else {
+      return res.status(500).json({ success: false, error: 'Streaming service not configured' });
+    }
+    
+    // Create stream record in "preparing" status
+    const stream = new LiveStream({
+      streamer: userId,
+      title: title || 'My Stream',
+      streamType: 'mux',
+      status: 'preparing', // Not live yet
+      
+      // Mux details
+      muxStreamId: muxData.streamId,
+      muxStreamKey: muxData.streamKey,
+      muxPlaybackId: muxData.playbackId,
+      muxRtmpUrl: muxData.rtmpUrl,
+      
+      isActive: true
+    });
+    
+    await stream.save();
+    
+    console.log(`🔑 Stream credentials generated for user ${userId}: ${stream._id}`);
+    
+    res.json({
+      success: true,
+      streamKey: muxData.streamKey,
+      rtmpUrl: muxData.rtmpUrl,
+      playbackId: muxData.playbackId,
+      muxStreamId: muxData.streamId,
+      streamId: stream._id,
+      message: 'Stream credentials generated'
+    });
+    
+  } catch (error) {
+    console.error('Generate key error:', error);
+    res.status(500).json({ success: false, error: 'Failed to generate stream credentials' });
+  }
+});
+
+// ==========================================
+// GET /api/live/check-connection/:muxStreamId - Check if OBS is connected
+// ==========================================
+router.get('/check-connection/:muxStreamId', verifyToken, async (req, res) => {
+  try {
+    const { muxStreamId } = req.params;
+    
+    if (!muxService || !muxService.isAvailable()) {
+      return res.status(500).json({ success: false, error: 'Streaming service not available' });
+    }
+    
+    const statusResult = await muxService.getLiveStreamStatus(muxStreamId);
+    
+    if (!statusResult.success) {
+      return res.json({ 
+        success: true, 
+        connected: false, 
+        status: 'idle',
+        message: 'Could not check status'
+      });
+    }
+    
+    // Mux stream status: 'idle' (not receiving), 'active' (receiving data), 'disabled'
+    const isConnected = statusResult.status === 'active';
+    
+    console.log(`📡 Connection check for ${muxStreamId}: ${statusResult.status}`);
+    
+    res.json({
+      success: true,
+      connected: isConnected,
+      status: statusResult.status,
+      playbackId: statusResult.playbackId
+    });
+    
+  } catch (error) {
+    console.error('Check connection error:', error);
+    res.json({ success: true, connected: false, status: 'error' });
+  }
+});
+
+// ==========================================
+// POST /api/live/:id/activate - Activate stream (make public)
+// Called after OBS is connected and user clicks "Go Live"
+// ==========================================
+router.post('/:id/activate', verifyToken, async (req, res) => {
+  try {
+    const { title, description, privacy } = req.body;
+    const userId = req.user.id || req.user._id;
+    
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    if (stream.streamer.toString() !== userId.toString()) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    
+    if (stream.status === 'live') {
+      return res.json({ success: true, stream, message: 'Stream already live' });
+    }
+    
+    // Update stream to live
+    stream.status = 'live';
+    stream.startedAt = new Date();
+    if (title) stream.title = title;
+    if (description !== undefined) stream.description = description;
+    if (privacy) stream.privacy = privacy;
+    
+    await stream.save();
+    
+    // Create feed post for the live stream
+    try {
+      let Blog, User;
+      try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      
+      const user = await User.findById(userId).select('name username');
+      const authorName = user?.name || user?.username || 'Anonymous';
+      
+      const feedPost = new Blog({
+        author: userId,
+        authorId: userId,
+        authorName: authorName,
+        title: `🔴 LIVE: ${stream.title}`,
+        content: stream.description || 'I am now live! Join me!',
+        contentType: 'live',
+        liveStreamId: stream._id,
+        visibility: privacy || 'public',
+        isLive: true
+      });
+      
+      await feedPost.save();
+      stream.feedPostId = feedPost._id;
+      await stream.save();
+      
+      console.log(`📺 Live stream posted to feed: ${feedPost._id}`);
+    } catch (postError) {
+      console.log('Could not create feed post:', postError.message);
+    }
+    
+    // Notify followers
+    try {
+      let User, Notification;
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      try { Notification = require('../models/notification.model'); } catch { Notification = mongoose.model('Notification'); }
+      
+      const user = await User.findById(userId).select('followers name username');
+      
+      if (user?.followers?.length > 0) {
+        const notifications = user.followers.slice(0, 100).map(followerId => ({
+          recipient: followerId,
+          sender: userId,
+          type: 'live_started',
+          message: `${user.name || user.username} started a live stream: ${stream.title}`,
+          data: { streamId: stream._id },
+          isRead: false
+        }));
+        
+        await Notification.insertMany(notifications);
+        console.log(`🔔 Notified ${notifications.length} followers about live stream`);
+      }
+    } catch (notifyError) {
+      console.log('Could not notify followers:', notifyError.message);
+    }
+    
+    await stream.populate('streamer', 'name username profilePicture');
+    
+    console.log(`🔴 Stream activated: ${stream._id} - ${stream.title}`);
+    
+    res.json({
+      success: true,
+      stream,
+      message: 'Stream is now live!'
+    });
+    
+  } catch (error) {
+    console.error('Activate stream error:', error);
+    res.status(500).json({ success: false, error: 'Failed to activate stream' });
+  }
+});
+
+// ==========================================
+// GET /api/live/stream-key - Get persistent stream key
+// ==========================================
+router.get('/stream-key', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    // Find preparing stream with credentials
+    const stream = await LiveStream.findOne({
+      streamer: userId,
+      status: 'preparing',
+      muxStreamKey: { $exists: true, $ne: null }
+    });
+    
+    if (!stream) {
+      return res.json({ success: true, credentials: null });
+    }
+    
+    res.json({
+      success: true,
+      credentials: {
+        streamKey: stream.muxStreamKey,
+        rtmpUrl: stream.muxRtmpUrl || 'rtmps://global-live.mux.com:443/app',
+        playbackId: stream.muxPlaybackId,
+        muxStreamId: stream.muxStreamId,
+        streamId: stream._id
+      }
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch stream key' });
   }
 });
 
