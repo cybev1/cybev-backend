@@ -254,6 +254,66 @@ router.post('/:id/end', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// POST /api/live/cleanup - End all user's active streams
+// ==========================================
+router.post('/cleanup', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    // Find and end all active streams for this user
+    const result = await LiveStream.updateMany(
+      { streamer: userId, status: 'live' },
+      { status: 'saved', endedAt: new Date() }
+    );
+    
+    // Also update any feed posts
+    try {
+      let Blog;
+      try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+      await Blog.updateMany(
+        { author: userId, isLive: true },
+        { isLive: false }
+      );
+    } catch {}
+    
+    console.log(`🧹 Cleaned up ${result.modifiedCount} streams for user ${userId}`);
+    
+    res.json({
+      success: true,
+      cleaned: result.modifiedCount,
+      message: `Ended ${result.modifiedCount} active streams`
+    });
+    
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({ success: false, error: 'Failed to cleanup streams' });
+  }
+});
+
+// ==========================================
+// GET /api/live/my-stream - Get user's current active stream
+// ==========================================
+router.get('/my-stream', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    const stream = await LiveStream.findOne({
+      streamer: userId,
+      status: 'live'
+    }).populate('streamer', 'name username profilePicture');
+    
+    res.json({
+      success: true,
+      stream,
+      hasActiveStream: !!stream
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch stream' });
+  }
+});
+
+// ==========================================
 // GET /api/live/active - Get active live streams
 // ==========================================
 router.get('/active', optionalAuth, async (req, res) => {
