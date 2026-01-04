@@ -1,597 +1,523 @@
 // ============================================
 // FILE: routes/live.routes.js
-// PATH: cybev-backend/routes/live.routes.js
-// PURPOSE: Live streaming backend routes
+// Live Streaming API Routes
+// Features: RTMP, embed, notifications, auto-save
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
-const verifyToken = require('../middleware/verifyToken');
 
-// ==========================================
-// STREAM SCHEMA
-// ==========================================
-
-let Stream;
-
+// Auth middleware
+let verifyToken;
 try {
-  Stream = mongoose.model('Stream');
-} catch {
-  const streamSchema = new mongoose.Schema({
-    streamer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    title: { type: String, required: true },
-    description: String,
-    category: { type: String, default: 'Just Chatting' },
-    thumbnail: String,
-    streamKey: { type: String, unique: true },
-    playbackUrl: String,
-    status: { type: String, enum: ['idle', 'live', 'ended'], default: 'idle' },
-    isPrivate: { type: Boolean, default: false },
-    allowChat: { type: Boolean, default: true },
-    allowTips: { type: Boolean, default: true },
-    viewerCount: { type: Number, default: 0 },
-    peakViewers: { type: Number, default: 0 },
-    totalViews: { type: Number, default: 0 },
-    likes: { type: Number, default: 0 },
-    likedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    tips: [{
-      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      amount: Number,
-      message: String,
-      createdAt: { type: Date, default: Date.now }
-    }],
-    totalTips: { type: Number, default: 0 },
-    startedAt: Date,
-    endedAt: Date,
-    duration: Number, // in seconds
-    chatMessages: [{
-      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-      text: String,
-      createdAt: { type: Date, default: Date.now }
-    }],
-    blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    moderators: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }]
-  }, { timestamps: true });
-
-  streamSchema.index({ streamer: 1, status: 1 });
-  streamSchema.index({ status: 1, startedAt: -1 });
-  streamSchema.index({ category: 1 });
-  
-  Stream = mongoose.model('Stream', streamSchema);
+  verifyToken = require('../middleware/verifyToken');
+} catch (e) {
+  try { verifyToken = require('../middleware/auth.middleware'); } catch (e2) {
+    try { verifyToken = require('../middleware/auth'); } catch (e3) {
+      verifyToken = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ error: 'No token' });
+        try {
+          const jwt = require('jsonwebtoken');
+          req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+          next();
+        } catch { return res.status(401).json({ error: 'Invalid token' }); }
+      };
+    }
+  }
 }
 
-// Generate unique stream key
-const generateStreamKey = () => {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let key = 'live_';
-  for (let i = 0; i < 24; i++) {
-    key += chars.charAt(Math.floor(Math.random() * chars.length));
+const optionalAuth = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (token) {
+    try {
+      const jwt = require('jsonwebtoken');
+      req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+    } catch {}
   }
-  return key;
+  next();
 };
 
+// Live Stream Schema
+const liveStreamSchema = new mongoose.Schema({
+  streamer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  title: { type: String, default: 'Live Stream' },
+  description: String,
+  thumbnail: String,
+  
+  // Stream type
+  streamType: { type: String, enum: ['camera', 'rtmp', 'embed'], default: 'camera' },
+  rtmpUrl: String,
+  rtmpKey: String,
+  embedUrl: String, // For Facebook Live, YouTube Live, etc.
+  embedPlatform: String, // 'facebook', 'youtube', 'twitch', etc.
+  
+  // Status
+  status: { type: String, enum: ['preparing', 'live', 'ended', 'saved'], default: 'preparing' },
+  startedAt: Date,
+  endedAt: Date,
+  
+  // Viewers
+  viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  peakViewers: { type: Number, default: 0 },
+  totalViews: { type: Number, default: 0 },
+  
+  // Admin features
+  isPinned: { type: Boolean, default: false },
+  pinnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  pinnedAt: Date,
+  
+  // Recording
+  recordingUrl: String,
+  isRecordingEnabled: { type: Boolean, default: true },
+  autoDeleteAfterDays: { type: Number, default: 30 },
+  deleteScheduledAt: Date,
+  
+  // Feed post
+  feedPostId: { type: mongoose.Schema.Types.ObjectId, ref: 'Blog' },
+  
+  // Engagement
+  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  comments: [{
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    content: String,
+    createdAt: { type: Date, default: Date.now }
+  }],
+  
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
+
+const LiveStream = mongoose.models.LiveStream || mongoose.model('LiveStream', liveStreamSchema);
+
 // ==========================================
-// STREAM MANAGEMENT
+// POST /api/live/start - Start a live stream
 // ==========================================
-
-// GET /api/live/streams - Get all live streams
-router.get('/streams', async (req, res) => {
-  try {
-    const { category, limit = 20, page = 1 } = req.query;
-
-    const query = { status: 'live' };
-    if (category && category !== 'all') {
-      query.category = category;
-    }
-
-    const streams = await Stream.find(query)
-      .populate('streamer', 'name username avatar followers')
-      .sort({ viewerCount: -1, startedAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    const total = await Stream.countDocuments(query);
-
-    res.json({
-      ok: true,
-      streams,
-      total,
-      page: parseInt(page),
-      hasMore: streams.length === parseInt(limit)
-    });
-  } catch (error) {
-    console.error('Get streams error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get streams' });
-  }
-});
-
-// GET /api/live/featured - Get featured streams
-router.get('/featured', async (req, res) => {
-  try {
-    const streams = await Stream.find({ status: 'live' })
-      .populate('streamer', 'name username avatar followers')
-      .sort({ viewerCount: -1 })
-      .limit(5);
-
-    res.json({ ok: true, streams });
-  } catch (error) {
-    console.error('Get featured error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get featured streams' });
-  }
-});
-
-// GET /api/live/:streamId - Get single stream
-router.get('/:streamId', async (req, res) => {
-  try {
-    const { streamId } = req.params;
-
-    const stream = await Stream.findById(streamId)
-      .populate('streamer', 'name username avatar followers bio')
-      .populate('chatMessages.user', 'name username avatar');
-
-    if (!stream) {
-      return res.status(404).json({ ok: false, error: 'Stream not found' });
-    }
-
-    // Increment view count
-    stream.totalViews += 1;
-    if (stream.status === 'live') {
-      stream.viewerCount += 1;
-      if (stream.viewerCount > stream.peakViewers) {
-        stream.peakViewers = stream.viewerCount;
-      }
-    }
-    await stream.save();
-
-    res.json({ ok: true, stream });
-  } catch (error) {
-    console.error('Get stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get stream' });
-  }
-});
-
-// POST /api/live/start - Start a new stream
 router.post('/start', verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { title, description, category, isPrivate, allowChat, allowTips } = req.body;
-
-    if (!title) {
-      return res.status(400).json({ ok: false, error: 'Stream title required' });
-    }
-
-    // Check if user already has an active stream
-    const existingStream = await Stream.findOne({
-      streamer: userId,
-      status: 'live'
+    const { title, description, streamType, rtmpUrl, embedUrl, embedPlatform, thumbnail } = req.body;
+    
+    // Check for existing live stream
+    const existingStream = await LiveStream.findOne({ 
+      streamer: req.user.id, 
+      status: 'live' 
     });
-
+    
     if (existingStream) {
       return res.status(400).json({ 
-        ok: false, 
-        error: 'You already have an active stream',
-        streamId: existingStream._id
+        success: false, 
+        error: 'You already have an active stream' 
       });
     }
-
-    // Create new stream
-    const streamKey = generateStreamKey();
-    const stream = await Stream.create({
-      streamer: userId,
-      title,
-      description: description || '',
-      category: category || 'Just Chatting',
-      streamKey,
-      isPrivate: isPrivate || false,
-      allowChat: allowChat !== false,
-      allowTips: allowTips !== false,
+    
+    // Generate RTMP key if using RTMP
+    const rtmpKey = streamType === 'rtmp' ? `sk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` : null;
+    
+    // Create stream
+    const stream = new LiveStream({
+      streamer: req.user.id,
+      title: title || 'Live Stream',
+      description,
+      thumbnail,
+      streamType: streamType || 'camera',
+      rtmpUrl: streamType === 'rtmp' ? (rtmpUrl || 'rtmp://live.cybev.io/live') : null,
+      rtmpKey,
+      embedUrl: streamType === 'embed' ? embedUrl : null,
+      embedPlatform: streamType === 'embed' ? embedPlatform : null,
       status: 'live',
-      startedAt: new Date()
+      startedAt: new Date(),
+      deleteScheduledAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
     });
-
-    const populatedStream = await Stream.findById(stream._id)
-      .populate('streamer', 'name username avatar');
-
-    // Notify followers (in production)
+    
+    await stream.save();
+    
+    // Create feed post for the live stream
     try {
-      const User = mongoose.model('User');
-      const streamer = await User.findById(userId).select('followers name');
-      const Notification = mongoose.model('Notification');
-
-      if (streamer?.followers?.length > 0) {
-        // Create notifications for followers (limit to first 100)
-        const notificationPromises = streamer.followers.slice(0, 100).map(followerId =>
-          Notification.create({
-            recipient: followerId,
-            sender: userId,
-            type: 'live',
-            message: `${streamer.name} started a live stream!`,
-            relatedStream: stream._id
-          }).catch(() => null)
-        );
-        await Promise.all(notificationPromises);
-      }
-    } catch (notifError) {
-      console.log('Notification creation failed:', notifError.message);
+      let Blog;
+      try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+      
+      const feedPost = new Blog({
+        author: req.user.id,
+        title: `🔴 LIVE: ${title || 'Live Stream'}`,
+        content: description || 'I am now live! Join me!',
+        contentType: 'live',
+        liveStreamId: stream._id,
+        visibility: 'public',
+        isLive: true
+      });
+      
+      await feedPost.save();
+      stream.feedPostId = feedPost._id;
+      await stream.save();
+      
+      console.log(`📺 Live stream posted to feed: ${feedPost._id}`);
+    } catch (postError) {
+      console.log('Could not create feed post:', postError.message);
     }
-
-    res.json({
-      ok: true,
-      stream: populatedStream,
-      streamKey,
-      streamId: stream._id
+    
+    // Notify followers
+    try {
+      let User, Notification;
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      try { Notification = require('../models/notification.model'); } catch { Notification = mongoose.model('Notification'); }
+      
+      // Get user with followers
+      const user = await User.findById(req.user.id).select('followers name username');
+      
+      if (user?.followers?.length > 0) {
+        // Create notifications for followers
+        const notifications = user.followers.slice(0, 100).map(followerId => ({
+          recipient: followerId,
+          sender: req.user.id,
+          type: 'live_started',
+          message: `${user.name || user.username} started a live stream: ${title || 'Live Stream'}`,
+          data: { streamId: stream._id },
+          isRead: false
+        }));
+        
+        await Notification.insertMany(notifications);
+        console.log(`🔔 Notified ${notifications.length} followers about live stream`);
+      }
+    } catch (notifyError) {
+      console.log('Could not notify followers:', notifyError.message);
+    }
+    
+    await stream.populate('streamer', 'name username profilePicture');
+    
+    res.status(201).json({
+      success: true,
+      stream,
+      rtmpKey,
+      rtmpUrl: streamType === 'rtmp' ? 'rtmp://live.cybev.io/live' : null,
+      message: 'Stream started successfully'
     });
+    
   } catch (error) {
     console.error('Start stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to start stream' });
+    res.status(500).json({ success: false, error: 'Failed to start stream' });
   }
 });
 
-// POST /api/live/:streamId/end - End a stream
-router.post('/:streamId/end', verifyToken, async (req, res) => {
+// ==========================================
+// POST /api/live/:id/end - End a live stream
+// ==========================================
+router.post('/:id/end', verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { streamId } = req.params;
-
-    const stream = await Stream.findOne({
-      _id: streamId,
-      streamer: userId
-    });
-
+    const stream = await LiveStream.findById(req.params.id);
+    
     if (!stream) {
-      return res.status(404).json({ ok: false, error: 'Stream not found or not authorized' });
+      return res.status(404).json({ success: false, error: 'Stream not found' });
     }
-
-    if (stream.status !== 'live') {
-      return res.status(400).json({ ok: false, error: 'Stream is not live' });
+    
+    if (stream.streamer.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
     }
-
-    stream.status = 'ended';
+    
+    stream.status = 'saved';
     stream.endedAt = new Date();
-    stream.duration = Math.floor((stream.endedAt - stream.startedAt) / 1000);
-    stream.viewerCount = 0;
     await stream.save();
-
+    
+    // Update feed post
+    if (stream.feedPostId) {
+      try {
+        let Blog;
+        try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+        await Blog.findByIdAndUpdate(stream.feedPostId, { isLive: false });
+      } catch {}
+    }
+    
     res.json({
-      ok: true,
-      message: 'Stream ended',
-      stats: {
-        duration: stream.duration,
-        peakViewers: stream.peakViewers,
-        totalViews: stream.totalViews,
-        totalTips: stream.totalTips,
-        likes: stream.likes
+      success: true,
+      stream,
+      message: 'Stream ended and saved'
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to end stream' });
+  }
+});
+
+// ==========================================
+// GET /api/live/active - Get active live streams
+// ==========================================
+router.get('/active', optionalAuth, async (req, res) => {
+  try {
+    const streams = await LiveStream.find({ 
+      status: 'live',
+      isActive: true 
+    })
+    .populate('streamer', 'name username profilePicture isAdmin role')
+    .sort({ isPinned: -1, peakViewers: -1, startedAt: -1 })
+    .lean();
+    
+    // Mark admin streams
+    const processedStreams = streams.map(s => ({
+      ...s,
+      isAdminStream: s.streamer?.isAdmin || s.streamer?.role === 'admin',
+      viewers: s.viewers?.length || 0
+    }));
+    
+    res.json({ success: true, streams: processedStreams });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch streams' });
+  }
+});
+
+// ==========================================
+// GET /api/live/saved - Get saved streams (recordings)
+// ==========================================
+router.get('/saved', optionalAuth, async (req, res) => {
+  try {
+    const { userId, limit = 20, page = 1 } = req.query;
+    
+    const query = { status: 'saved', isActive: true };
+    if (userId) query.streamer = userId;
+    
+    const streams = await LiveStream.find(query)
+      .populate('streamer', 'name username profilePicture')
+      .sort({ endedAt: -1 })
+      .skip((parseInt(page) - 1) * parseInt(limit))
+      .limit(parseInt(limit))
+      .lean();
+    
+    res.json({ success: true, streams });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to fetch recordings' });
+  }
+});
+
+// ==========================================
+// GET /api/live/:id - Get stream details
+// ==========================================
+router.get('/:id', optionalAuth, async (req, res) => {
+  try {
+    const stream = await LiveStream.findById(req.params.id)
+      .populate('streamer', 'name username profilePicture isAdmin')
+      .populate('comments.user', 'name username profilePicture')
+      .lean();
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    // Increment views
+    await LiveStream.findByIdAndUpdate(req.params.id, { $inc: { totalViews: 1 } });
+    
+    res.json({ 
+      success: true, 
+      stream: {
+        ...stream,
+        viewers: stream.viewers?.length || 0,
+        likesCount: stream.likes?.length || 0
       }
     });
+    
   } catch (error) {
-    console.error('End stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to end stream' });
+    res.status(500).json({ success: false, error: 'Failed to fetch stream' });
   }
 });
 
-// PUT /api/live/:streamId - Update stream settings
-router.put('/:streamId', verifyToken, async (req, res) => {
+// ==========================================
+// POST /api/live/:id/join - Join as viewer
+// ==========================================
+router.post('/:id/join', optionalAuth, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { streamId } = req.params;
-    const { title, description, category, isPrivate, allowChat, allowTips } = req.body;
-
-    const stream = await Stream.findOne({
-      _id: streamId,
-      streamer: userId
-    });
-
-    if (!stream) {
-      return res.status(404).json({ ok: false, error: 'Stream not found or not authorized' });
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream || stream.status !== 'live') {
+      return res.status(404).json({ success: false, error: 'Stream not available' });
     }
+    
+    if (req.user && !stream.viewers.includes(req.user.id)) {
+      stream.viewers.push(req.user.id);
+      stream.peakViewers = Math.max(stream.peakViewers, stream.viewers.length);
+      await stream.save();
+    }
+    
+    res.json({ success: true, viewerCount: stream.viewers.length });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to join stream' });
+  }
+});
 
+// ==========================================
+// POST /api/live/:id/leave - Leave as viewer
+// ==========================================
+router.post('/:id/leave', optionalAuth, async (req, res) => {
+  try {
+    if (req.user) {
+      await LiveStream.findByIdAndUpdate(req.params.id, {
+        $pull: { viewers: req.user.id }
+      });
+    }
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to leave stream' });
+  }
+});
+
+// ==========================================
+// POST /api/live/:id/pin - Pin/Unpin stream (Admin only)
+// ==========================================
+router.post('/:id/pin', verifyToken, async (req, res) => {
+  try {
+    // Check if user is admin
+    let User;
+    try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+    const user = await User.findById(req.user.id);
+    
+    if (!user?.isAdmin && user?.role !== 'admin') {
+      return res.status(403).json({ success: false, error: 'Admin access required' });
+    }
+    
+    const { isPinned } = req.body;
+    
+    const stream = await LiveStream.findByIdAndUpdate(
+      req.params.id,
+      { 
+        isPinned: isPinned !== undefined ? isPinned : true,
+        pinnedBy: isPinned ? req.user.id : null,
+        pinnedAt: isPinned ? new Date() : null
+      },
+      { new: true }
+    ).populate('streamer', 'name username profilePicture');
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    res.json({
+      success: true,
+      stream,
+      message: isPinned ? 'Stream pinned to top' : 'Stream unpinned'
+    });
+    
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to update pin status' });
+  }
+});
+
+// ==========================================
+// PUT /api/live/:id - Edit stream (title, description)
+// ==========================================
+router.put('/:id', verifyToken, async (req, res) => {
+  try {
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    if (stream.streamer.toString() !== req.user.id) {
+      return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    
+    const { title, description, thumbnail } = req.body;
+    
     if (title) stream.title = title;
     if (description !== undefined) stream.description = description;
-    if (category) stream.category = category;
-    if (isPrivate !== undefined) stream.isPrivate = isPrivate;
-    if (allowChat !== undefined) stream.allowChat = allowChat;
-    if (allowTips !== undefined) stream.allowTips = allowTips;
-
+    if (thumbnail) stream.thumbnail = thumbnail;
+    
     await stream.save();
-
-    res.json({ ok: true, stream });
+    
+    res.json({
+      success: true,
+      stream,
+      message: 'Stream updated successfully'
+    });
+    
   } catch (error) {
-    console.error('Update stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to update stream' });
+    res.status(500).json({ success: false, error: 'Failed to update stream' });
   }
 });
 
 // ==========================================
-// VIEWER INTERACTIONS
+// DELETE /api/live/:id - Delete stream recording
 // ==========================================
-
-// POST /api/live/:streamId/join - Join stream as viewer
-router.post('/:streamId/join', async (req, res) => {
+router.delete('/:id', verifyToken, async (req, res) => {
   try {
-    const { streamId } = req.params;
-
-    const stream = await Stream.findById(streamId);
-    if (!stream || stream.status !== 'live') {
-      return res.status(404).json({ ok: false, error: 'Stream not found or not live' });
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
     }
-
-    stream.viewerCount += 1;
-    if (stream.viewerCount > stream.peakViewers) {
-      stream.peakViewers = stream.viewerCount;
-    }
-    await stream.save();
-
-    // Emit viewer count update via socket
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`stream_${streamId}`).emit('viewerCount', stream.viewerCount);
-    }
-
-    res.json({ ok: true, viewerCount: stream.viewerCount });
-  } catch (error) {
-    console.error('Join stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to join stream' });
-  }
-});
-
-// POST /api/live/:streamId/leave - Leave stream
-router.post('/:streamId/leave', async (req, res) => {
-  try {
-    const { streamId } = req.params;
-
-    const stream = await Stream.findById(streamId);
-    if (stream && stream.viewerCount > 0) {
-      stream.viewerCount -= 1;
-      await stream.save();
-
-      // Emit viewer count update via socket
-      const io = req.app.get('io');
-      if (io) {
-        io.to(`stream_${streamId}`).emit('viewerCount', stream.viewerCount);
+    
+    if (stream.streamer.toString() !== req.user.id) {
+      // Check if admin
+      let User;
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      const user = await User.findById(req.user.id);
+      
+      if (!user?.isAdmin && user?.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Not authorized' });
       }
     }
-
-    res.json({ ok: true });
-  } catch (error) {
-    console.error('Leave stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to leave stream' });
-  }
-});
-
-// POST /api/live/:streamId/like - Like a stream
-router.post('/:streamId/like', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { streamId } = req.params;
-
-    const stream = await Stream.findById(streamId);
-    if (!stream) {
-      return res.status(404).json({ ok: false, error: 'Stream not found' });
-    }
-
-    const hasLiked = stream.likedBy.includes(userId);
     
-    if (hasLiked) {
-      stream.likedBy = stream.likedBy.filter(id => id.toString() !== userId.toString());
-      stream.likes = Math.max(0, stream.likes - 1);
-    } else {
-      stream.likedBy.push(userId);
-      stream.likes += 1;
-    }
-
+    stream.isActive = false;
     await stream.save();
-
+    
+    // Also remove feed post if exists
+    if (stream.feedPostId) {
+      try {
+        let Blog;
+        try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+        await Blog.findByIdAndUpdate(stream.feedPostId, { isDeleted: true });
+      } catch {}
+    }
+    
     res.json({
-      ok: true,
-      liked: !hasLiked,
-      likes: stream.likes
+      success: true,
+      message: 'Stream deleted successfully'
     });
+    
   } catch (error) {
-    console.error('Like stream error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to like stream' });
-  }
-});
-
-// POST /api/live/:streamId/tip - Send tip to streamer
-router.post('/:streamId/tip', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { streamId } = req.params;
-    const { amount, message } = req.body;
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ ok: false, error: 'Invalid tip amount' });
-    }
-
-    const stream = await Stream.findById(streamId);
-    if (!stream || stream.status !== 'live') {
-      return res.status(404).json({ ok: false, error: 'Stream not found or not live' });
-    }
-
-    if (!stream.allowTips) {
-      return res.status(400).json({ ok: false, error: 'Tips are disabled for this stream' });
-    }
-
-    // Add tip to stream
-    stream.tips.push({
-      user: userId,
-      amount,
-      message: message || ''
-    });
-    stream.totalTips += amount;
-    await stream.save();
-
-    // Get user info for socket emission
-    const User = mongoose.model('User');
-    const tipper = await User.findById(userId).select('name username');
-
-    // Emit tip event via socket
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`stream_${streamId}`).emit('newTip', {
-        user: tipper,
-        amount,
-        message
-      });
-    }
-
-    // Transfer tokens (in production, integrate with blockchain)
-    // await transferTokens(userId, stream.streamer, amount);
-
-    res.json({
-      ok: true,
-      message: 'Tip sent successfully',
-      totalTips: stream.totalTips
-    });
-  } catch (error) {
-    console.error('Tip error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to send tip' });
+    res.status(500).json({ success: false, error: 'Failed to delete stream' });
   }
 });
 
 // ==========================================
-// CHAT
+// POST /api/live/:id/comment - Add comment to stream
 // ==========================================
-
-// POST /api/live/:streamId/chat - Send chat message
-router.post('/:streamId/chat', verifyToken, async (req, res) => {
+router.post('/:id/comment', verifyToken, async (req, res) => {
   try {
-    const userId = req.user.id;
-    const { streamId } = req.params;
-    const { text } = req.body;
-
-    if (!text || !text.trim()) {
-      return res.status(400).json({ ok: false, error: 'Message text required' });
+    const { content } = req.body;
+    
+    if (!content?.trim()) {
+      return res.status(400).json({ success: false, error: 'Comment content required' });
     }
-
-    const stream = await Stream.findById(streamId);
-    if (!stream || stream.status !== 'live') {
-      return res.status(404).json({ ok: false, error: 'Stream not found or not live' });
+    
+    const stream = await LiveStream.findById(req.params.id);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
     }
-
-    if (!stream.allowChat) {
-      return res.status(400).json({ ok: false, error: 'Chat is disabled for this stream' });
-    }
-
-    if (stream.blockedUsers.includes(userId)) {
-      return res.status(403).json({ ok: false, error: 'You are blocked from this chat' });
-    }
-
-    // Add message
-    const chatMessage = {
-      user: userId,
-      text: text.trim(),
+    
+    stream.comments.push({
+      user: req.user.id,
+      content: content.trim(),
       createdAt: new Date()
-    };
-    
-    stream.chatMessages.push(chatMessage);
-    
-    // Keep only last 500 messages
-    if (stream.chatMessages.length > 500) {
-      stream.chatMessages = stream.chatMessages.slice(-500);
-    }
+    });
     
     await stream.save();
-
-    // Get user info
-    const User = mongoose.model('User');
-    const user = await User.findById(userId).select('name username avatar');
-
-    // Emit chat message via socket
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`stream_${streamId}`).emit('chatMessage', {
-        ...chatMessage,
-        user
-      });
-    }
-
-    res.json({ ok: true, message: chatMessage });
-  } catch (error) {
-    console.error('Chat error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to send message' });
-  }
-});
-
-// GET /api/live/:streamId/chat - Get chat history
-router.get('/:streamId/chat', async (req, res) => {
-  try {
-    const { streamId } = req.params;
-    const { limit = 50 } = req.query;
-
-    const stream = await Stream.findById(streamId)
-      .select('chatMessages')
-      .populate('chatMessages.user', 'name username avatar');
-
-    if (!stream) {
-      return res.status(404).json({ ok: false, error: 'Stream not found' });
-    }
-
-    const messages = stream.chatMessages.slice(-parseInt(limit));
-
-    res.json({ ok: true, messages });
-  } catch (error) {
-    console.error('Get chat error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get chat' });
-  }
-});
-
-// ==========================================
-// MODERATION
-// ==========================================
-
-// POST /api/live/:streamId/block - Block user from stream
-router.post('/:streamId/block', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { streamId } = req.params;
-    const { targetUserId } = req.body;
-
-    const stream = await Stream.findOne({
-      _id: streamId,
-      $or: [
-        { streamer: userId },
-        { moderators: userId }
-      ]
+    
+    const populatedStream = await LiveStream.findById(req.params.id)
+      .populate('comments.user', 'name username profilePicture');
+    
+    res.json({
+      success: true,
+      comment: populatedStream.comments[populatedStream.comments.length - 1]
     });
-
-    if (!stream) {
-      return res.status(403).json({ ok: false, error: 'Not authorized' });
-    }
-
-    if (!stream.blockedUsers.includes(targetUserId)) {
-      stream.blockedUsers.push(targetUserId);
-      await stream.save();
-    }
-
-    res.json({ ok: true, message: 'User blocked' });
+    
   } catch (error) {
-    console.error('Block user error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to block user' });
+    res.status(500).json({ success: false, error: 'Failed to add comment' });
   }
 });
 
-// GET /api/live/user/:userId/history - Get user's stream history
-router.get('/user/:userId/history', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { limit = 20, page = 1 } = req.query;
-
-    const streams = await Stream.find({
-      streamer: userId,
-      status: 'ended'
-    })
-      .select('title category thumbnail duration peakViewers totalViews likes startedAt')
-      .sort({ startedAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    res.json({ ok: true, streams });
-  } catch (error) {
-    console.error('Get history error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to get stream history' });
-  }
-});
+console.log('✅ Live streaming routes loaded');
 
 module.exports = router;
