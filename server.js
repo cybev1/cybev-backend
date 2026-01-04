@@ -258,6 +258,20 @@ try {
 }
 
 // ==========================================
+// ROUTES - WEBRTC (Browser-based streaming)
+// ==========================================
+
+try {
+  const { router: webrtcRouter, initializeWebRTC } = require('./routes/webrtc.routes');
+  app.use('/api/webrtc', webrtcRouter);
+  // Initialize WebRTC signaling with Socket.IO
+  initializeWebRTC(io);
+  console.log('✅ WebRTC routes loaded');
+} catch (err) {
+  console.log('⚠️ WebRTC routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - NFT
 // ==========================================
 
