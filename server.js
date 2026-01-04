@@ -367,6 +367,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - GROUPS
+// ==========================================
+
+try {
+  const groupRoutes = require('./routes/group.routes');
+  app.use('/api/groups', groupRoutes);
+  console.log('✅ Group routes loaded');
+} catch (err) {
+  console.log('⚠️ Group routes not found:', err.message);
+}
+
+// ==========================================
 // HEALTH CHECK
 // ==========================================
 
