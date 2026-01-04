@@ -57,16 +57,32 @@ const activeConnections = new Map();
 // ==========================================
 router.get('/status', async (req, res) => {
   try {
-    let status = { available: false };
+    let webrtcStatus = { available: false };
     
     if (webrtcRtmpService) {
-      status = await webrtcRtmpService.getStatus();
+      webrtcStatus = await webrtcRtmpService.getStatus();
+    }
+    
+    // Check Mux availability safely (avoid circular reference)
+    let muxAvailable = false;
+    try {
+      if (muxService && typeof muxService.isAvailable === 'function') {
+        muxAvailable = muxService.isAvailable();
+      } else if (process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET) {
+        muxAvailable = true;
+      }
+    } catch (e) {
+      console.log('Mux check error:', e.message);
     }
     
     res.json({
       success: true,
-      webrtc: status,
-      mux: muxService ? { available: muxService.isAvailable() } : { available: false }
+      webrtc: {
+        available: webrtcStatus.available || false,
+        activeSessions: webrtcStatus.activeSessions || 0,
+        ffmpeg: webrtcStatus.available ? 'ready' : 'not available'
+      },
+      mux: { available: muxAvailable }
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
