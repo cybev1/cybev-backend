@@ -379,6 +379,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - MARKETPLACE
+// ==========================================
+
+try {
+  const marketplaceRoutes = require('./routes/marketplace.routes');
+  app.use('/api/marketplace', marketplaceRoutes);
+  console.log('✅ Marketplace routes loaded');
+} catch (err) {
+  console.log('⚠️ Marketplace routes not found:', err.message);
+}
+
+// ==========================================
 // HEALTH CHECK
 // ==========================================
 
@@ -386,7 +398,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.4.0',
+    version: '3.5.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     features: [
@@ -396,7 +408,8 @@ app.get('/api/health', (req, res) => {
       'nft', 'staking', 'admin', 'wallet', 'upload',
       'push-notifications', 'monetization', 'analytics',
       'content', 'ai-blog-generation', 'share-to-timeline',
-      'vlogs', 'follow-system', 'token-wallet'
+      'vlogs', 'follow-system', 'token-wallet', 'groups',
+      'marketplace', 'group-moderation', 'profile-editing'
     ]
   });
 });
