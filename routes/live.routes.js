@@ -1,12 +1,21 @@
 // ============================================
 // FILE: routes/live.routes.js
-// Live Streaming API Routes
+// Live Streaming API Routes with Mux Integration
 // Features: RTMP, embed, notifications, auto-save
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+
+// Mux service
+let muxService;
+try {
+  muxService = require('../services/mux.service');
+  console.log('✅ Mux service loaded');
+} catch (e) {
+  console.log('⚠️ Mux service not available:', e.message);
+}
 
 // Auth middleware
 let verifyToken;
@@ -47,11 +56,17 @@ const liveStreamSchema = new mongoose.Schema({
   thumbnail: String,
   
   // Stream type
-  streamType: { type: String, enum: ['camera', 'rtmp', 'embed'], default: 'camera' },
+  streamType: { type: String, enum: ['camera', 'rtmp', 'embed', 'mux'], default: 'mux' },
   rtmpUrl: String,
   rtmpKey: String,
-  embedUrl: String, // For Facebook Live, YouTube Live, etc.
-  embedPlatform: String, // 'facebook', 'youtube', 'twitch', etc.
+  embedUrl: String,
+  embedPlatform: String,
+  
+  // Mux integration
+  muxStreamId: String,
+  muxStreamKey: String,
+  muxPlaybackId: String,
+  muxRtmpUrl: String,
   
   // Status
   status: { type: String, enum: ['preparing', 'live', 'ended', 'saved'], default: 'preparing' },
@@ -91,11 +106,11 @@ const liveStreamSchema = new mongoose.Schema({
 const LiveStream = mongoose.models.LiveStream || mongoose.model('LiveStream', liveStreamSchema);
 
 // ==========================================
-// POST /api/live/start - Start a live stream
+// POST /api/live/start - Start a live stream with Mux
 // ==========================================
 router.post('/start', verifyToken, async (req, res) => {
   try {
-    const { title, description, streamType, rtmpUrl, embedUrl, embedPlatform, thumbnail } = req.body;
+    const { title, description, streamType, rtmpUrl, embedUrl, embedPlatform, thumbnail, lowLatency } = req.body;
     
     // Check for existing live stream
     const existingStream = await LiveStream.findOne({ 
@@ -110,34 +125,57 @@ router.post('/start', verifyToken, async (req, res) => {
       });
     }
     
-    // Generate RTMP key if using RTMP
-    const rtmpKey = streamType === 'rtmp' ? `sk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` : null;
+    // Create Mux live stream
+    let muxData = null;
+    if (muxService && process.env.MUX_TOKEN_ID) {
+      muxData = await muxService.createLiveStream({ lowLatency: lowLatency !== false });
+      if (!muxData.success) {
+        console.log('⚠️ Mux stream creation failed:', muxData.error);
+      }
+    }
     
-    // Create stream
+    // Create stream record
     const stream = new LiveStream({
       streamer: req.user.id,
       title: title || 'Live Stream',
       description,
       thumbnail,
-      streamType: streamType || 'camera',
+      streamType: muxData?.success ? 'mux' : (streamType || 'camera'),
+      
+      // Mux details
+      muxStreamId: muxData?.streamId,
+      muxStreamKey: muxData?.streamKey,
+      muxPlaybackId: muxData?.playbackId,
+      muxRtmpUrl: muxData?.rtmpUrl,
+      
+      // Legacy RTMP support
       rtmpUrl: streamType === 'rtmp' ? (rtmpUrl || 'rtmp://live.cybev.io/live') : null,
-      rtmpKey,
+      rtmpKey: streamType === 'rtmp' ? `sk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}` : null,
+      
+      // Embed support
       embedUrl: streamType === 'embed' ? embedUrl : null,
       embedPlatform: streamType === 'embed' ? embedPlatform : null,
+      
       status: 'live',
       startedAt: new Date(),
-      deleteScheduledAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+      deleteScheduledAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
     });
     
     await stream.save();
     
     // Create feed post for the live stream
     try {
-      let Blog;
+      let Blog, User;
       try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      
+      const user = await User.findById(req.user.id).select('name username');
+      const authorName = user?.name || user?.username || 'Anonymous';
       
       const feedPost = new Blog({
         author: req.user.id,
+        authorId: req.user.id,
+        authorName: authorName,
         title: `🔴 LIVE: ${title || 'Live Stream'}`,
         content: description || 'I am now live! Join me!',
         contentType: 'live',
@@ -161,11 +199,9 @@ router.post('/start', verifyToken, async (req, res) => {
       try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
       try { Notification = require('../models/notification.model'); } catch { Notification = mongoose.model('Notification'); }
       
-      // Get user with followers
       const user = await User.findById(req.user.id).select('followers name username');
       
       if (user?.followers?.length > 0) {
-        // Create notifications for followers
         const notifications = user.followers.slice(0, 100).map(followerId => ({
           recipient: followerId,
           sender: req.user.id,
@@ -184,11 +220,25 @@ router.post('/start', verifyToken, async (req, res) => {
     
     await stream.populate('streamer', 'name username profilePicture');
     
+    // Build playback URLs if Mux is available
+    let playbackUrls = null;
+    if (muxData?.playbackId && muxService) {
+      playbackUrls = muxService.getPlaybackUrl(muxData.playbackId);
+    }
+    
     res.status(201).json({
       success: true,
       stream,
-      rtmpKey,
-      rtmpUrl: streamType === 'rtmp' ? 'rtmp://live.cybev.io/live' : null,
+      // Mux streaming details
+      mux: muxData?.success ? {
+        streamKey: muxData.streamKey,
+        rtmpUrl: muxData.rtmpUrl,
+        playbackId: muxData.playbackId,
+        playbackUrls
+      } : null,
+      // Legacy RTMP details
+      rtmpKey: stream.rtmpKey,
+      rtmpUrl: stream.rtmpUrl,
       message: 'Stream started successfully'
     });
     
@@ -224,6 +274,16 @@ router.post('/:id/end', verifyToken, async (req, res) => {
     if (streamerId !== userId.toString() && !isAdmin) {
       console.log(`❌ End stream denied: streamer=${streamerId}, user=${userId}`);
       return res.status(403).json({ success: false, error: 'Not authorized' });
+    }
+    
+    // End Mux stream if exists
+    if (stream.muxStreamId && muxService) {
+      try {
+        await muxService.endLiveStream(stream.muxStreamId);
+        console.log(`✅ Mux stream ended: ${stream.muxStreamId}`);
+      } catch (muxError) {
+        console.log('⚠️ Could not end Mux stream:', muxError.message);
+      }
     }
     
     stream.status = 'saved';
@@ -381,12 +441,19 @@ router.get('/:id', optionalAuth, async (req, res) => {
     // Increment views
     await LiveStream.findByIdAndUpdate(req.params.id, { $inc: { totalViews: 1 } });
     
+    // Get playback URLs if Mux stream
+    let playbackUrls = null;
+    if (stream.muxPlaybackId && muxService) {
+      playbackUrls = muxService.getPlaybackUrl(stream.muxPlaybackId);
+    }
+    
     res.json({ 
       success: true, 
       stream: {
         ...stream,
         viewers: stream.viewers?.length || 0,
-        likesCount: stream.likes?.length || 0
+        likesCount: stream.likes?.length || 0,
+        playbackUrls
       }
     });
     
