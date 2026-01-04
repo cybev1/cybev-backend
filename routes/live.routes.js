@@ -209,7 +209,20 @@ router.post('/:id/end', verifyToken, async (req, res) => {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
     
-    if (stream.streamer.toString() !== req.user.id) {
+    const userId = req.user.id || req.user._id;
+    const streamerId = stream.streamer.toString();
+    
+    // Check if user is the streamer OR an admin
+    let isAdmin = false;
+    try {
+      let User;
+      try { User = require('../models/user.model'); } catch { User = mongoose.model('User'); }
+      const user = await User.findById(userId);
+      isAdmin = user?.isAdmin || user?.role === 'admin';
+    } catch {}
+    
+    if (streamerId !== userId.toString() && !isAdmin) {
+      console.log(`❌ End stream denied: streamer=${streamerId}, user=${userId}`);
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
     
@@ -226,6 +239,8 @@ router.post('/:id/end', verifyToken, async (req, res) => {
       } catch {}
     }
     
+    console.log(`✅ Stream ended: ${stream._id} by user ${userId}`);
+    
     res.json({
       success: true,
       stream,
@@ -233,6 +248,7 @@ router.post('/:id/end', verifyToken, async (req, res) => {
     });
     
   } catch (error) {
+    console.error('End stream error:', error);
     res.status(500).json({ success: false, error: 'Failed to end stream' });
   }
 });
