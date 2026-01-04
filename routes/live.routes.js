@@ -854,6 +854,63 @@ router.post('/:id/like', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// POST /api/live/:id/join - Join as viewer
+// ==========================================
+router.post('/:id/join', optionalAuth, async (req, res) => {
+  try {
+    const stream = await LiveStream.findById(req.params.id);
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    // Add viewer if authenticated and not already in list
+    if (req.user?.id && !stream.viewers.includes(req.user.id)) {
+      stream.viewers.push(req.user.id);
+      stream.totalViews = (stream.totalViews || 0) + 1;
+      if (stream.viewers.length > stream.peakViewers) {
+        stream.peakViewers = stream.viewers.length;
+      }
+      await stream.save();
+    }
+    
+    res.json({
+      success: true,
+      viewerCount: stream.viewers.length
+    });
+  } catch (error) {
+    res.json({ success: true, viewerCount: 0 });
+  }
+});
+
+// ==========================================
+// POST /api/live/:id/leave - Leave as viewer
+// ==========================================
+router.post('/:id/leave', optionalAuth, async (req, res) => {
+  try {
+    const stream = await LiveStream.findById(req.params.id);
+    if (!stream) {
+      return res.json({ success: true });
+    }
+    
+    // Remove viewer if authenticated
+    if (req.user?.id) {
+      const index = stream.viewers.indexOf(req.user.id);
+      if (index > -1) {
+        stream.viewers.splice(index, 1);
+        await stream.save();
+      }
+    }
+    
+    res.json({
+      success: true,
+      viewerCount: stream.viewers.length
+    });
+  } catch (error) {
+    res.json({ success: true });
+  }
+});
+
+// ==========================================
 // POST /api/live/:id/pin - Pin stream (admin only)
 // ==========================================
 router.post('/:id/pin', verifyToken, async (req, res) => {
