@@ -198,23 +198,42 @@ router.post('/profile', verifyToken, upload.single('file'), async (req, res) => 
         transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }]
       });
       url = result.secure_url;
+      console.log(`☁️ Profile uploaded to Cloudinary: ${url}`);
     } else {
       const base64 = req.file.buffer.toString('base64');
       url = `data:${req.file.mimetype};base64,${base64}`;
     }
 
-    // Update user's profile picture
+    // Update user's profile picture in database
+    let updatedUser = null;
     try {
-      const User = mongoose.model('User');
-      await User.findByIdAndUpdate(req.user.id, { profilePicture: url });
-      console.log(`✅ Profile picture updated for user ${req.user.id}`);
+      let User;
+      try { User = require('../models/user.model'); } catch (e) { User = mongoose.model('User'); }
+      
+      updatedUser = await User.findByIdAndUpdate(
+        req.user.id, 
+        { 
+          $set: { 
+            profilePicture: url,
+            avatar: url  // Also update avatar field for compatibility
+          }
+        },
+        { new: true }
+      ).select('-password -refreshToken');
+      
+      if (updatedUser) {
+        console.log(`✅ Profile picture saved to database for user ${req.user.id}`);
+      } else {
+        console.log(`⚠️ User not found: ${req.user.id}`);
+      }
     } catch (e) {
-      console.log('Could not update user profile:', e.message);
+      console.error('Could not update user profile in DB:', e.message);
     }
 
     res.json({
       success: true,
       url,
+      user: updatedUser,
       message: 'Profile picture uploaded successfully'
     });
 
@@ -244,23 +263,35 @@ router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
         transformation: [{ width: 1200, height: 400, crop: 'fill' }]
       });
       url = result.secure_url;
+      console.log(`☁️ Cover uploaded to Cloudinary: ${url}`);
     } else {
       const base64 = req.file.buffer.toString('base64');
       url = `data:${req.file.mimetype};base64,${base64}`;
     }
 
-    // Update user's cover image
+    // Update user's cover image in database
+    let updatedUser = null;
     try {
-      const User = mongoose.model('User');
-      await User.findByIdAndUpdate(req.user.id, { coverImage: url });
-      console.log(`✅ Cover image updated for user ${req.user.id}`);
+      let User;
+      try { User = require('../models/user.model'); } catch (e) { User = mongoose.model('User'); }
+      
+      updatedUser = await User.findByIdAndUpdate(
+        req.user.id, 
+        { $set: { coverImage: url } },
+        { new: true }
+      ).select('-password -refreshToken');
+      
+      if (updatedUser) {
+        console.log(`✅ Cover image saved to database for user ${req.user.id}`);
+      }
     } catch (e) {
-      console.log('Could not update user cover:', e.message);
+      console.error('Could not update user cover in DB:', e.message);
     }
 
     res.json({
       success: true,
       url,
+      user: updatedUser,
       message: 'Cover image uploaded successfully'
     });
 
