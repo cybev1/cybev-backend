@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 3.3.0 - January 2, 2026 Update
-// ADDED: Share to Timeline routes
+// VERSION: 3.6.0 - January 4, 2026 Update
+// ADDED: Mux Live Streaming Integration
 // ============================================
 
 const express = require('express');
@@ -68,6 +68,17 @@ if (!MONGODB_URI) {
 mongoose.connection.on('connected', () => console.log('📦 MongoDB connected'));
 mongoose.connection.on('error', (err) => console.error('📦 MongoDB error:', err.message));
 mongoose.connection.on('disconnected', () => console.log('📦 MongoDB disconnected'));
+
+// ==========================================
+// MUX CONFIGURATION CHECK
+// ==========================================
+
+const MUX_CONFIGURED = !!(process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET);
+if (MUX_CONFIGURED) {
+  console.log('🎬 Mux Live Streaming: Configured');
+} else {
+  console.log('⚠️ Mux Live Streaming: Not configured (set MUX_TOKEN_ID and MUX_TOKEN_SECRET)');
+}
 
 // ==========================================
 // ROUTES - AUTHENTICATION
@@ -199,7 +210,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - SHARE (Timeline Sharing) - NEW!
+// ROUTES - SHARE (Timeline Sharing)
 // ==========================================
 
 try {
@@ -211,7 +222,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - VLOGS (Video Stories) - NEW!
+// ROUTES - VLOGS (Video Stories)
 // ==========================================
 
 try {
@@ -235,7 +246,7 @@ try {
 }
 
 // ==========================================
-// ROUTES - LIVE STREAMING
+// ROUTES - LIVE STREAMING (with Mux)
 // ==========================================
 
 try {
@@ -398,9 +409,10 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '3.5.0',
+    version: '3.6.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    mux: MUX_CONFIGURED ? 'configured' : 'not configured',
     features: [
       'auth', 'users', 'blogs', 'posts', 'feed',
       'comments', 'bookmarks', 'notifications',
@@ -409,7 +421,8 @@ app.get('/api/health', (req, res) => {
       'push-notifications', 'monetization', 'analytics',
       'content', 'ai-blog-generation', 'share-to-timeline',
       'vlogs', 'follow-system', 'token-wallet', 'groups',
-      'marketplace', 'group-moderation', 'profile-editing'
+      'marketplace', 'group-moderation', 'profile-editing',
+      'mux-streaming'
     ]
   });
 });
@@ -417,9 +430,10 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v3.3.0',
+    message: 'CYBEV API Server v3.6.0',
     documentation: '/api/health',
-    status: 'running'
+    status: 'running',
+    mux: MUX_CONFIGURED ? 'enabled' : 'disabled'
   });
 });
 
@@ -454,16 +468,24 @@ io.on('connection', (socket) => {
   // Join live stream
   socket.on('join-stream', (streamId) => {
     socket.join(`stream:${streamId}`);
+    // Notify others in the stream
+    socket.to(`stream:${streamId}`).emit('viewer-joined', { socketId: socket.id });
   });
 
   // Leave live stream
   socket.on('leave-stream', (streamId) => {
     socket.leave(`stream:${streamId}`);
+    socket.to(`stream:${streamId}`).emit('viewer-left', { socketId: socket.id });
   });
 
   // Stream chat message
   socket.on('stream-chat', ({ streamId, message }) => {
     io.to(`stream:${streamId}`).emit('chat-message', message);
+  });
+
+  // Stream reaction
+  socket.on('stream-reaction', ({ streamId, emoji, userId }) => {
+    io.to(`stream:${streamId}`).emit('reaction', { emoji, userId });
   });
 
   // Disconnect
@@ -503,13 +525,14 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v3.3.0           ║
+║         CYBEV API Server v3.6.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
 ║  🔌 Socket.IO: Enabled                    ║
 ║  🤖 AI Blog: Enabled                      ║
 ║  📤 Share to Timeline: Enabled            ║
+║  🎬 Mux Streaming: ${MUX_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
