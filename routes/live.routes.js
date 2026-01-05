@@ -288,6 +288,37 @@ router.get('/debug/:streamId', async (req, res) => {
 });
 
 // ==========================================
+// POST /api/live/fix-status/:streamId - Fix stream status (admin debug)
+// ==========================================
+router.post('/fix-status/:streamId', verifyToken, async (req, res) => {
+  try {
+    const stream = await LiveStream.findByIdAndUpdate(
+      req.params.streamId,
+      { status: 'live', isActive: true, startedAt: new Date() },
+      { new: true }
+    );
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    console.log(`🔧 MANUAL FIX: Stream ${req.params.streamId} set to live, isActive=true`);
+    
+    res.json({
+      success: true,
+      message: 'Stream status fixed',
+      stream: {
+        _id: stream._id,
+        status: stream.status,
+        isActive: stream.isActive
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
 // GET /api/live/stream-key - Get user's stream key
 // ==========================================
 router.get('/stream-key', verifyToken, async (req, res) => {
@@ -618,7 +649,7 @@ router.get('/check-stream/:muxStreamId', verifyToken, async (req, res) => {
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
     // Skip if id matches known routes (safety check)
-    const knownRoutes = ['streams', 'active', 'stream-key', 'my-stream', 'cleanup'];
+    const knownRoutes = ['streams', 'active', 'stream-key', 'my-stream', 'cleanup', 'debug', 'fix-status'];
     if (knownRoutes.includes(req.params.id)) {
       return res.status(404).json({ success: false, error: 'Invalid route' });
     }
