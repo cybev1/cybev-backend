@@ -472,11 +472,19 @@ function initializeWebSocket(io) {
       // Update database
       const Model = getLiveStreamModel();
       if (Model) {
-        await Model.findByIdAndUpdate(currentStreamId, {
+        const updateResult = await Model.findByIdAndUpdate(currentStreamId, {
           status: 'live',
           isActive: true,
           startedAt: new Date()
-        });
+        }, { new: true });
+        
+        if (updateResult) {
+          console.log(`✅ Database updated: status=${updateResult.status}, isActive=${updateResult.isActive}`);
+        } else {
+          console.log(`⚠️ Stream ${currentStreamId} not found in database for update`);
+        }
+      } else {
+        console.log(`❌ LiveStream model not available for database update`);
       }
 
       socket.emit('streaming-started', {
