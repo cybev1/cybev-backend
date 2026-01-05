@@ -1,7 +1,8 @@
 // ============================================
 // FILE: routes/webrtc.routes.js
-// WebRTC Browser Streaming Routes
+// WebRTC Browser Streaming Routes - FIXED v2
 // Handles: Device camera streaming to Mux via WebSocket + FFmpeg
+// IMPROVED: Better debugging, error handling, binary data
 // ============================================
 
 const express = require('express');
@@ -12,15 +13,17 @@ const mongoose = require('mongoose');
 let webrtcRtmpService;
 try {
   webrtcRtmpService = require('../services/webrtc-rtmp.service');
+  console.log('✅ WebRTC-RTMP service loaded');
 } catch (e) {
-  console.log('⚠️ WebRTC-RTMP service not available:', e.message);
+  console.error('❌ WebRTC-RTMP service failed to load:', e.message);
 }
 
 let muxService;
 try {
   muxService = require('../services/mux.service');
+  console.log('✅ Mux service loaded');
 } catch (e) {
-  console.log('⚠️ Mux service not available');
+  console.log('⚠️ Mux service not available:', e.message);
 }
 
 // Auth middleware
@@ -46,18 +49,33 @@ let LiveStream;
 try {
   LiveStream = require('../models/livestream.model');
 } catch {
-  LiveStream = mongoose.models.LiveStream;
+  try {
+    LiveStream = mongoose.models.LiveStream || mongoose.model('LiveStream');
+  } catch {
+    console.log('⚠️ LiveStream model not found, will use dynamic lookup');
+  }
 }
 
-// Store active WebSocket connections
+// Helper to get LiveStream model dynamically
+const getLiveStreamModel = () => {
+  if (LiveStream) return LiveStream;
+  try {
+    return mongoose.models.LiveStream || require('../models/livestream.model');
+  } catch {
+    return null;
+  }
+};
+
+// Store active WebSocket connections for debugging
 const activeConnections = new Map();
+let wsInitialized = false;
 
 // ==========================================
 // GET /api/webrtc/status - Check service status
 // ==========================================
 router.get('/status', async (req, res) => {
   try {
-    let webrtcStatus = { available: false };
+    let ffmpegStatus = { available: false };
     
     // Check FFmpeg availability
     const { execSync } = require('child_process');
@@ -67,57 +85,90 @@ router.get('/status', async (req, res) => {
     } catch {}
     
     try {
-      execSync(`${ffmpegPath} -version`, { stdio: 'pipe' });
-      webrtcStatus = {
+      const version = execSync(`${ffmpegPath} -version`, { stdio: 'pipe' }).toString().split('\n')[0];
+      ffmpegStatus = {
         available: true,
-        ffmpeg: 'ready',
-        activeStreams: webrtcRtmpService ? webrtcRtmpService.getActiveStreamCount() : 0
+        path: ffmpegPath,
+        version: version.substring(0, 50)
       };
-      console.log('✅ FFmpeg is available');
     } catch (e) {
-      webrtcStatus = { available: false, ffmpeg: 'not found', error: e.message };
+      ffmpegStatus = { available: false, error: e.message };
     }
 
-    // Check Mux availability
-    let muxStatus = { available: false };
-    try {
-      if (process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET) {
-        muxStatus = { available: true };
-      }
-    } catch {}
+    // Check Mux
+    const muxStatus = {
+      available: !!(process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET)
+    };
+
+    // Service status
+    const serviceStatus = {
+      loaded: !!webrtcRtmpService,
+      activeStreams: webrtcRtmpService ? webrtcRtmpService.getActiveStreamCount() : 0
+    };
 
     res.json({
       success: true,
-      webrtc: webrtcStatus,
-      mux: muxStatus
+      timestamp: new Date().toISOString(),
+      websocket: {
+        initialized: wsInitialized,
+        activeConnections: activeConnections.size
+      },
+      ffmpeg: ffmpegStatus,
+      mux: muxStatus,
+      service: serviceStatus
     });
   } catch (error) {
-    console.error('WebRTC status error:', error);
+    console.error('Status check error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==========================================
+// GET /api/webrtc/test - Test endpoint
+// ==========================================
+router.get('/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'WebRTC routes are working',
+    wsInitialized,
+    serviceLoaded: !!webrtcRtmpService,
+    activeConnections: activeConnections.size,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ==========================================
 // POST /api/webrtc/start-stream - Start camera stream
-// Creates Mux live stream and returns credentials
 // ==========================================
 router.post('/start-stream', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { title, description, privacy } = req.body;
 
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`📱 START STREAM REQUEST from user ${userId}`);
+    console.log(`${'='.repeat(50)}`);
+
     if (!muxService) {
+      console.error('❌ Mux service not available');
       return res.status(500).json({ success: false, error: 'Mux service not available' });
     }
 
+    const Model = getLiveStreamModel();
+    if (!Model) {
+      console.error('❌ LiveStream model not available');
+      return res.status(500).json({ success: false, error: 'Database model not available' });
+    }
+
     // Check for existing active stream
-    const existingStream = await LiveStream.findOne({
+    const existingStream = await Model.findOne({
       streamer: userId,
       status: { $in: ['preparing', 'live'] },
       isActive: true
     });
 
     if (existingStream) {
+      console.log(`⚠️ User ${userId} already has active stream: ${existingStream._id}`);
       return res.status(400).json({
         success: false,
         error: 'You already have an active stream',
@@ -126,14 +177,19 @@ router.post('/start-stream', verifyToken, async (req, res) => {
     }
 
     // Create Mux live stream
+    console.log('🎬 Creating Mux live stream...');
     const muxStream = await muxService.createLiveStream({
       playback_policy: ['public'],
       new_asset_settings: { playback_policy: ['public'] },
       reduced_latency: true
     });
 
+    console.log(`✅ Mux stream created: ${muxStream.id}`);
+    console.log(`   Playback ID: ${muxStream.playback_ids?.[0]?.id}`);
+    console.log(`   Stream Key: ${muxStream.stream_key?.substring(0, 10)}...`);
+
     // Create database record
-    const stream = new LiveStream({
+    const stream = new Model({
       streamer: userId,
       title: title || 'Live Stream',
       description,
@@ -160,32 +216,36 @@ router.post('/start-stream', verifyToken, async (req, res) => {
     // Build full RTMP URL for FFmpeg
     const rtmpUrl = `rtmps://global-live.mux.com:443/app/${muxStream.stream_key}`;
 
-    console.log(`✅ Created camera stream ${stream._id} for user ${userId}`);
+    console.log(`✅ Stream record created: ${stream._id}`);
+    console.log(`📡 RTMP URL ready for client`);
 
     res.json({
       success: true,
       streamId: stream._id,
       muxStreamId: muxStream.id,
       playbackId: muxStream.playback_ids?.[0]?.id,
-      rtmpUrl, // Full RTMP URL for FFmpeg
+      rtmpUrl,
       playbackUrl: stream.playbackUrls.hls
     });
 
   } catch (error) {
-    console.error('Start stream error:', error);
+    console.error('❌ Start stream error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
 // ==========================================
-// POST /api/webrtc/stop-stream/:streamId - Stop camera stream
+// POST /api/webrtc/stop-stream/:streamId
 // ==========================================
 router.post('/stop-stream/:streamId', verifyToken, async (req, res) => {
   try {
     const { streamId } = req.params;
     const userId = req.user.id;
 
-    const stream = await LiveStream.findOne({
+    console.log(`🛑 Stop stream request: ${streamId}`);
+
+    const Model = getLiveStreamModel();
+    const stream = await Model?.findOne({
       _id: streamId,
       streamer: userId
     });
@@ -208,7 +268,7 @@ router.post('/stop-stream/:streamId', verifyToken, async (req, res) => {
     }
     await stream.save();
 
-    console.log(`✅ Stopped camera stream ${streamId}`);
+    console.log(`✅ Stream ${streamId} stopped`);
 
     res.json({ success: true, message: 'Stream stopped' });
 
@@ -219,9 +279,9 @@ router.post('/stop-stream/:streamId', verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// GET /api/webrtc/stream-stats/:streamId - Get stream statistics
+// GET /api/webrtc/stream-stats/:streamId
 // ==========================================
-router.get('/stream-stats/:streamId', verifyToken, async (req, res) => {
+router.get('/stream-stats/:streamId', async (req, res) => {
   try {
     const { streamId } = req.params;
     
@@ -241,208 +301,316 @@ router.get('/stream-stats/:streamId', verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// WebSocket Handler - Initialize in server.js
+// GET /api/webrtc/debug - Debug info
+// ==========================================
+router.get('/debug', (req, res) => {
+  res.json({
+    wsInitialized,
+    serviceLoaded: !!webrtcRtmpService,
+    serviceStatus: webrtcRtmpService ? webrtcRtmpService.getStatus() : null,
+    connections: Array.from(activeConnections.entries()).map(([id, info]) => ({
+      socketId: id,
+      ...info
+    }))
+  });
+});
+
+// ==========================================
+// WebSocket Handler
 // ==========================================
 function initializeWebSocket(io) {
+  console.log(`\n${'='.repeat(50)}`);
+  console.log('🔌 INITIALIZING WebRTC WebSocket Namespace');
+  console.log(`${'='.repeat(50)}`);
+  
+  // Create namespace
   const webrtcNamespace = io.of('/webrtc');
   
   webrtcNamespace.on('connection', (socket) => {
-    console.log(`🔌 WebRTC client connected: ${socket.id}`);
+    console.log(`\n🔌 WebRTC client connected: ${socket.id}`);
     
     let currentStreamId = null;
     let currentRtmpUrl = null;
     let isAuthenticated = false;
     let userId = null;
+    let streamingActive = false;
+    let bytesReceived = 0;
+    let chunksReceived = 0;
 
-    // Authenticate
+    // Store connection
+    activeConnections.set(socket.id, {
+      connectedAt: Date.now(),
+      authenticated: false,
+      streaming: false
+    });
+
+    // Send welcome message
+    socket.emit('welcome', { 
+      message: 'Connected to WebRTC server',
+      socketId: socket.id 
+    });
+
+    // ==========================================
+    // AUTHENTICATE
+    // ==========================================
     socket.on('authenticate', async (data) => {
+      console.log(`\n🔐 AUTH REQUEST from ${socket.id}`);
+      
       try {
         const { token, streamId, rtmpUrl } = data;
+        
+        if (!token || !streamId || !rtmpUrl) {
+          console.log('❌ Missing auth data');
+          socket.emit('error', { message: 'Missing token, streamId, or rtmpUrl' });
+          return;
+        }
+        
+        console.log(`   Stream ID: ${streamId}`);
+        console.log(`   RTMP URL: ${rtmpUrl.substring(0, 50)}...`);
         
         // Verify token
         const jwt = require('jsonwebtoken');
         const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
         userId = decoded.id;
-        isAuthenticated = true;
+        
+        console.log(`   User ID: ${userId}`);
         
         // Verify stream ownership
-        const stream = await LiveStream.findOne({
-          _id: streamId,
-          streamer: userId
-        });
-        
-        if (!stream) {
-          socket.emit('error', { message: 'Stream not found or unauthorized' });
-          return;
+        const Model = getLiveStreamModel();
+        if (Model) {
+          const stream = await Model.findOne({
+            _id: streamId,
+            streamer: userId
+          });
+          
+          if (!stream) {
+            console.log(`❌ Stream not found or unauthorized`);
+            socket.emit('error', { message: 'Stream not found or unauthorized' });
+            return;
+          }
         }
 
+        // Set state
         currentStreamId = streamId;
         currentRtmpUrl = rtmpUrl;
+        isAuthenticated = true;
         
-        // Store connection
+        // Update connection info
         activeConnections.set(socket.id, {
-          streamId,
+          ...activeConnections.get(socket.id),
+          authenticated: true,
           userId,
-          connectedAt: Date.now()
+          streamId
         });
 
         socket.emit('authenticated', { 
           success: true, 
           streamId,
-          message: 'Ready to receive video data'
+          message: 'Ready to stream'
         });
         
-        console.log(`✅ WebRTC authenticated: user ${userId}, stream ${streamId}`);
+        console.log(`✅ AUTHENTICATED: user=${userId}, stream=${streamId}`);
         
       } catch (error) {
-        console.error('WebRTC auth error:', error);
+        console.error('❌ Auth error:', error.message);
         socket.emit('error', { message: 'Authentication failed: ' + error.message });
       }
     });
 
-    // Start streaming - Initialize FFmpeg
-    socket.on('start-streaming', async (data) => {
-      if (!isAuthenticated || !currentStreamId || !currentRtmpUrl) {
-        socket.emit('error', { message: 'Not authenticated or missing stream info' });
+    // ==========================================
+    // START STREAMING
+    // ==========================================
+    socket.on('start-streaming', async () => {
+      console.log(`\n🎬 START STREAMING REQUEST from ${socket.id}`);
+      
+      if (!isAuthenticated) {
+        console.log('❌ Not authenticated');
+        socket.emit('error', { message: 'Not authenticated' });
+        return;
+      }
+      
+      if (!currentStreamId || !currentRtmpUrl) {
+        console.log('❌ Missing stream info');
+        socket.emit('error', { message: 'Missing stream info' });
+        return;
+      }
+      
+      if (streamingActive) {
+        console.log('⚠️ Already streaming');
+        socket.emit('warning', { message: 'Already streaming' });
         return;
       }
 
       try {
-        // Start FFmpeg process
-        if (webrtcRtmpService) {
-          webrtcRtmpService.startStream(currentStreamId, currentRtmpUrl, socket);
+        console.log(`   Stream: ${currentStreamId}`);
+        console.log(`   RTMP: ${currentRtmpUrl.substring(0, 50)}...`);
+        
+        if (!webrtcRtmpService) {
+          console.log('❌ WebRTC-RTMP service not available');
+          socket.emit('error', { message: 'Streaming service not available' });
+          return;
+        }
+        
+        // Start FFmpeg
+        const started = webrtcRtmpService.startStream(currentStreamId, currentRtmpUrl, socket);
+        
+        if (started) {
+          streamingActive = true;
+          
+          // Update connection info
+          activeConnections.set(socket.id, {
+            ...activeConnections.get(socket.id),
+            streaming: true,
+            streamStarted: Date.now()
+          });
           
           // Update database
-          await LiveStream.findByIdAndUpdate(currentStreamId, {
-            status: 'live',
-            isActive: true,
-            startedAt: new Date()
-          });
+          const Model = getLiveStreamModel();
+          if (Model) {
+            await Model.findByIdAndUpdate(currentStreamId, {
+              status: 'live',
+              isActive: true,
+              startedAt: new Date()
+            });
+          }
 
           socket.emit('streaming-started', {
             success: true,
             streamId: currentStreamId,
-            message: 'Streaming to Mux initiated'
+            message: 'FFmpeg started - send video data now'
           });
           
-          console.log(`🎬 Started streaming for ${currentStreamId}`);
+          console.log(`✅ STREAMING STARTED for ${currentStreamId}`);
         } else {
-          socket.emit('error', { message: 'WebRTC-RTMP service not available' });
+          socket.emit('error', { message: 'Failed to start FFmpeg' });
         }
         
       } catch (error) {
-        console.error('Start streaming error:', error);
-        socket.emit('error', { message: 'Failed to start streaming: ' + error.message });
+        console.error('❌ Start streaming error:', error);
+        socket.emit('error', { message: error.message });
       }
     });
 
-    // Receive video data chunks
+    // ==========================================
+    // VIDEO DATA
+    // ==========================================
     socket.on('video-data', (data) => {
-      if (!isAuthenticated || !currentStreamId) {
+      if (!isAuthenticated || !streamingActive || !currentStreamId) {
         return;
       }
 
       try {
-        // Data should be a Buffer or ArrayBuffer
+        // Convert data to Buffer
         let buffer;
-        if (data instanceof Buffer) {
+        
+        if (Buffer.isBuffer(data)) {
           buffer = data;
         } else if (data instanceof ArrayBuffer) {
           buffer = Buffer.from(data);
-        } else if (data.buffer) {
-          buffer = Buffer.from(data.buffer);
-        } else {
+        } else if (data instanceof Uint8Array) {
           buffer = Buffer.from(data);
+        } else if (data && data.type === 'Buffer' && Array.isArray(data.data)) {
+          buffer = Buffer.from(data.data);
+        } else if (typeof data === 'string') {
+          buffer = Buffer.from(data, 'base64');
+        } else if (data && typeof data === 'object') {
+          // Try to convert object to buffer
+          buffer = Buffer.from(Object.values(data));
+        } else {
+          console.log(`⚠️ Unknown data type: ${typeof data}`);
+          return;
         }
+
+        if (buffer.length === 0) {
+          return;
+        }
+
+        chunksReceived++;
+        bytesReceived += buffer.length;
 
         // Write to FFmpeg
         if (webrtcRtmpService) {
-          const success = webrtcRtmpService.writeData(currentStreamId, buffer);
-          if (!success) {
-            socket.emit('warning', { message: 'Failed to write video data' });
-          }
+          webrtcRtmpService.writeData(currentStreamId, buffer);
+        }
+        
+        // Log progress
+        if (chunksReceived % 50 === 0) {
+          console.log(`📊 ${currentStreamId}: ${chunksReceived} chunks, ${(bytesReceived / 1024 / 1024).toFixed(2)} MB`);
         }
         
       } catch (error) {
-        console.error('Video data error:', error);
+        console.error('❌ Video data error:', error.message);
       }
     });
 
-    // Binary data handler (for raw binary frames)
-    socket.on('binary-data', (data) => {
-      if (!isAuthenticated || !currentStreamId) {
-        return;
-      }
-
-      try {
-        const buffer = Buffer.from(data);
-        if (webrtcRtmpService) {
-          webrtcRtmpService.writeData(currentStreamId, buffer);
-        }
-      } catch (error) {
-        console.error('Binary data error:', error);
-      }
-    });
-
-    // Stop streaming
+    // ==========================================
+    // STOP STREAMING
+    // ==========================================
     socket.on('stop-streaming', async () => {
-      if (currentStreamId) {
-        try {
-          if (webrtcRtmpService) {
-            webrtcRtmpService.stopStream(currentStreamId);
-          }
-          
-          await LiveStream.findByIdAndUpdate(currentStreamId, {
+      console.log(`\n🛑 STOP STREAMING from ${socket.id}`);
+      
+      if (currentStreamId && webrtcRtmpService) {
+        webrtcRtmpService.stopStream(currentStreamId);
+        
+        const Model = getLiveStreamModel();
+        if (Model) {
+          await Model.findByIdAndUpdate(currentStreamId, {
             status: 'ended',
             isActive: false,
             endedAt: new Date()
           });
-
-          socket.emit('streaming-stopped', { success: true });
-          console.log(`🛑 Stopped streaming for ${currentStreamId}`);
-          
-        } catch (error) {
-          console.error('Stop streaming error:', error);
         }
       }
-    });
-
-    // Get stats
-    socket.on('get-stats', () => {
-      if (currentStreamId && webrtcRtmpService) {
-        const stats = webrtcRtmpService.getStreamStats(currentStreamId);
-        socket.emit('stats', stats);
-      }
-    });
-
-    // Disconnect
-    socket.on('disconnect', async () => {
-      console.log(`🔌 WebRTC client disconnected: ${socket.id}`);
       
-      if (currentStreamId && webrtcRtmpService) {
-        // Give a short delay before stopping (in case of reconnection)
+      streamingActive = false;
+      socket.emit('streaming-stopped', { success: true });
+      console.log(`✅ Streaming stopped for ${currentStreamId}`);
+    });
+
+    // ==========================================
+    // PING/PONG
+    // ==========================================
+    socket.on('ping', () => {
+      socket.emit('pong', { timestamp: Date.now(), bytesReceived, chunksReceived });
+    });
+
+    // ==========================================
+    // DISCONNECT
+    // ==========================================
+    socket.on('disconnect', async (reason) => {
+      console.log(`\n🔌 DISCONNECT: ${socket.id}, reason: ${reason}`);
+      console.log(`   Stats: ${chunksReceived} chunks, ${(bytesReceived / 1024 / 1024).toFixed(2)} MB`);
+      
+      if (currentStreamId && streamingActive) {
+        // Grace period before cleanup
         setTimeout(async () => {
-          if (webrtcRtmpService.isStreamActive(currentStreamId)) {
+          if (webrtcRtmpService && webrtcRtmpService.isStreamActive(currentStreamId)) {
             console.log(`⏰ Auto-stopping orphaned stream: ${currentStreamId}`);
             webrtcRtmpService.stopStream(currentStreamId);
             
-            await LiveStream.findByIdAndUpdate(currentStreamId, {
-              status: 'ended',
-              isActive: false,
-              endedAt: new Date()
-            });
+            const Model = getLiveStreamModel();
+            if (Model) {
+              await Model.findByIdAndUpdate(currentStreamId, {
+                status: 'ended',
+                isActive: false,
+                endedAt: new Date()
+              });
+            }
           }
-        }, 10000); // 10 second grace period
+        }, 15000);
       }
       
       activeConnections.delete(socket.id);
     });
   });
 
-  console.log('✅ WebRTC WebSocket initialized');
+  wsInitialized = true;
+  console.log('✅ WebRTC WebSocket namespace initialized');
+  console.log(`${'='.repeat(50)}\n`);
+  
   return webrtcNamespace;
 }
 
-// Export router and WebSocket initializer
+// Export
 module.exports = router;
 module.exports.initializeWebSocket = initializeWebSocket;
