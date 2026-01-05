@@ -1,311 +1,266 @@
 // ============================================
 // FILE: services/mux.service.js
-// Mux Live Streaming Service
-// Compatible with @mux/mux-node v8.x
+// Mux Live Streaming Service - OPTIMIZED
+// VERSION: 4.0 - Low Latency + High Quality
 // ============================================
 
-let mux;
-let isConfigured = false;
+const Mux = require('@mux/mux-node');
 
 // Initialize Mux client
-try {
-  const Mux = require('@mux/mux-node');
-  
-  if (process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET) {
-    mux = new Mux({
-      tokenId: process.env.MUX_TOKEN_ID,
-      tokenSecret: process.env.MUX_TOKEN_SECRET
-    });
-    isConfigured = true;
-    console.log('✅ Mux client initialized');
-  } else {
-    console.log('⚠️ Mux credentials not configured');
-  }
-} catch (error) {
-  console.error('❌ Failed to initialize Mux:', error.message);
+const muxClient = new Mux({
+  tokenId: process.env.MUX_TOKEN_ID,
+  tokenSecret: process.env.MUX_TOKEN_SECRET
+});
+
+const { Video } = muxClient;
+
+// Log initialization
+if (process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET) {
+  console.log('✅ Mux client initialized');
+  console.log('🚀 Low Latency Mode: Enabled');
+} else {
+  console.log('⚠️ Mux credentials not configured');
 }
 
 /**
- * Check if Mux is configured
- */
-function isAvailable() {
-  return isConfigured && mux;
-}
-
-/**
- * Create a new live stream
- * @returns {Object} Stream details including stream key and playback IDs
+ * Create a new live stream with LOW LATENCY enabled
+ * This reduces viewer delay from 20-30s to 5-10s
  */
 async function createLiveStream(options = {}) {
-  if (!isAvailable()) {
-    console.log('⚠️ Mux not configured, skipping stream creation');
-    return { success: false, error: 'Mux not configured' };
-  }
-
   try {
-    console.log('📺 Creating Mux live stream...');
-    
-    // v8.x syntax: mux.video.liveStreams (lowercase)
-    const stream = await mux.video.liveStreams.create({
-      playback_policy: ['public'],
+    const {
+      playbackPolicy = 'public',
+      newAssetSettings = {},
+      reconnectWindow = 60,
+      maxContinuousDuration = 43200, // 12 hours
+      reducedLatency = true,  // Enable for ~10s latency
+      lowLatency = true       // Enable for ~5s latency (LL-HLS)
+    } = options;
+
+    console.log('🎬 Creating Mux live stream with Low Latency...');
+
+    const stream = await Video.LiveStreams.create({
+      // Playback settings
+      playback_policy: [playbackPolicy],
+      
+      // LOW LATENCY MODE - Key setting!
+      latency_mode: lowLatency ? 'low' : (reducedLatency ? 'reduced' : 'standard'),
+      
+      // Recording settings - create asset when stream ends
       new_asset_settings: {
-        playback_policy: ['public']
+        playback_policy: [playbackPolicy],
+        ...newAssetSettings
       },
-      // Reduce latency for more real-time experience
-      latency_mode: options.lowLatency ? 'low' : 'standard',
-      // Generate MP4 for replay
+      
+      // Reconnection settings
+      reconnect_window: reconnectWindow,
+      
+      // Max duration (12 hours default)
+      max_continuous_duration: maxContinuousDuration,
+      
+      // Enable MP4 support for recordings
       mp4_support: 'standard'
     });
 
-    console.log('✅ Mux live stream created:', stream.id);
-    console.log('   Stream Key:', stream.stream_key?.substring(0, 8) + '...');
-    console.log('   Playback ID:', stream.playback_ids?.[0]?.id);
+    console.log('✅ Mux stream created:');
+    console.log(`   Stream ID: ${stream.id}`);
+    console.log(`   Stream Key: ${stream.stream_key?.substring(0, 10)}...`);
+    console.log(`   Latency Mode: ${stream.latency_mode}`);
+    console.log(`   Playback ID: ${stream.playback_ids?.[0]?.id}`);
 
     return {
       success: true,
       streamId: stream.id,
       streamKey: stream.stream_key,
+      playbackId: stream.playback_ids?.[0]?.id,
       rtmpUrl: 'rtmps://global-live.mux.com:443/app',
-      playbackId: stream.playback_ids?.[0]?.id,
-      status: stream.status
+      status: stream.status,
+      latencyMode: stream.latency_mode
     };
   } catch (error) {
-    console.error('❌ Mux create stream error:', error.message);
-    console.error('   Full error:', error);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('❌ Mux createLiveStream error:', error.message);
+    throw error;
   }
 }
 
 /**
- * Get live stream status
- * @param {string} streamId - Mux stream ID
+ * Get live stream details
  */
-async function getLiveStreamStatus(streamId) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
-
+async function getLiveStream(streamId) {
   try {
-    const stream = await mux.video.liveStreams.retrieve(streamId);
+    const stream = await Video.LiveStreams.get(streamId);
     
     return {
       success: true,
-      status: stream.status, // 'idle', 'active', 'disabled'
-      playbackId: stream.playback_ids?.[0]?.id,
-      recentAssetIds: stream.recent_asset_ids,
-      activeAssetId: stream.active_asset_id
+      stream: {
+        id: stream.id,
+        status: stream.status,
+        playbackId: stream.playback_ids?.[0]?.id,
+        activeAssetId: stream.active_asset_id,
+        recentAssetIds: stream.recent_asset_ids,
+        latencyMode: stream.latency_mode,
+        reconnectWindow: stream.reconnect_window,
+        maxContinuousDuration: stream.max_continuous_duration
+      }
     };
   } catch (error) {
-    console.error('❌ Mux get stream error:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('❌ Mux getLiveStream error:', error.message);
+    throw error;
   }
 }
 
 /**
- * End/disable a live stream
- * @param {string} streamId - Mux stream ID
+ * Get stream status and check if active
  */
-async function endLiveStream(streamId) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
-
+async function getStreamStatus(streamId) {
   try {
-    // Signal that the stream is complete
-    await mux.video.liveStreams.complete(streamId);
-    
-    console.log('✅ Mux live stream ended:', streamId);
+    const stream = await Video.LiveStreams.get(streamId);
     
     return {
       success: true,
-      message: 'Stream ended'
+      status: stream.status,
+      isActive: stream.status === 'active',
+      isIdle: stream.status === 'idle',
+      playbackId: stream.playback_ids?.[0]?.id,
+      latencyMode: stream.latency_mode
     };
   } catch (error) {
-    console.error('❌ Mux end stream error:', error.message);
+    console.error('❌ Mux getStreamStatus error:', error.message);
     return {
       success: false,
+      status: 'unknown',
       error: error.message
     };
   }
 }
 
 /**
- * Delete a live stream
- * @param {string} streamId - Mux stream ID
+ * Delete/disable a live stream
  */
 async function deleteLiveStream(streamId) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
-
   try {
-    await mux.video.liveStreams.delete(streamId);
-    
-    console.log('✅ Mux live stream deleted:', streamId);
-    
+    await Video.LiveStreams.del(streamId);
+    console.log(`🗑️ Mux stream ${streamId} deleted`);
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Mux deleteLiveStream error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Reset stream key (for security)
+ */
+async function resetStreamKey(streamId) {
+  try {
+    const result = await Video.LiveStreams.resetStreamKey(streamId);
+    console.log(`🔄 Stream key reset for ${streamId}`);
     return {
       success: true,
-      message: 'Stream deleted'
+      streamKey: result.stream_key
     };
   } catch (error) {
-    console.error('❌ Mux delete stream error:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('❌ Mux resetStreamKey error:', error.message);
+    throw error;
   }
 }
 
 /**
- * Get playback URL for a stream
- * @param {string} playbackId - Mux playback ID
- * @returns {Object} Various playback URLs
- */
-function getPlaybackUrl(playbackId) {
-  if (!playbackId) return null;
-  
-  return {
-    hls: `https://stream.mux.com/${playbackId}.m3u8`,
-    thumbnail: `https://image.mux.com/${playbackId}/thumbnail.jpg`,
-    gif: `https://image.mux.com/${playbackId}/animated.gif`,
-    storyboard: `https://image.mux.com/${playbackId}/storyboard.vtt`
-  };
-}
-
-/**
- * Create a direct upload for video files
- * @returns {Object} Upload URL and asset ID
- */
-async function createDirectUpload(options = {}) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
-
-  try {
-    const upload = await mux.video.uploads.create({
-      cors_origin: options.corsOrigin || '*',
-      new_asset_settings: {
-        playback_policy: ['public'],
-        mp4_support: 'standard'
-      }
-    });
-
-    return {
-      success: true,
-      uploadId: upload.id,
-      uploadUrl: upload.url,
-      assetId: upload.asset_id
-    };
-  } catch (error) {
-    console.error('❌ Mux upload creation error:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
-
-/**
- * Get asset details
- * @param {string} assetId - Mux asset ID
+ * Get asset details (for recordings)
  */
 async function getAsset(assetId) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
-
   try {
-    const asset = await mux.video.assets.retrieve(assetId);
+    const asset = await Video.Assets.get(assetId);
     
     return {
       success: true,
       asset: {
         id: asset.id,
         status: asset.status,
-        duration: asset.duration,
         playbackId: asset.playback_ids?.[0]?.id,
+        duration: asset.duration,
+        maxStoredResolution: asset.max_stored_resolution,
+        maxStoredFrameRate: asset.max_stored_frame_rate,
         aspectRatio: asset.aspect_ratio,
-        resolution: asset.resolution_tier
+        createdAt: asset.created_at
       }
     };
   } catch (error) {
-    console.error('❌ Mux get asset error:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('❌ Mux getAsset error:', error.message);
+    throw error;
   }
 }
 
 /**
- * Create a web input for browser-based streaming
- * This requires a Mux plan that supports web inputs
+ * Create a playback ID for an asset
  */
-async function createWebInput(liveStreamId) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
-
+async function createPlaybackId(assetId, policy = 'public') {
   try {
-    const webInput = await mux.video.webInputs.create({
-      live_stream_id: liveStreamId
+    const playbackId = await Video.Assets.createPlaybackId(assetId, {
+      policy
     });
-
+    
     return {
       success: true,
-      webInputId: webInput.id,
-      url: webInput.url
+      playbackId: playbackId.id,
+      policy: playbackId.policy
     };
   } catch (error) {
-    console.error('❌ Mux web input error:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('❌ Mux createPlaybackId error:', error.message);
+    throw error;
   }
 }
 
 /**
- * List all live streams
+ * Generate playback URLs from a playback ID
  */
-async function listLiveStreams(options = {}) {
-  if (!isAvailable()) {
-    return { success: false, error: 'Mux not configured' };
-  }
+function getPlaybackUrls(playbackId) {
+  if (!playbackId) return null;
+  
+  return {
+    hls: `https://stream.mux.com/${playbackId}.m3u8`,
+    thumbnail: `https://image.mux.com/${playbackId}/thumbnail.jpg`,
+    thumbnailWebp: `https://image.mux.com/${playbackId}/thumbnail.webp`,
+    gif: `https://image.mux.com/${playbackId}/animated.gif`,
+    storyboard: `https://image.mux.com/${playbackId}/storyboard.vtt`,
+    // For low latency playback
+    llHls: `https://stream.mux.com/${playbackId}.m3u8?redundant_streams=true`
+  };
+}
 
+/**
+ * List recent live streams
+ */
+async function listLiveStreams(limit = 10) {
   try {
-    const streams = await mux.video.liveStreams.list({
-      limit: options.limit || 20
-    });
-
+    const streams = await Video.LiveStreams.list({ limit });
+    
     return {
       success: true,
-      streams: streams.data || streams
+      streams: streams.map(s => ({
+        id: s.id,
+        status: s.status,
+        playbackId: s.playback_ids?.[0]?.id,
+        latencyMode: s.latency_mode,
+        createdAt: s.created_at
+      }))
     };
   } catch (error) {
-    console.error('❌ Mux list streams error:', error.message);
-    return {
-      success: false,
-      error: error.message
-    };
+    console.error('❌ Mux listLiveStreams error:', error.message);
+    throw error;
   }
 }
 
 module.exports = {
-  isAvailable,
   createLiveStream,
-  getLiveStreamStatus,
-  endLiveStream,
+  getLiveStream,
+  getStreamStatus,
   deleteLiveStream,
-  getPlaybackUrl,
-  createDirectUpload,
+  resetStreamKey,
   getAsset,
-  createWebInput,
-  listLiveStreams
+  createPlaybackId,
+  getPlaybackUrls,
+  listLiveStreams,
+  muxClient,
+  Video
 };

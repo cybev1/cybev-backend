@@ -79,31 +79,41 @@ class WebRTCToRTMPService {
       lastDataTime: Date.now()
     });
 
-    // FFmpeg arguments - ULTRA SIMPLE for maximum stability
-    // Avoiding options that might cause SIGSEGV
+    // FFmpeg arguments - OPTIMIZED for quality and low latency
+    // Higher bitrate + better preset = clearer video
     const ffmpegArgs = [
       '-y',
       '-hide_banner',
       '-loglevel', 'warning',
       
-      // Input from stdin
+      // Input from stdin - WebM format
+      '-f', 'webm',
       '-i', 'pipe:0',
       
-      // Video: Simple H.264
+      // Video: H.264 with BETTER quality settings
       '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-tune', 'zerolatency',
-      '-b:v', '1500k',
+      '-preset', 'veryfast',        // Better quality than ultrafast
+      '-tune', 'zerolatency',       // Low latency
+      '-profile:v', 'high',         // Better quality profile
+      '-level', '4.1',
+      '-b:v', '3000k',              // Higher bitrate for clarity
+      '-maxrate', '3500k',
+      '-bufsize', '6000k',
       '-pix_fmt', 'yuv420p',
-      '-g', '30',
+      '-g', '60',                   // Keyframe every 2 sec at 30fps
+      '-keyint_min', '30',
+      '-sc_threshold', '0',
+      '-r', '30',
       
-      // Audio: Simple AAC
+      // Audio: AAC 
       '-c:a', 'aac',
       '-b:a', '128k',
       '-ar', '44100',
+      '-ac', '2',
       
       // Output to RTMP
       '-f', 'flv',
+      '-flvflags', 'no_duration_filesize',
       rtmpUrl
     ];
 
