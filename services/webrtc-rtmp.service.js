@@ -1,284 +1,276 @@
 // ============================================
 // FILE: services/webrtc-rtmp.service.js
-// WebRTC to RTMP Bridge Service
-// Converts browser MediaRecorder output to RTMP for Mux
+// WebRTC to RTMP Transcoding Service
+// Converts browser MediaRecorder stream to Mux RTMP
 // ============================================
 
 const { spawn } = require('child_process');
 const path = require('path');
 
-// Try to use ffmpeg-static if available, otherwise use system ffmpeg
+// Try to get ffmpeg path
 let ffmpegPath = 'ffmpeg';
 try {
   ffmpegPath = require('ffmpeg-static');
-  console.log('✅ Using ffmpeg-static');
-} catch {
-  console.log('ℹ️ Using system FFmpeg');
+  console.log('✅ Using ffmpeg-static:', ffmpegPath);
+} catch (e) {
+  console.log('⚠️ ffmpeg-static not found, using system ffmpeg');
 }
 
-class WebRTCtoRTMPService {
+class WebRTCToRTMPService {
   constructor() {
-    this.sessions = new Map(); // streamId -> session data
-    this.ffmpegAvailable = null;
+    this.activeStreams = new Map(); // streamId -> { ffmpeg, socket, rtmpUrl, startTime }
+    this.streamStats = new Map(); // streamId -> { bytesReceived, chunks, errors }
   }
 
-  // ==========================================
-  // Check if FFmpeg is available
-  // ==========================================
-  async checkFFmpeg() {
-    if (this.ffmpegAvailable !== null) {
-      return this.ffmpegAvailable;
+  /**
+   * Start streaming to RTMP
+   * @param {string} streamId - Database stream ID
+   * @param {string} rtmpUrl - Full RTMP URL with stream key
+   * @param {WebSocket} socket - WebSocket connection
+   */
+  startStream(streamId, rtmpUrl, socket) {
+    if (this.activeStreams.has(streamId)) {
+      console.log(`⚠️ Stream ${streamId} already active, stopping old one`);
+      this.stopStream(streamId);
     }
 
-    return new Promise((resolve) => {
-      const proc = spawn(ffmpegPath, ['-version']);
-      
-      proc.on('error', () => {
-        console.log('❌ FFmpeg not available');
-        this.ffmpegAvailable = false;
-        resolve(false);
-      });
-      
-      proc.on('close', (code) => {
-        this.ffmpegAvailable = code === 0;
-        if (this.ffmpegAvailable) {
-          console.log('✅ FFmpeg is available');
-        }
-        resolve(this.ffmpegAvailable);
-      });
+    console.log(`🎬 Starting WebRTC-to-RTMP stream: ${streamId}`);
+    console.log(`📡 RTMP URL: ${rtmpUrl.substring(0, 50)}...`);
+
+    // Initialize stats
+    this.streamStats.set(streamId, {
+      bytesReceived: 0,
+      chunks: 0,
+      errors: 0,
+      startTime: Date.now()
     });
-  }
 
-  // ==========================================
-  // Start a new streaming session
-  // ==========================================
-  async startSession(streamId, rtmpUrl, streamKey, options = {}) {
-    const available = await this.checkFFmpeg();
-    if (!available) {
-      throw new Error('FFmpeg is not available on this server');
-    }
-
-    // Check if session already exists
-    if (this.sessions.has(streamId)) {
-      console.log(`⚠️ Session ${streamId} already exists, stopping old session`);
-      this.stopSession(streamId);
-    }
-
-    const fullRtmpUrl = `${rtmpUrl}/${streamKey}`;
-    
-    // FFmpeg arguments for WebRTC-like input (WebM/Matroska from MediaRecorder)
+    // FFmpeg arguments for WebM/MediaRecorder input to RTMP output
     const ffmpegArgs = [
-      // Input settings
-      '-f', 'webm',              // Input format (MediaRecorder outputs WebM)
-      '-i', 'pipe:0',            // Read from stdin
+      // Input options
+      '-i', 'pipe:0',                    // Read from stdin
       
       // Video encoding
-      '-c:v', 'libx264',         // H.264 codec for RTMP compatibility
-      '-preset', options.preset || 'veryfast',  // Encoding speed
-      '-tune', 'zerolatency',    // Low latency
-      '-profile:v', 'baseline',  // Baseline profile for compatibility
-      '-level', '3.1',
-      '-b:v', options.videoBitrate || '2500k',  // Video bitrate
-      '-maxrate', options.videoBitrate || '2500k',
-      '-bufsize', options.bufsize || '5000k',
-      '-pix_fmt', 'yuv420p',     // Pixel format
-      '-g', '60',                // Keyframe interval (2 seconds at 30fps)
-      '-keyint_min', '60',
+      '-c:v', 'libx264',                 // H.264 video codec
+      '-preset', 'veryfast',             // Fast encoding for live
+      '-tune', 'zerolatency',            // Low latency tuning
+      '-profile:v', 'baseline',          // Baseline profile for compatibility
+      '-level', '3.1',                   // Level for mobile compatibility
+      '-b:v', '2500k',                   // Video bitrate
+      '-maxrate', '2500k',               // Max bitrate
+      '-bufsize', '5000k',               // Buffer size
+      '-pix_fmt', 'yuv420p',             // Pixel format
+      '-g', '60',                        // Keyframe interval (2 seconds at 30fps)
+      '-keyint_min', '60',               // Min keyframe interval
+      '-sc_threshold', '0',              // Disable scene change detection
       
-      // Video scaling (optional)
-      '-vf', `scale=${options.width || 1280}:${options.height || 720}:force_original_aspect_ratio=decrease,pad=${options.width || 1280}:${options.height || 720}:(ow-iw)/2:(oh-ih)/2`,
+      // Video scaling (ensure 720p max)
+      '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
       
       // Audio encoding
-      '-c:a', 'aac',             // AAC codec for RTMP
-      '-b:a', options.audioBitrate || '128k',   // Audio bitrate
-      '-ar', '44100',            // Sample rate
-      '-ac', '2',                // Stereo
+      '-c:a', 'aac',                     // AAC audio codec
+      '-b:a', '128k',                    // Audio bitrate
+      '-ar', '44100',                    // Sample rate
+      '-ac', '2',                        // Stereo
       
-      // Output settings
-      '-f', 'flv',               // FLV format for RTMP
-      '-flvflags', 'no_duration_filesize',
+      // Output options
+      '-f', 'flv',                       // FLV format for RTMP
+      '-flvflags', 'no_duration_filesize', // Don't write duration
       
-      // RTMP output
-      fullRtmpUrl
+      // Output to RTMP
+      rtmpUrl
     ];
 
-    console.log(`🎬 Starting FFmpeg session for stream ${streamId}`);
-    console.log(`   RTMP URL: ${rtmpUrl}/***`);
-    
-    const ffmpegProcess = spawn(ffmpegPath, ffmpegArgs, {
+    // Spawn FFmpeg process
+    const ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    const session = {
-      streamId,
-      ffmpeg: ffmpegProcess,
-      rtmpUrl: fullRtmpUrl,
-      startedAt: new Date(),
-      bytesReceived: 0,
-      isActive: true,
-      errors: []
-    };
-
-    // Handle FFmpeg stdout (progress info)
-    ffmpegProcess.stdout.on('data', (data) => {
-      // FFmpeg outputs progress to stderr, stdout is usually empty
+    // Store stream info
+    this.activeStreams.set(streamId, {
+      ffmpeg,
+      socket,
+      rtmpUrl,
+      startTime: Date.now(),
+      isConnected: false
     });
 
-    // Handle FFmpeg stderr (logs and progress)
-    ffmpegProcess.stderr.on('data', (data) => {
+    // Handle FFmpeg stderr (progress and errors)
+    ffmpeg.stderr.on('data', (data) => {
       const message = data.toString();
-      // Only log important messages
-      if (message.includes('Error') || message.includes('error')) {
-        console.error(`FFmpeg [${streamId}]:`, message);
-        session.errors.push(message);
-      } else if (message.includes('frame=') && Math.random() < 0.01) {
-        // Log occasional progress (1% of frames)
-        console.log(`FFmpeg [${streamId}]: Streaming...`);
+      
+      // Check for successful RTMP connection
+      if (message.includes('Output #0') || message.includes('mux.com')) {
+        const stream = this.activeStreams.get(streamId);
+        if (stream && !stream.isConnected) {
+          stream.isConnected = true;
+          console.log(`✅ Stream ${streamId} connected to Mux RTMP`);
+          
+          // Notify client
+          if (socket && socket.readyState === 1) {
+            socket.send(JSON.stringify({
+              type: 'rtmp-connected',
+              streamId,
+              message: 'Connected to streaming server'
+            }));
+          }
+        }
+      }
+      
+      // Log errors
+      if (message.includes('error') || message.includes('Error') || message.includes('failed')) {
+        console.error(`❌ FFmpeg error for ${streamId}:`, message.trim());
+        const stats = this.streamStats.get(streamId);
+        if (stats) stats.errors++;
+      }
+      
+      // Log frame info periodically
+      if (message.includes('frame=') && message.includes('fps=')) {
+        const frameMatch = message.match(/frame=\s*(\d+)/);
+        if (frameMatch && parseInt(frameMatch[1]) % 300 === 0) {
+          console.log(`📊 Stream ${streamId}: ${message.trim().substring(0, 100)}`);
+        }
       }
     });
 
-    // Handle FFmpeg exit
-    ffmpegProcess.on('close', (code) => {
-      console.log(`FFmpeg [${streamId}] exited with code ${code}`);
-      session.isActive = false;
-      session.endedAt = new Date();
+    // Handle FFmpeg close
+    ffmpeg.on('close', (code) => {
+      console.log(`🔴 FFmpeg closed for stream ${streamId} with code ${code}`);
+      this.cleanup(streamId);
       
-      // Clean up after a delay
-      setTimeout(() => {
-        if (this.sessions.get(streamId) === session) {
-          this.sessions.delete(streamId);
-        }
-      }, 5000);
-    });
-
-    // Handle FFmpeg errors
-    ffmpegProcess.on('error', (err) => {
-      console.error(`FFmpeg [${streamId}] error:`, err);
-      session.isActive = false;
-      session.errors.push(err.message);
-    });
-
-    this.sessions.set(streamId, session);
-    
-    return {
-      success: true,
-      streamId,
-      message: 'Streaming session started'
-    };
-  }
-
-  // ==========================================
-  // Send media data to FFmpeg
-  // ==========================================
-  sendData(streamId, data) {
-    const session = this.sessions.get(streamId);
-    
-    if (!session || !session.isActive) {
-      return { success: false, error: 'Session not found or inactive' };
-    }
-
-    try {
-      // Write data to FFmpeg stdin
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      session.ffmpeg.stdin.write(buffer);
-      session.bytesReceived += buffer.length;
-      
-      return { success: true, bytesReceived: session.bytesReceived };
-    } catch (error) {
-      console.error(`Error sending data to FFmpeg [${streamId}]:`, error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // ==========================================
-  // Stop a streaming session
-  // ==========================================
-  stopSession(streamId) {
-    const session = this.sessions.get(streamId);
-    
-    if (!session) {
-      return { success: false, error: 'Session not found' };
-    }
-
-    console.log(`⏹️ Stopping FFmpeg session for stream ${streamId}`);
-    
-    try {
-      // Close stdin to signal end of input
-      session.ffmpeg.stdin.end();
-      
-      // Give FFmpeg time to finish, then force kill if needed
-      setTimeout(() => {
-        if (session.isActive) {
-          session.ffmpeg.kill('SIGTERM');
-        }
-      }, 5000);
-      
-      session.isActive = false;
-      
-      return {
-        success: true,
-        streamId,
-        bytesReceived: session.bytesReceived,
-        duration: session.startedAt ? Date.now() - session.startedAt : 0
-      };
-    } catch (error) {
-      console.error(`Error stopping FFmpeg [${streamId}]:`, error);
-      return { success: false, error: error.message };
-    }
-  }
-
-  // ==========================================
-  // Get session status
-  // ==========================================
-  getSessionStatus(streamId) {
-    const session = this.sessions.get(streamId);
-    
-    if (!session) {
-      return { exists: false };
-    }
-
-    return {
-      exists: true,
-      streamId: session.streamId,
-      isActive: session.isActive,
-      bytesReceived: session.bytesReceived,
-      startedAt: session.startedAt,
-      duration: session.startedAt ? Date.now() - session.startedAt : 0,
-      errors: session.errors
-    };
-  }
-
-  // ==========================================
-  // Get all active sessions
-  // ==========================================
-  getActiveSessions() {
-    const active = [];
-    for (const [streamId, session] of this.sessions) {
-      if (session.isActive) {
-        active.push({
+      if (socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({
+          type: 'stream-ended',
           streamId,
-          bytesReceived: session.bytesReceived,
-          startedAt: session.startedAt
-        });
+          code,
+          reason: code === 0 ? 'Stream ended normally' : 'Stream interrupted'
+        }));
       }
-    }
-    return active;
+    });
+
+    // Handle FFmpeg error
+    ffmpeg.on('error', (error) => {
+      console.error(`❌ FFmpeg error for ${streamId}:`, error.message);
+      this.cleanup(streamId);
+      
+      if (socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({
+          type: 'error',
+          streamId,
+          error: 'Streaming process failed: ' + error.message
+        }));
+      }
+    });
+
+    // Handle stdin errors
+    ffmpeg.stdin.on('error', (error) => {
+      if (error.code !== 'EPIPE') {
+        console.error(`❌ FFmpeg stdin error for ${streamId}:`, error.message);
+      }
+    });
+
+    return true;
   }
 
-  // ==========================================
-  // Check service status
-  // ==========================================
-  async getStatus() {
-    const ffmpegAvailable = await this.checkFFmpeg();
+  /**
+   * Write video data to FFmpeg stdin
+   */
+  writeData(streamId, data) {
+    const stream = this.activeStreams.get(streamId);
+    if (!stream || !stream.ffmpeg || !stream.ffmpeg.stdin.writable) {
+      return false;
+    }
+
+    try {
+      stream.ffmpeg.stdin.write(data);
+      
+      const stats = this.streamStats.get(streamId);
+      if (stats) {
+        stats.bytesReceived += data.length;
+        stats.chunks++;
+      }
+      
+      return true;
+    } catch (error) {
+      console.error(`❌ Write error for ${streamId}:`, error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Stop a stream
+   */
+  stopStream(streamId) {
+    const stream = this.activeStreams.get(streamId);
+    if (!stream) {
+      console.log(`⚠️ Stream ${streamId} not found for stopping`);
+      return false;
+    }
+
+    console.log(`🛑 Stopping stream ${streamId}`);
+
+    try {
+      if (stream.ffmpeg && stream.ffmpeg.stdin) {
+        stream.ffmpeg.stdin.end();
+      }
+
+      setTimeout(() => {
+        if (stream.ffmpeg && !stream.ffmpeg.killed) {
+          stream.ffmpeg.kill('SIGTERM');
+        }
+      }, 3000);
+
+    } catch (error) {
+      console.error(`❌ Error stopping stream ${streamId}:`, error.message);
+    }
+
+    const stats = this.streamStats.get(streamId);
+    if (stats) {
+      const duration = (Date.now() - stats.startTime) / 1000;
+      console.log(`📊 Stream ${streamId} stats: ${stats.chunks} chunks, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB, ${duration.toFixed(0)}s duration`);
+    }
+
+    this.cleanup(streamId);
+    return true;
+  }
+
+  cleanup(streamId) {
+    this.activeStreams.delete(streamId);
+    this.streamStats.delete(streamId);
+  }
+
+  isStreamActive(streamId) {
+    return this.activeStreams.has(streamId);
+  }
+
+  getStreamStats(streamId) {
+    const stats = this.streamStats.get(streamId);
+    const stream = this.activeStreams.get(streamId);
+    
+    if (!stats || !stream) return null;
+    
     return {
-      available: ffmpegAvailable,
-      activeSessions: this.getActiveSessions().length,
-      ffmpegPath
+      ...stats,
+      duration: (Date.now() - stats.startTime) / 1000,
+      isConnected: stream.isConnected || false,
+      mbReceived: (stats.bytesReceived / 1024 / 1024).toFixed(2)
+    };
+  }
+
+  getActiveStreamCount() {
+    return this.activeStreams.size;
+  }
+
+  getStatus() {
+    return {
+      activeStreams: this.activeStreams.size,
+      ffmpegPath,
+      streams: Array.from(this.activeStreams.keys()).map(id => ({
+        id,
+        stats: this.getStreamStats(id)
+      }))
     };
   }
 }
 
-// Export singleton instance
-const webrtcRtmpService = new WebRTCtoRTMPService();
-
-module.exports = webrtcRtmpService;
+module.exports = new WebRTCToRTMPService();
