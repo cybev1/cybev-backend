@@ -1,32 +1,21 @@
 // ============================================
 // FILE: services/webrtc-rtmp.service.js
-// WebRTC to RTMP Transcoding Service - FIXED v2
-// Converts browser MediaRecorder stream to Mux RTMP
-// IMPROVED: Better error handling, logging, and debugging
+// WebRTC to RTMP Transcoding Service - FIXED v4
+// IMPROVED: Better FFmpeg args, error handling, timeouts
 // ============================================
 
 const { spawn } = require('child_process');
-const path = require('path');
 
-// Try to get ffmpeg path
+// Get ffmpeg path
 let ffmpegPath = 'ffmpeg';
 try {
   ffmpegPath = require('ffmpeg-static');
   console.log('✅ Using ffmpeg-static:', ffmpegPath);
 } catch (e) {
-  console.log('⚠️ ffmpeg-static not found, trying system ffmpeg');
-  // Try to find system ffmpeg
-  try {
-    const { execSync } = require('child_process');
-    execSync('which ffmpeg', { stdio: 'pipe' });
-    ffmpegPath = 'ffmpeg';
-    console.log('✅ Using system ffmpeg');
-  } catch {
-    console.error('❌ FFmpeg not available!');
-  }
+  console.log('⚠️ ffmpeg-static not found, using system ffmpeg');
 }
 
-// Verify FFmpeg works
+// Verify FFmpeg on startup
 try {
   const { execSync } = require('child_process');
   const version = execSync(`${ffmpegPath} -version`, { stdio: 'pipe' }).toString().split('\n')[0];
@@ -37,29 +26,29 @@ try {
 
 class WebRTCToRTMPService {
   constructor() {
-    this.activeStreams = new Map(); // streamId -> { ffmpeg, socket, rtmpUrl, startTime }
-    this.streamStats = new Map(); // streamId -> { bytesReceived, chunks, errors }
+    this.activeStreams = new Map();
+    this.streamStats = new Map();
     console.log('✅ WebRTC-RTMP Service initialized');
   }
 
-  /**
-   * Start streaming to RTMP
-   * @param {string} streamId - Database stream ID
-   * @param {string} rtmpUrl - Full RTMP URL with stream key
-   * @param {object} socket - Socket.IO socket connection
-   */
   startStream(streamId, rtmpUrl, socket) {
-    console.log(`\n${'='.repeat(50)}`);
-    console.log(`🎬 STARTING STREAM: ${streamId}`);
-    console.log(`${'='.repeat(50)}`);
+    console.log(`\n${'='.repeat(60)}`);
+    console.log(`🎬 STARTING FFMPEG STREAM: ${streamId}`);
+    console.log(`${'='.repeat(60)}`);
     
     if (this.activeStreams.has(streamId)) {
-      console.log(`⚠️ Stream ${streamId} already active, stopping old one first`);
+      console.log(`⚠️ Stream ${streamId} already active, stopping old one`);
       this.stopStream(streamId);
     }
 
-    console.log(`📡 RTMP URL: ${rtmpUrl.substring(0, 50)}...`);
-    console.log(`🔧 FFmpeg path: ${ffmpegPath}`);
+    // Validate RTMP URL
+    if (!rtmpUrl || rtmpUrl.includes('undefined')) {
+      console.error('❌ Invalid RTMP URL:', rtmpUrl);
+      return false;
+    }
+
+    console.log(`📡 RTMP URL: ${rtmpUrl.substring(0, 70)}...`);
+    console.log(`🔧 FFmpeg: ${ffmpegPath}`);
 
     // Initialize stats
     this.streamStats.set(streamId, {
@@ -68,36 +57,42 @@ class WebRTCToRTMPService {
       errors: 0,
       startTime: Date.now(),
       ffmpegStarted: false,
-      rtmpConnected: false
+      rtmpConnected: false,
+      lastDataTime: Date.now()
     });
 
-    // FFmpeg arguments - optimized for WebM input from MediaRecorder
+    // FFmpeg arguments - SIMPLIFIED for better compatibility
     const ffmpegArgs = [
-      // Global options
+      // Overwrite and no banner
+      '-y',
       '-hide_banner',
-      '-loglevel', 'warning',
       
-      // Input options - CRITICAL: must match MediaRecorder output
-      '-f', 'webm',                      // Input format
-      '-i', 'pipe:0',                    // Read from stdin
+      // Logging - show warnings and errors
+      '-loglevel', 'info',
+      
+      // Input: Read WebM from stdin with longer timeout
+      '-f', 'webm',
+      '-analyzeduration', '5000000',  // 5 seconds to analyze
+      '-probesize', '5000000',        // 5MB probe size
+      '-i', 'pipe:0',
       
       // Video encoding
-      '-c:v', 'libx264',                 // H.264 codec
-      '-preset', 'ultrafast',            // Fastest encoding
-      '-tune', 'zerolatency',            // Low latency
-      '-profile:v', 'baseline',          // Max compatibility
-      '-level', '3.0',                   
-      '-b:v', '1500k',                   // Video bitrate
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-tune', 'zerolatency',
+      '-profile:v', 'baseline',
+      '-level', '3.1',
+      '-b:v', '1500k',
       '-maxrate', '1500k',
       '-bufsize', '3000k',
       '-pix_fmt', 'yuv420p',
-      '-g', '30',                        // Keyframe every 1 second at 30fps
-      '-keyint_min', '30',
+      '-g', '60',                     // GOP = 2 seconds at 30fps
+      '-keyint_min', '60',
       '-sc_threshold', '0',
-      '-r', '30',                        // Output framerate
+      '-r', '30',
       
-      // Scale to 720p max
-      '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:black',
+      // Scale down if needed
+      '-vf', 'scale=1280:-2:force_original_aspect_ratio=decrease',
       
       // Audio encoding
       '-c:a', 'aac',
@@ -105,101 +100,102 @@ class WebRTCToRTMPService {
       '-ar', '44100',
       '-ac', '2',
       
-      // Output options
+      // Output: FLV to RTMP
       '-f', 'flv',
       '-flvflags', 'no_duration_filesize',
       
-      // Output to RTMP
       rtmpUrl
     ];
 
-    console.log(`🔧 FFmpeg command: ${ffmpegPath} ${ffmpegArgs.slice(0, 10).join(' ')}...`);
+    console.log(`🔧 FFmpeg args: ${ffmpegArgs.slice(0, 15).join(' ')}...`);
 
-    // Spawn FFmpeg process
+    // Spawn FFmpeg
     let ffmpeg;
     try {
       ffmpeg = spawn(ffmpegPath, ffmpegArgs, {
         stdio: ['pipe', 'pipe', 'pipe']
       });
-      console.log(`✅ FFmpeg process spawned with PID: ${ffmpeg.pid}`);
-    } catch (spawnError) {
-      console.error(`❌ Failed to spawn FFmpeg:`, spawnError.message);
-      if (socket) {
-        socket.emit('error', { message: 'Failed to start video encoder: ' + spawnError.message });
+      
+      if (!ffmpeg.pid) {
+        console.error('❌ FFmpeg failed to spawn - no PID');
+        return false;
       }
+      
+      console.log(`✅ FFmpeg spawned with PID: ${ffmpeg.pid}`);
+    } catch (error) {
+      console.error(`❌ FFmpeg spawn error:`, error.message);
+      if (socket) socket.emit('error', { message: 'Failed to start encoder: ' + error.message });
       return false;
     }
 
-    // Store stream info
+    // Store stream
     this.activeStreams.set(streamId, {
       ffmpeg,
       socket,
       rtmpUrl,
       startTime: Date.now(),
       isConnected: false,
-      pid: ffmpeg.pid
+      pid: ffmpeg.pid,
+      dataTimeout: null
     });
 
-    // Handle FFmpeg stdout
+    const stats = this.streamStats.get(streamId);
+    stats.ffmpegStarted = true;
+
+    // Handle stdout
     ffmpeg.stdout.on('data', (data) => {
       console.log(`📺 FFmpeg stdout [${streamId}]:`, data.toString().trim());
     });
 
-    // Handle FFmpeg stderr (progress and errors)
+    // Handle stderr (FFmpeg logs go here)
     ffmpeg.stderr.on('data', (data) => {
-      const message = data.toString();
-      const stats = this.streamStats.get(streamId);
+      const msg = data.toString();
+      const stream = this.activeStreams.get(streamId);
       
-      // Check for successful RTMP connection
-      if (message.includes('Output #0') || message.includes('mux.com') || message.includes('Video:')) {
-        const stream = this.activeStreams.get(streamId);
-        if (stream && !stream.isConnected) {
-          stream.isConnected = true;
-          if (stats) stats.rtmpConnected = true;
-          console.log(`✅ Stream ${streamId} CONNECTED to Mux RTMP!`);
-          
-          // Notify client
-          if (socket && socket.connected) {
-            socket.emit('rtmp-connected', {
-              streamId,
-              message: 'Connected to streaming server'
-            });
+      // Log all FFmpeg output for debugging
+      const lines = msg.split('\n').filter(l => l.trim());
+      lines.forEach(line => {
+        // Check for RTMP connection success
+        if (line.includes('Output #0') || line.includes('mux.com') || line.includes('Video:') || line.includes('Stream mapping')) {
+          if (stream && !stream.isConnected) {
+            stream.isConnected = true;
+            stats.rtmpConnected = true;
+            console.log(`✅ Stream ${streamId} CONNECTED to Mux!`);
+            if (socket && socket.connected) {
+              socket.emit('rtmp-connected', { streamId, message: 'Connected to Mux' });
+            }
           }
         }
-      }
-      
-      // Log frame progress
-      if (message.includes('frame=')) {
-        const frameMatch = message.match(/frame=\s*(\d+)/);
-        const fpsMatch = message.match(/fps=\s*(\d+)/);
-        if (frameMatch) {
-          const frames = parseInt(frameMatch[1]);
-          if (frames % 150 === 0) { // Log every 5 seconds at 30fps
-            console.log(`📊 Stream ${streamId}: ${message.trim().substring(0, 80)}`);
-          }
-        }
-      }
-      
-      // Log errors
-      if (message.toLowerCase().includes('error') || message.includes('failed') || message.includes('Invalid')) {
-        console.error(`❌ FFmpeg error [${streamId}]: ${message.trim()}`);
-        if (stats) stats.errors++;
         
-        // Notify client of errors
-        if (socket && socket.connected && message.includes('Connection refused')) {
-          socket.emit('warning', { message: 'RTMP connection issue, retrying...' });
+        // Log frame progress
+        if (line.includes('frame=')) {
+          const frameMatch = line.match(/frame=\s*(\d+)/);
+          if (frameMatch) {
+            const frames = parseInt(frameMatch[1]);
+            if (frames % 90 === 0) { // Every 3 seconds at 30fps
+              console.log(`📊 Stream ${streamId}: ${line.trim().substring(0, 100)}`);
+            }
+          }
         }
-      }
+        
+        // Log errors and warnings
+        if (line.toLowerCase().includes('error') || line.includes('failed') || line.includes('Invalid')) {
+          console.error(`❌ FFmpeg [${streamId}]: ${line.trim()}`);
+          stats.errors++;
+        } else if (line.includes('Opening') || line.includes('Stream #') || line.includes('Output #')) {
+          console.log(`📝 FFmpeg [${streamId}]: ${line.trim()}`);
+        }
+      });
     });
 
     // Handle FFmpeg close
     ffmpeg.on('close', (code, signal) => {
-      console.log(`🔴 FFmpeg closed [${streamId}]: code=${code}, signal=${signal}`);
+      console.log(`\n🔴 FFmpeg CLOSED [${streamId}]: code=${code}, signal=${signal}`);
       
       const stats = this.streamStats.get(streamId);
       if (stats) {
         const duration = (Date.now() - stats.startTime) / 1000;
-        console.log(`📊 Final stats [${streamId}]: ${stats.chunks} chunks, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB, ${duration.toFixed(0)}s`);
+        console.log(`📊 Final: ${stats.chunks} chunks, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB, ${duration.toFixed(0)}s, ${stats.errors} errors`);
       }
       
       // Notify client
@@ -207,6 +203,7 @@ class WebRTCToRTMPService {
         socket.emit('stream-ended', {
           streamId,
           code,
+          signal,
           reason: code === 0 ? 'Stream ended normally' : `Stream interrupted (code: ${code})`
         });
       }
@@ -214,70 +211,75 @@ class WebRTCToRTMPService {
       this.cleanup(streamId);
     });
 
-    // Handle FFmpeg error
+    // Handle FFmpeg errors
     ffmpeg.on('error', (error) => {
-      console.error(`❌ FFmpeg process error [${streamId}]:`, error.message);
-      
+      console.error(`❌ FFmpeg ERROR [${streamId}]:`, error.message);
       if (socket && socket.connected) {
-        socket.emit('error', {
-          streamId,
-          error: 'Streaming process failed: ' + error.message
-        });
+        socket.emit('error', { streamId, error: error.message });
       }
-      
       this.cleanup(streamId);
     });
 
-    // Handle stdin errors (broken pipe, etc.)
+    // Handle stdin errors
     ffmpeg.stdin.on('error', (error) => {
-      if (error.code !== 'EPIPE') {
+      if (error.code !== 'EPIPE' && error.code !== 'ERR_STREAM_DESTROYED') {
         console.error(`❌ FFmpeg stdin error [${streamId}]:`, error.message);
       }
     });
 
-    // Mark FFmpeg as started
-    const stats = this.streamStats.get(streamId);
-    if (stats) stats.ffmpegStarted = true;
+    // Set up data timeout - FFmpeg needs data within 30 seconds
+    const stream = this.activeStreams.get(streamId);
+    stream.dataTimeout = setTimeout(() => {
+      const stats = this.streamStats.get(streamId);
+      if (stats && stats.chunks === 0) {
+        console.error(`❌ No data received for stream ${streamId} after 30s - stopping`);
+        this.stopStream(streamId);
+      }
+    }, 30000);
 
-    console.log(`✅ FFmpeg pipeline ready for stream ${streamId}`);
+    console.log(`✅ FFmpeg pipeline ready, waiting for video data...`);
     return true;
   }
 
-  /**
-   * Write video data to FFmpeg stdin
-   * @param {string} streamId - Stream ID
-   * @param {Buffer} data - Video data chunk
-   */
   writeData(streamId, data) {
     const stream = this.activeStreams.get(streamId);
     
     if (!stream) {
-      console.log(`⚠️ No active stream found for ${streamId}`);
       return false;
     }
     
-    if (!stream.ffmpeg) {
-      console.log(`⚠️ No FFmpeg process for ${streamId}`);
+    if (!stream.ffmpeg || !stream.ffmpeg.stdin) {
       return false;
     }
     
-    if (!stream.ffmpeg.stdin || !stream.ffmpeg.stdin.writable) {
+    if (!stream.ffmpeg.stdin.writable) {
       console.log(`⚠️ FFmpeg stdin not writable for ${streamId}`);
       return false;
     }
 
     try {
+      // Clear data timeout on first data
+      if (stream.dataTimeout) {
+        clearTimeout(stream.dataTimeout);
+        stream.dataTimeout = null;
+      }
+
       const written = stream.ffmpeg.stdin.write(data);
       
-      // Update stats
       const stats = this.streamStats.get(streamId);
       if (stats) {
         stats.bytesReceived += data.length;
         stats.chunks++;
+        stats.lastDataTime = Date.now();
         
-        // Log every 100 chunks
+        // Log first chunk
+        if (stats.chunks === 1) {
+          console.log(`📥 First data chunk received for ${streamId}: ${data.length} bytes`);
+        }
+        
+        // Log progress every 100 chunks
         if (stats.chunks % 100 === 0) {
-          console.log(`📝 Stream ${streamId}: chunk #${stats.chunks}, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB total`);
+          console.log(`📊 Stream ${streamId}: chunk #${stats.chunks}, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB`);
         }
       }
       
@@ -288,49 +290,46 @@ class WebRTCToRTMPService {
     }
   }
 
-  /**
-   * Stop a stream
-   * @param {string} streamId - Stream ID
-   */
   stopStream(streamId) {
     const stream = this.activeStreams.get(streamId);
     if (!stream) {
-      console.log(`⚠️ Stream ${streamId} not found for stopping`);
+      console.log(`⚠️ Stream ${streamId} not found`);
       return false;
     }
 
-    console.log(`🛑 Stopping stream ${streamId} (PID: ${stream.pid})`);
+    console.log(`\n🛑 STOPPING STREAM ${streamId} (PID: ${stream.pid})`);
+
+    // Clear timeout
+    if (stream.dataTimeout) {
+      clearTimeout(stream.dataTimeout);
+    }
 
     try {
-      // Close stdin to signal end of input
+      // Close stdin first
       if (stream.ffmpeg && stream.ffmpeg.stdin) {
         stream.ffmpeg.stdin.end();
-        console.log(`✅ Closed stdin for ${streamId}`);
       }
 
-      // Give FFmpeg time to finish, then kill if needed
+      // Give FFmpeg time to finish, then force kill
       setTimeout(() => {
         if (stream.ffmpeg && !stream.ffmpeg.killed) {
           console.log(`⏰ Force killing FFmpeg for ${streamId}`);
-          stream.ffmpeg.kill('SIGTERM');
+          stream.ffmpeg.kill('SIGKILL');
         }
       }, 5000);
 
     } catch (error) {
-      console.error(`❌ Error stopping stream ${streamId}:`, error.message);
-    }
-
-    // Log final stats
-    const stats = this.streamStats.get(streamId);
-    if (stats) {
-      const duration = (Date.now() - stats.startTime) / 1000;
-      console.log(`📊 Stream ${streamId} ended: ${stats.chunks} chunks, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB, ${duration.toFixed(0)}s duration`);
+      console.error(`❌ Error stopping ${streamId}:`, error.message);
     }
 
     return true;
   }
 
   cleanup(streamId) {
+    const stream = this.activeStreams.get(streamId);
+    if (stream && stream.dataTimeout) {
+      clearTimeout(stream.dataTimeout);
+    }
     this.activeStreams.delete(streamId);
     this.streamStats.delete(streamId);
     console.log(`🧹 Cleaned up stream ${streamId}`);
@@ -371,6 +370,4 @@ class WebRTCToRTMPService {
   }
 }
 
-// Export singleton instance
-const service = new WebRTCToRTMPService();
-module.exports = service;
+module.exports = new WebRTCToRTMPService();
