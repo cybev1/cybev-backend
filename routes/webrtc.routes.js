@@ -421,7 +421,7 @@ function initializeWebSocket(io) {
       }
     });
 
-    // START STREAMING
+    // START STREAMING - Mark ready, FFmpeg starts on first data
     socket.on('start-streaming', async () => {
       console.log(`\n🎬 START STREAMING REQUEST from ${socket.id}`);
       console.log(`   isAuthenticated: ${isAuthenticated}`);
@@ -453,55 +453,42 @@ function initializeWebSocket(io) {
         return;
       }
 
-      try {
-        if (!webrtcRtmpService) {
-          console.log('❌ WebRTC-RTMP service not available');
-          socket.emit('error', { message: 'Streaming service not available' });
-          return;
-        }
-        
-        // Start FFmpeg
-        console.log('🔧 Starting FFmpeg process...');
-        const started = webrtcRtmpService.startStream(currentStreamId, currentRtmpUrl, socket);
-        
-        if (started) {
-          streamingActive = true;
-          
-          activeConnections.set(socket.id, {
-            ...activeConnections.get(socket.id),
-            streaming: true,
-            streamStarted: Date.now()
-          });
-          
-          // Update database
-          const Model = getLiveStreamModel();
-          if (Model) {
-            await Model.findByIdAndUpdate(currentStreamId, {
-              status: 'live',
-              isActive: true,
-              startedAt: new Date()
-            });
-          }
-
-          socket.emit('streaming-started', {
-            success: true,
-            streamId: currentStreamId,
-            message: 'FFmpeg started - send video data now'
-          });
-          
-          console.log(`✅ STREAMING STARTED for ${currentStreamId}`);
-        } else {
-          console.log('❌ FFmpeg failed to start');
-          socket.emit('error', { message: 'Failed to start FFmpeg' });
-        }
-        
-      } catch (error) {
-        console.error('❌ Start streaming error:', error);
-        socket.emit('error', { message: error.message });
+      if (!webrtcRtmpService) {
+        console.log('❌ WebRTC-RTMP service not available');
+        socket.emit('error', { message: 'Streaming service not available' });
+        return;
       }
+
+      // Mark as ready - FFmpeg will start when first data arrives
+      streamingActive = true;
+      
+      activeConnections.set(socket.id, {
+        ...activeConnections.get(socket.id),
+        streaming: true,
+        streamStarted: Date.now(),
+        ffmpegStarted: false  // Will be true after first data
+      });
+      
+      // Update database
+      const Model = getLiveStreamModel();
+      if (Model) {
+        await Model.findByIdAndUpdate(currentStreamId, {
+          status: 'live',
+          isActive: true,
+          startedAt: new Date()
+        });
+      }
+
+      socket.emit('streaming-started', {
+        success: true,
+        streamId: currentStreamId,
+        message: 'FFmpeg started - send video data now'
+      });
+      
+      console.log(`✅ READY TO STREAM for ${currentStreamId} - waiting for first data chunk`);
     });
 
-    // VIDEO DATA
+    // VIDEO DATA - Start FFmpeg on first chunk, then pipe data
     socket.on('video-data', (data) => {
       if (!isAuthenticated || !streamingActive || !currentStreamId) {
         return;
@@ -530,6 +517,25 @@ function initializeWebSocket(io) {
           return;
         }
 
+        // Start FFmpeg on first data chunk
+        const conn = activeConnections.get(socket.id);
+        if (conn && !conn.ffmpegStarted) {
+          console.log(`📥 First data chunk received (${buffer.length} bytes), starting FFmpeg...`);
+          
+          if (webrtcRtmpService) {
+            const started = webrtcRtmpService.startStream(currentStreamId, currentRtmpUrl, socket);
+            if (started) {
+              conn.ffmpegStarted = true;
+              activeConnections.set(socket.id, conn);
+              console.log(`✅ FFmpeg started on first data for ${currentStreamId}`);
+            } else {
+              console.error('❌ Failed to start FFmpeg on first data');
+              socket.emit('error', { message: 'Failed to start encoder' });
+              return;
+            }
+          }
+        }
+
         chunksReceived++;
         bytesReceived += buffer.length;
 
@@ -551,8 +557,13 @@ function initializeWebSocket(io) {
     socket.on('stop-streaming', async () => {
       console.log(`\n🛑 STOP STREAMING from ${socket.id}`);
       
-      if (currentStreamId && webrtcRtmpService) {
-        webrtcRtmpService.stopStream(currentStreamId);
+      const conn = activeConnections.get(socket.id);
+      
+      if (currentStreamId) {
+        // Only stop FFmpeg if it was actually started
+        if (conn && conn.ffmpegStarted && webrtcRtmpService) {
+          webrtcRtmpService.stopStream(currentStreamId);
+        }
         
         const Model = getLiveStreamModel();
         if (Model) {
@@ -579,7 +590,9 @@ function initializeWebSocket(io) {
       console.log(`\n🔌 DISCONNECT: ${socket.id}, reason: ${reason}`);
       console.log(`   Stats: ${chunksReceived} chunks, ${(bytesReceived / 1024 / 1024).toFixed(2)} MB`);
       
-      if (currentStreamId && streamingActive) {
+      const conn = activeConnections.get(socket.id);
+      
+      if (currentStreamId && streamingActive && conn && conn.ffmpegStarted) {
         setTimeout(async () => {
           if (webrtcRtmpService && webrtcRtmpService.isStreamActive(currentStreamId)) {
             console.log(`⏰ Auto-stopping orphaned stream: ${currentStreamId}`);
