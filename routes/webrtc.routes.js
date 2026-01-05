@@ -43,26 +43,24 @@ try {
   }
 }
 
-// Get LiveStream model
+// Get LiveStream model - MUST use the same model as live.routes.js
 let LiveStream;
 try {
   LiveStream = require('../models/livestream.model');
-} catch {
-  try {
-    LiveStream = mongoose.models.LiveStream || mongoose.model('LiveStream');
-  } catch {
-    console.log('⚠️ LiveStream model not found, will use dynamic lookup');
+  console.log('✅ WebRTC: LiveStream model loaded from models/livestream.model.js');
+} catch (e) {
+  console.log('⚠️ WebRTC: Model file not found, trying mongoose.models...');
+  LiveStream = mongoose.models.LiveStream;
+  if (!LiveStream) {
+    console.error('❌ WebRTC: No LiveStream model available! Database updates will fail.');
   }
 }
 
-// Helper to get LiveStream model dynamically
+// Helper to get LiveStream model
 const getLiveStreamModel = () => {
   if (LiveStream) return LiveStream;
-  try {
-    return mongoose.models.LiveStream || require('../models/livestream.model');
-  } catch {
-    return null;
-  }
+  // Try mongoose.models as fallback
+  return mongoose.models.LiveStream || null;
 };
 
 // Store active WebSocket connections
