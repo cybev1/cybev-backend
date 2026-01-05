@@ -953,6 +953,77 @@ router.post('/:id/pin', verifyToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// POST /api/live/:id/reaction - Send reaction
+// ==========================================
+router.post('/:id/reaction', optionalAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { emoji } = req.body;
+    
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid stream ID' });
+    }
+    
+    const stream = await LiveStream.findById(id);
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    // Increment reaction count
+    if (!stream.analytics) {
+      stream.analytics = { reactions: 0, chatMessages: 0, shares: 0 };
+    }
+    stream.analytics.reactions = (stream.analytics.reactions || 0) + 1;
+    await stream.save();
+    
+    // Emit via Socket.IO if available
+    if (req.app.get('io')) {
+      req.app.get('io').to(`stream:${id}`).emit('reaction', {
+        emoji,
+        oderId: req.user?.id,
+        timestamp: new Date()
+      });
+    }
+    
+    res.json({ success: true, emoji });
+  } catch (error) {
+    console.error('Reaction error:', error);
+    res.status(500).json({ success: false, error: 'Failed to send reaction' });
+  }
+});
+
+// ==========================================
+// POST /api/live/:id/like - Like stream
+// ==========================================
+router.post('/:id/like', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    
+    const stream = await LiveStream.findById(id);
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+    
+    if (!stream.likes) stream.likes = [];
+    const likeIndex = stream.likes.indexOf(userId);
+    let liked = false;
+    
+    if (likeIndex === -1) {
+      stream.likes.push(userId);
+      liked = true;
+    } else {
+      stream.likes.splice(likeIndex, 1);
+    }
+    
+    await stream.save();
+    res.json({ success: true, liked, likeCount: stream.likes.length });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to update like' });
+  }
+});
+
 console.log('✅ Live routes loaded (with /streams, /active, thumbnail & feed support)');
 
 module.exports = router;
