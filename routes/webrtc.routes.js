@@ -1,12 +1,16 @@
 // ============================================
 // FILE: routes/webrtc.routes.js
-// WebRTC Browser Streaming Routes - FIXED v3
-// FIXED: Correct Mux service response handling
+// WebRTC Browser Streaming Routes - FIXED v4
+// VERSION: 4.0 - January 5, 2026
+// CRITICAL: Database update for status=live, isActive=true
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+
+// Log version on load
+console.log('🔄 WebRTC Routes v4.0 loaded - with database status fix');
 
 // Services
 let webrtcRtmpService;
@@ -467,22 +471,40 @@ function initializeWebSocket(io) {
         ffmpegStarted: false  // Will be true after first data
       });
       
-      // Update database
-      const Model = getLiveStreamModel();
-      if (Model) {
-        const updateResult = await Model.findByIdAndUpdate(currentStreamId, {
-          status: 'live',
-          isActive: true,
-          startedAt: new Date()
-        }, { new: true });
+      // CRITICAL: Update database to set status='live' and isActive=true
+      console.log(`📝 Updating database for stream ${currentStreamId}...`);
+      
+      try {
+        const Model = getLiveStreamModel();
+        console.log(`   Model available: ${!!Model}`);
         
-        if (updateResult) {
-          console.log(`✅ Database updated: status=${updateResult.status}, isActive=${updateResult.isActive}`);
+        if (Model) {
+          const updateResult = await Model.findByIdAndUpdate(
+            currentStreamId, 
+            {
+              status: 'live',
+              isActive: true,
+              startedAt: new Date()
+            }, 
+            { new: true }
+          );
+          
+          if (updateResult) {
+            console.log(`✅ DATABASE UPDATED SUCCESSFULLY:`);
+            console.log(`   Stream ID: ${updateResult._id}`);
+            console.log(`   Status: ${updateResult.status}`);
+            console.log(`   isActive: ${updateResult.isActive}`);
+            console.log(`   startedAt: ${updateResult.startedAt}`);
+          } else {
+            console.log(`⚠️ Stream ${currentStreamId} not found in database!`);
+          }
         } else {
-          console.log(`⚠️ Stream ${currentStreamId} not found in database for update`);
+          console.log(`❌ LiveStream model not available!`);
+          console.log(`   mongoose.models available: ${Object.keys(mongoose.models).join(', ')}`);
         }
-      } else {
-        console.log(`❌ LiveStream model not available for database update`);
+      } catch (dbError) {
+        console.error(`❌ DATABASE UPDATE FAILED:`, dbError.message);
+        console.error(dbError.stack);
       }
 
       socket.emit('streaming-started', {

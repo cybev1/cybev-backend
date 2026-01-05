@@ -1,6 +1,7 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
+// VERSION: 4.0 - January 5, 2026
 // Features: RTMP, thumbnails, auto-feed posting, notifications
 // IMPORTANT: Route order matters! Specific routes before :id routes
 // ============================================
@@ -8,6 +9,9 @@
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+
+// Log version on load
+console.log('🔄 Live Routes v4.0 loaded - with active streams fix');
 
 // Mux service
 let muxService;
