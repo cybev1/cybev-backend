@@ -1,0 +1,11 @@
+# Railway build configuration
+# Installs system FFmpeg instead of relying on ffmpeg-static
+
+[phases.setup]
+nixPkgs = ["ffmpeg", "nodejs_20"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[start]
+cmd = "node server.js"
