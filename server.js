@@ -2,9 +2,10 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 4.0.0 - January 4, 2026 Update
+// VERSION: 4.0.0 - January 5, 2026 Update
 // ADDED: Mux Webhooks for Recording Capture
 // ADDED: WebRTC Browser Streaming Support
+// ADDED: WebRTC-to-RTMP Mobile Streaming
 // ============================================
 
 const express = require('express');
@@ -17,11 +18,17 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO setup
+// Socket.IO setup with expanded CORS
 const io = socketIO(server, {
   cors: {
-    origin: process.env.FRONTEND_URL || '*',
-    methods: ['GET', 'POST']
+    origin: [
+      process.env.FRONTEND_URL || '*',
+      'http://localhost:3000',
+      'https://cybev.io',
+      'https://www.cybev.io'
+    ],
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
@@ -34,7 +41,12 @@ global.io = io; // Also make globally available
 // ==========================================
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || '*',
+  origin: [
+    process.env.FRONTEND_URL || '*',
+    'http://localhost:3000',
+    'https://cybev.io',
+    'https://www.cybev.io'
+  ],
   credentials: true
 }));
 
@@ -287,13 +299,19 @@ try {
 
 // ==========================================
 // ROUTES - WEBRTC (Browser-based streaming)
+// Mobile device camera to Mux RTMP via WebSocket + FFmpeg
 // ==========================================
 
 try {
-  const { router: webrtcRouter, initializeWebRTC } = require('./routes/webrtc.routes');
-  app.use('/api/webrtc', webrtcRouter);
-  // Initialize WebRTC signaling with Socket.IO
-  initializeWebRTC(io);
+  const webrtcRoutes = require('./routes/webrtc.routes');
+  app.use('/api/webrtc', webrtcRoutes);
+  
+  // Initialize WebRTC WebSocket namespace for video streaming
+  if (webrtcRoutes.initializeWebSocket) {
+    webrtcRoutes.initializeWebSocket(io);
+    console.log('✅ WebRTC WebSocket initialized');
+  }
+  
   console.log('✅ WebRTC routes loaded (browser streaming)');
 } catch (err) {
   console.log('⚠️ WebRTC routes not found:', err.message);
@@ -465,7 +483,8 @@ app.get('/api/health', (req, res) => {
       'content', 'ai-blog-generation', 'share-to-timeline',
       'vlogs', 'follow-system', 'token-wallet', 'groups',
       'marketplace', 'group-moderation', 'profile-editing',
-      'mux-streaming', 'mux-recording-capture', 'webrtc-streaming'
+      'mux-streaming', 'mux-recording-capture', 'webrtc-streaming',
+      'mobile-camera-streaming'
     ]
   });
 });
@@ -578,6 +597,7 @@ server.listen(PORT, () => {
 ║  📤 Share to Timeline: Enabled            ║
 ║  🎬 Mux Streaming: ${MUX_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📼 Mux Recording: ${MUX_WEBHOOK_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
+║  📱 Mobile Streaming: Enabled             ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
