@@ -265,6 +265,9 @@ router.get('/streams', optionalAuth, async (req, res) => {
 // ==========================================
 router.get('/active', optionalAuth, async (req, res) => {
   try {
+    // Debug: Log the query
+    console.log('📺 Fetching active streams...');
+    
     const streams = await LiveStream.find({
       status: 'live',
       isActive: true
@@ -272,6 +275,14 @@ router.get('/active', optionalAuth, async (req, res) => {
       .populate('streamer', 'name username profilePicture isAdmin')
       .sort({ isPinned: -1, startedAt: -1 })
       .limit(50);
+    
+    // Debug: Log results
+    console.log(`📺 Found ${streams.length} active streams`);
+    if (streams.length > 0) {
+      streams.forEach(s => {
+        console.log(`   - ${s._id}: "${s.title}" by ${s.streamer?.username || 'unknown'}, status=${s.status}, isActive=${s.isActive}`);
+      });
+    }
     
     res.json({
       success: true,
@@ -281,6 +292,38 @@ router.get('/active', optionalAuth, async (req, res) => {
   } catch (error) {
     console.error('Fetch active streams error:', error);
     res.status(500).json({ success: false, error: 'Failed to fetch active streams', details: error.message });
+  }
+});
+
+// ==========================================
+// GET /api/live/debug/:streamId - Debug stream data
+// ==========================================
+router.get('/debug/:streamId', async (req, res) => {
+  try {
+    const stream = await LiveStream.findById(req.params.streamId)
+      .populate('streamer', 'name username');
+    
+    if (!stream) {
+      return res.json({ success: false, error: 'Stream not found' });
+    }
+    
+    res.json({
+      success: true,
+      stream: {
+        _id: stream._id,
+        title: stream.title,
+        status: stream.status,
+        isActive: stream.isActive,
+        streamType: stream.streamType,
+        muxStreamId: stream.muxStreamId,
+        muxPlaybackId: stream.muxPlaybackId,
+        playbackUrls: stream.playbackUrls,
+        startedAt: stream.startedAt,
+        streamer: stream.streamer
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
