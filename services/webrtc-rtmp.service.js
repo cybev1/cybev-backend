@@ -6,13 +6,27 @@
 
 const { spawn } = require('child_process');
 
-// Get ffmpeg path
+// Get ffmpeg path - PREFER SYSTEM FFMPEG over ffmpeg-static
+// ffmpeg-static can cause SIGSEGV crashes on some platforms
 let ffmpegPath = 'ffmpeg';
+let usingSystemFfmpeg = false;
+
+// First, try to use system ffmpeg (more reliable)
 try {
-  ffmpegPath = require('ffmpeg-static');
-  console.log('✅ Using ffmpeg-static:', ffmpegPath);
+  const { execSync } = require('child_process');
+  execSync('ffmpeg -version', { stdio: 'pipe' });
+  ffmpegPath = 'ffmpeg';
+  usingSystemFfmpeg = true;
+  console.log('✅ Using system FFmpeg');
 } catch (e) {
-  console.log('⚠️ ffmpeg-static not found, using system ffmpeg');
+  // Fall back to ffmpeg-static
+  try {
+    ffmpegPath = require('ffmpeg-static');
+    console.log('⚠️ System FFmpeg not found, using ffmpeg-static:', ffmpegPath);
+    console.log('   Note: ffmpeg-static may crash with SIGSEGV on some platforms');
+  } catch (e2) {
+    console.error('❌ No FFmpeg available!');
+  }
 }
 
 // Verify FFmpeg on startup
@@ -48,7 +62,11 @@ class WebRTCToRTMPService {
     }
 
     console.log(`📡 RTMP URL: ${rtmpUrl.substring(0, 70)}...`);
-    console.log(`🔧 FFmpeg: ${ffmpegPath}`);
+    console.log(`🔧 FFmpeg: ${ffmpegPath} (${usingSystemFfmpeg ? 'system' : 'ffmpeg-static'})`);
+    
+    if (!usingSystemFfmpeg) {
+      console.log(`⚠️ WARNING: ffmpeg-static may crash with SIGSEGV. Consider installing system FFmpeg.`);
+    }
 
     // Initialize stats
     this.streamStats.set(streamId, {
@@ -61,49 +79,31 @@ class WebRTCToRTMPService {
       lastDataTime: Date.now()
     });
 
-    // FFmpeg arguments - SIMPLIFIED for better compatibility
+    // FFmpeg arguments - ULTRA SIMPLE for maximum stability
+    // Avoiding options that might cause SIGSEGV
     const ffmpegArgs = [
-      // Overwrite and no banner
       '-y',
       '-hide_banner',
+      '-loglevel', 'warning',
       
-      // Logging - show warnings and errors
-      '-loglevel', 'info',
-      
-      // Input: Read WebM from stdin with longer timeout
-      '-f', 'webm',
-      '-analyzeduration', '5000000',  // 5 seconds to analyze
-      '-probesize', '5000000',        // 5MB probe size
+      // Input from stdin
       '-i', 'pipe:0',
       
-      // Video encoding
+      // Video: Simple H.264
       '-c:v', 'libx264',
-      '-preset', 'veryfast',
+      '-preset', 'ultrafast',
       '-tune', 'zerolatency',
-      '-profile:v', 'baseline',
-      '-level', '3.1',
       '-b:v', '1500k',
-      '-maxrate', '1500k',
-      '-bufsize', '3000k',
       '-pix_fmt', 'yuv420p',
-      '-g', '60',                     // GOP = 2 seconds at 30fps
-      '-keyint_min', '60',
-      '-sc_threshold', '0',
-      '-r', '30',
+      '-g', '30',
       
-      // Scale down if needed
-      '-vf', 'scale=1280:-2:force_original_aspect_ratio=decrease',
-      
-      // Audio encoding
+      // Audio: Simple AAC
       '-c:a', 'aac',
       '-b:a', '128k',
       '-ar', '44100',
-      '-ac', '2',
       
-      // Output: FLV to RTMP
+      // Output to RTMP
       '-f', 'flv',
-      '-flvflags', 'no_duration_filesize',
-      
       rtmpUrl
     ];
 
@@ -148,15 +148,20 @@ class WebRTCToRTMPService {
     });
 
     // Handle stderr (FFmpeg logs go here)
+    let stderrBuffer = '';
     ffmpeg.stderr.on('data', (data) => {
       const msg = data.toString();
+      stderrBuffer += msg;
       const stream = this.activeStreams.get(streamId);
       
-      // Log all FFmpeg output for debugging
+      // Log ALL FFmpeg output for debugging
       const lines = msg.split('\n').filter(l => l.trim());
       lines.forEach(line => {
+        // Always log the line for debugging
+        console.log(`📝 FFmpeg [${streamId}]: ${line.trim().substring(0, 150)}`);
+        
         // Check for RTMP connection success
-        if (line.includes('Output #0') || line.includes('mux.com') || line.includes('Video:') || line.includes('Stream mapping')) {
+        if (line.includes('Output #0') || line.includes('mux.com') || line.includes('Video:') || line.includes('Stream mapping') || line.includes('Opening')) {
           if (stream && !stream.isConnected) {
             stream.isConnected = true;
             stats.rtmpConnected = true;
@@ -167,35 +172,35 @@ class WebRTCToRTMPService {
           }
         }
         
-        // Log frame progress
-        if (line.includes('frame=')) {
-          const frameMatch = line.match(/frame=\s*(\d+)/);
-          if (frameMatch) {
-            const frames = parseInt(frameMatch[1]);
-            if (frames % 90 === 0) { // Every 3 seconds at 30fps
-              console.log(`📊 Stream ${streamId}: ${line.trim().substring(0, 100)}`);
-            }
-          }
-        }
-        
-        // Log errors and warnings
-        if (line.toLowerCase().includes('error') || line.includes('failed') || line.includes('Invalid')) {
-          console.error(`❌ FFmpeg [${streamId}]: ${line.trim()}`);
+        // Track errors
+        if (line.toLowerCase().includes('error') || line.includes('failed') || line.includes('Invalid') || line.includes('cannot')) {
+          console.error(`❌ FFmpeg ERROR [${streamId}]: ${line.trim()}`);
           stats.errors++;
-        } else if (line.includes('Opening') || line.includes('Stream #') || line.includes('Output #')) {
-          console.log(`📝 FFmpeg [${streamId}]: ${line.trim()}`);
         }
       });
     });
 
     // Handle FFmpeg close
     ffmpeg.on('close', (code, signal) => {
-      console.log(`\n🔴 FFmpeg CLOSED [${streamId}]: code=${code}, signal=${signal}`);
+      console.log(`\n🔴 FFmpeg CLOSED [${streamId}]`);
+      console.log(`   Exit code: ${code}`);
+      console.log(`   Signal: ${signal}`);
       
       const stats = this.streamStats.get(streamId);
       if (stats) {
         const duration = (Date.now() - stats.startTime) / 1000;
-        console.log(`📊 Final: ${stats.chunks} chunks, ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB, ${duration.toFixed(0)}s, ${stats.errors} errors`);
+        console.log(`   Duration: ${duration.toFixed(1)}s`);
+        console.log(`   Chunks received: ${stats.chunks}`);
+        console.log(`   Bytes received: ${(stats.bytesReceived / 1024 / 1024).toFixed(2)} MB`);
+        console.log(`   Errors: ${stats.errors}`);
+        console.log(`   RTMP connected: ${stats.rtmpConnected}`);
+      }
+      
+      // Common exit codes
+      if (code === 1) {
+        console.log(`   ⚠️ Exit code 1: Generic error (check input format)`);
+      } else if (code === 255 || code === -1) {
+        console.log(`   ⚠️ Exit code ${code}: Likely killed or connection lost`);
       }
       
       // Notify client
@@ -204,7 +209,7 @@ class WebRTCToRTMPService {
           streamId,
           code,
           signal,
-          reason: code === 0 ? 'Stream ended normally' : `Stream interrupted (code: ${code})`
+          reason: code === 0 ? 'Stream ended normally' : `Stream interrupted (code: ${code}, signal: ${signal})`
         });
       }
       
