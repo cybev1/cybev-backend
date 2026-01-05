@@ -49,58 +49,18 @@ const optionalAuth = (req, res, next) => {
   next();
 };
 
-// Live Stream Schema
-const liveStreamSchema = new mongoose.Schema({
-  streamer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  title: { type: String, default: 'Live Stream' },
-  description: String,
-  thumbnail: String,
-  
-  streamType: { type: String, enum: ['camera', 'rtmp', 'embed', 'mux'], default: 'mux' },
-  rtmpUrl: String,
-  rtmpKey: String,
-  embedUrl: String,
-  embedPlatform: String,
-  
-  muxStreamId: String,
-  muxStreamKey: String,
-  muxPlaybackId: String,
-  muxRtmpUrl: String,
-  
-  status: { type: String, enum: ['preparing', 'live', 'ended', 'saved'], default: 'preparing' },
-  startedAt: Date,
-  endedAt: Date,
-  duration: Number,
-  
-  viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  peakViewers: { type: Number, default: 0 },
-  totalViews: { type: Number, default: 0 },
-  
-  isPinned: { type: Boolean, default: false },
-  pinnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  pinnedAt: Date,
-  
-  recordingUrl: String,
-  isRecordingEnabled: { type: Boolean, default: true },
-  autoDeleteAfterDays: { type: Number, default: 30 },
-  deleteScheduledAt: Date,
-  
-  isPersistentKey: { type: Boolean, default: false },
-  privacy: { type: String, enum: ['public', 'followers', 'private'], default: 'public' },
-  
-  feedPostId: { type: mongoose.Schema.Types.ObjectId, ref: 'Blog' },
-  
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  comments: [{
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    content: String,
-    createdAt: { type: Date, default: Date.now }
-  }],
-  
-  isActive: { type: Boolean, default: true }
-}, { timestamps: true });
-
-const LiveStream = mongoose.models.LiveStream || mongoose.model('LiveStream', liveStreamSchema);
+// Live Stream Model - Import from existing model file
+let LiveStream;
+try {
+  LiveStream = require('../models/livestream.model');
+  console.log('✅ LiveStream model loaded from models/livestream.model.js');
+} catch (e) {
+  console.log('⚠️ Model file not found, checking mongoose.models...');
+  LiveStream = mongoose.models.LiveStream;
+  if (!LiveStream) {
+    console.error('❌ No LiveStream model available! Streams will not work.');
+  }
+}
 
 // ==========================================
 // Helper: Create Feed Post for Live Stream
