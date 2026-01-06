@@ -170,7 +170,7 @@ const userSchema = new mongoose.Schema({
     },
     theme: {
       type: String,
-      enum: ['light', 'dark', 'system'],
+      enum: ['light', 'dark', 'system', 'auto'], // 'auto' is legacy alias for 'system'
       default: 'system'
     },
     language: {
