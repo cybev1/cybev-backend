@@ -1,46 +1,36 @@
 {
   "name": "cybev-backend",
-  "version": "4.0.0",
-  "description": "CYBEV Backend API with AI Content Engine, blog platform, live streaming, recording capture and token rewards",
+  "version": "5.0.0",
+  "description": "CYBEV Backend API - Social Blogging Platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js"
   },
-  "keywords": [
-    "cybev",
-    "blog",
-    "api",
-    "ai",
-    "web3",
-    "content-creation",
-    "live-streaming",
-    "mux",
-    "webrtc"
-  ],
-  "author": "",
-  "license": "UNLICENSED",
-  "engines": {
-    "node": "20.x"
-  },
   "dependencies": {
-    "@mux/mux-node": "^8.0.0",
-    "@sendinblue/client": "^3.3.1",
-    "axios": "^1.7.7",
+    "express": "^4.18.2",
+    "mongoose": "^7.6.0",
     "bcryptjs": "^2.4.3",
-    "cloudinary": "^1.41.3",
+    "jsonwebtoken": "^9.0.0",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "ethers": "^6.9.0",
-    "express": "^4.19.2",
-    "ffmpeg-static": "^5.2.0",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.4.0",
+    "dotenv": "^16.0.3",
     "multer": "^1.4.5-lts.1",
-    "nodemailer": "^6.9.7",
-    "socket.io": "^4.7.5"
+    "cloudinary": "^1.41.0",
+    "socket.io": "^4.7.2",
+    "axios": "^1.6.0",
+    "nodemailer": "^6.9.0",
+    
+    "google-auth-library": "^9.4.1",
+    
+    "@mux/mux-node": "^7.3.0",
+    "fluent-ffmpeg": "^2.1.2",
+    
+    "web-push": "^3.6.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.0"
+    "nodemon": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
