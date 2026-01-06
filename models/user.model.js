@@ -1,3 +1,9 @@
+// ============================================
+// FILE: models/user.model.js
+// User Model with OAuth Provider Support
+// VERSION: 5.0 - Social Auth Ready
+// ============================================
+
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
@@ -16,7 +22,10 @@ const userSchema = new mongoose.Schema({
   },
   password: {
     type: String,
-    required: true,
+    required: function() {
+      // Password not required if using OAuth
+      return !this.oauthProvider;
+    },
     minlength: 6
   },
   username: {
@@ -35,6 +44,62 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  
+  // ==========================================
+  // OAuth Provider Fields (NEW)
+  // ==========================================
+  oauthProvider: {
+    type: String,
+    enum: ['google', 'facebook', 'apple', 'twitter', null],
+    default: null
+  },
+  oauthId: {
+    type: String,
+    sparse: true,
+    index: true
+  },
+  // Store provider-specific data
+  oauthProfile: {
+    google: {
+      id: String,
+      email: String,
+      name: String,
+      picture: String,
+      accessToken: String,
+      refreshToken: String
+    },
+    facebook: {
+      id: String,
+      email: String,
+      name: String,
+      picture: String,
+      accessToken: String
+    },
+    apple: {
+      id: String,
+      email: String,
+      name: String,
+      accessToken: String,
+      refreshToken: String
+    },
+    twitter: {
+      id: String,
+      username: String,
+      name: String,
+      picture: String,
+      accessToken: String,
+      accessSecret: String
+    }
+  },
+  // Track which providers are linked
+  linkedProviders: [{
+    type: String,
+    enum: ['google', 'facebook', 'apple', 'twitter', 'email']
+  }],
+  
+  // ==========================================
+  // Domain & Profile
+  // ==========================================
   customDomain: {
     type: String,
     unique: true,
@@ -46,7 +111,10 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  // NEW: Follow system counts
+  
+  // ==========================================
+  // Social Stats
+  // ==========================================
   followerCount: {
     type: Number,
     default: 0
@@ -55,7 +123,10 @@ const userSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  // NEW: Onboarding fields
+  
+  // ==========================================
+  // Onboarding
+  // ==========================================
   hasCompletedOnboarding: {
     type: Boolean,
     default: false
@@ -67,14 +138,29 @@ const userSchema = new mongoose.Schema({
     experience: String,
     completedAt: Date
   },
+  
+  // ==========================================
+  // Social Links
+  // ==========================================
   socialLinks: {
     twitter: String,
     linkedin: String,
     github: String,
-    website: String
+    website: String,
+    instagram: String,
+    youtube: String,
+    tiktok: String
   },
+  
+  // ==========================================
+  // User Preferences (Updated)
+  // ==========================================
   preferences: {
     emailNotifications: {
+      type: Boolean,
+      default: true
+    },
+    pushNotifications: {
       type: Boolean,
       default: true
     },
@@ -84,10 +170,28 @@ const userSchema = new mongoose.Schema({
     },
     theme: {
       type: String,
-      enum: ['light', 'dark', 'auto'],
-      default: 'auto'
+      enum: ['light', 'dark', 'system'],
+      default: 'system'
+    },
+    language: {
+      type: String,
+      default: 'en'
+    },
+    // Notification preferences
+    notifications: {
+      likes: { type: Boolean, default: true },
+      comments: { type: Boolean, default: true },
+      follows: { type: Boolean, default: true },
+      mentions: { type: Boolean, default: true },
+      messages: { type: Boolean, default: true },
+      tips: { type: Boolean, default: true },
+      marketing: { type: Boolean, default: false }
     }
   },
+  
+  // ==========================================
+  // Verification & Status
+  // ==========================================
   isVerified: {
     type: Boolean,
     default: false
@@ -96,19 +200,20 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  lastLogin: {
-    type: Date
-  },
-  // Password Reset Fields
-  resetPasswordToken: {
+  role: {
     type: String,
-    default: undefined
+    enum: ['user', 'creator', 'moderator', 'admin'],
+    default: 'user'
   },
-  resetPasswordExpires: {
-    type: Date,
-    default: undefined
+  status: {
+    type: String,
+    enum: ['active', 'suspended', 'deleted'],
+    default: 'active'
   },
-  // Email Verification Fields
+  
+  // ==========================================
+  // Email Verification
+  // ==========================================
   isEmailVerified: {
     type: Boolean,
     default: false
@@ -121,7 +226,25 @@ const userSchema = new mongoose.Schema({
     type: Date,
     default: undefined
   },
-  // Security & IP Tracking
+  
+  // ==========================================
+  // Password Reset
+  // ==========================================
+  resetPasswordToken: {
+    type: String,
+    default: undefined
+  },
+  resetPasswordExpires: {
+    type: Date,
+    default: undefined
+  },
+  
+  // ==========================================
+  // Login & Security
+  // ==========================================
+  lastLogin: {
+    type: Date
+  },
   loginHistory: [{
     ip: String,
     userAgent: String,
@@ -129,7 +252,8 @@ const userSchema = new mongoose.Schema({
       type: Date,
       default: Date.now
     },
-    location: String
+    location: String,
+    provider: String // 'email', 'google', 'facebook', etc.
   }],
   trustedIPs: [{
     ip: String,
@@ -145,13 +269,35 @@ const userSchema = new mongoose.Schema({
   suspiciousLoginAttempts: {
     type: Number,
     default: 0
-  }
+  },
+  
+  // ==========================================
+  // Two-Factor Auth (Future)
+  // ==========================================
+  twoFactorEnabled: {
+    type: Boolean,
+    default: false
+  },
+  twoFactorSecret: {
+    type: String
+  },
+  backupCodes: [{
+    code: String,
+    used: { type: Boolean, default: false }
+  }]
+  
 }, {
   timestamps: true
 });
 
+// ==========================================
+// Pre-save Hooks
+// ==========================================
+
+// Hash password before saving (only if modified and exists)
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+  // Skip if password not modified or not present (OAuth users)
+  if (!this.isModified('password') || !this.password) return next();
   
   try {
     const salt = await bcrypt.genSalt(10);
@@ -162,6 +308,7 @@ userSchema.pre('save', async function(next) {
   }
 });
 
+// Auto-generate username from email if not provided
 userSchema.pre('save', async function(next) {
   if (!this.username && this.email) {
     const baseUsername = this.email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -178,25 +325,108 @@ userSchema.pre('save', async function(next) {
   next();
 });
 
+// Initialize linkedProviders based on how user signed up
+userSchema.pre('save', function(next) {
+  if (this.isNew) {
+    if (!this.linkedProviders) {
+      this.linkedProviders = [];
+    }
+    
+    if (this.oauthProvider && !this.linkedProviders.includes(this.oauthProvider)) {
+      this.linkedProviders.push(this.oauthProvider);
+    }
+    
+    if (this.password && !this.linkedProviders.includes('email')) {
+      this.linkedProviders.push('email');
+    }
+  }
+  next();
+});
+
+// ==========================================
+// Instance Methods
+// ==========================================
+
 userSchema.methods.comparePassword = async function(candidatePassword) {
+  if (!this.password) return false;
   return bcrypt.compare(candidatePassword, this.password);
 };
 
 userSchema.methods.toJSON = function() {
   const obj = this.toObject();
   delete obj.password;
+  delete obj.resetPasswordToken;
+  delete obj.emailVerificationToken;
+  delete obj.twoFactorSecret;
+  delete obj.backupCodes;
+  // Remove OAuth tokens from response
+  if (obj.oauthProfile) {
+    Object.keys(obj.oauthProfile).forEach(provider => {
+      if (obj.oauthProfile[provider]) {
+        delete obj.oauthProfile[provider].accessToken;
+        delete obj.oauthProfile[provider].refreshToken;
+        delete obj.oauthProfile[provider].accessSecret;
+      }
+    });
+  }
   return obj;
 };
+
+// Check if user can login with password
+userSchema.methods.canUsePassword = function() {
+  return !!this.password && this.linkedProviders.includes('email');
+};
+
+// Link a new OAuth provider
+userSchema.methods.linkProvider = function(provider, profileData) {
+  if (!this.oauthProfile) {
+    this.oauthProfile = {};
+  }
+  this.oauthProfile[provider] = profileData;
+  
+  if (!this.linkedProviders.includes(provider)) {
+    this.linkedProviders.push(provider);
+  }
+};
+
+// Unlink an OAuth provider
+userSchema.methods.unlinkProvider = function(provider) {
+  if (this.oauthProfile && this.oauthProfile[provider]) {
+    this.oauthProfile[provider] = undefined;
+  }
+  
+  this.linkedProviders = this.linkedProviders.filter(p => p !== provider);
+  
+  if (this.oauthProvider === provider) {
+    this.oauthProvider = null;
+    this.oauthId = null;
+  }
+};
+
+// ==========================================
+// Virtual Fields
+// ==========================================
 
 userSchema.virtual('profileUrl').get(function() {
   if (this.customDomain && this.domainVerified) {
     return `https://${this.customDomain}`;
   }
-  return `${process.env.APP_URL || 'https://cybev.io'}/blog/${this.username}`;
+  return `${process.env.APP_URL || 'https://cybev.io'}/@${this.username}`;
 });
 
+userSchema.virtual('hasPassword').get(function() {
+  return !!this.password;
+});
+
+// ==========================================
+// Indexes
+// ==========================================
 userSchema.index({ email: 1 });
 userSchema.index({ username: 1 });
 userSchema.index({ customDomain: 1 });
+userSchema.index({ oauthProvider: 1, oauthId: 1 });
+userSchema.index({ 'oauthProfile.google.id': 1 });
+userSchema.index({ 'oauthProfile.facebook.id': 1 });
+userSchema.index({ 'oauthProfile.apple.id': 1 });
 
 module.exports = mongoose.model('User', userSchema);
