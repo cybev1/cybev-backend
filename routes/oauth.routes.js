@@ -723,4 +723,74 @@ router.get('/providers/status', (req, res) => {
   });
 });
 
+// ==========================================
+// AUTH MIDDLEWARE
+// ==========================================
+
+const authMiddleware = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ ok: false, error: 'No token provided' });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, JWT_SECRET);
+    
+    const user = await User.findById(decoded.id).select('-password');
+    
+    if (!user) {
+      return res.status(401).json({ ok: false, error: 'User not found' });
+    }
+    
+    req.user = user;
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error.message);
+    return res.status(401).json({ ok: false, error: 'Invalid token' });
+  }
+};
+
+// ==========================================
+// GET CURRENT USER (/me)
+// ==========================================
+
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id)
+      .select('-password')
+      .lean();
+    
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    
+    res.json({
+      ok: true,
+      user: {
+        _id: user._id,
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        username: user.username,
+        avatar: user.avatar,
+        bio: user.bio,
+        role: user.role || 'user',
+        isEmailVerified: user.isEmailVerified,
+        hasCompletedOnboarding: user.hasCompletedOnboarding || false,
+        oauthProvider: user.oauthProvider,
+        linkedProviders: user.linkedProviders || [],
+        preferences: user.preferences,
+        createdAt: user.createdAt,
+        followersCount: user.followersCount || 0,
+        followingCount: user.followingCount || 0
+      }
+    });
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
 module.exports = router;
