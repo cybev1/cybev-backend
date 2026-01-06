@@ -2,10 +2,9 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 4.0.0 - January 5, 2026 Update
-// ADDED: Mux Webhooks for Recording Capture
-// ADDED: WebRTC Browser Streaming Support
-// ADDED: WebRTC-to-RTMP Mobile Streaming
+// VERSION: 5.0.0 - January 6, 2026 Update
+// ADDED: OAuth Routes (Google, Facebook, Apple)
+// ADDED: Dark Mode Theme Preferences
 // ============================================
 
 const express = require('express');
@@ -121,6 +120,32 @@ if (MUX_WEBHOOK_CONFIGURED) {
 }
 
 // ==========================================
+// OAUTH CONFIGURATION CHECK
+// ==========================================
+
+const GOOGLE_OAUTH_CONFIGURED = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+const FACEBOOK_OAUTH_CONFIGURED = !!(process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET);
+const APPLE_OAUTH_CONFIGURED = !!(process.env.APPLE_CLIENT_ID && process.env.APPLE_KEY_ID);
+
+if (GOOGLE_OAUTH_CONFIGURED) {
+  console.log('🔐 Google OAuth: Configured');
+} else {
+  console.log('⚠️ Google OAuth: Not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)');
+}
+
+if (FACEBOOK_OAUTH_CONFIGURED) {
+  console.log('🔐 Facebook OAuth: Configured');
+} else {
+  console.log('⚠️ Facebook OAuth: Not configured (set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET)');
+}
+
+if (APPLE_OAUTH_CONFIGURED) {
+  console.log('🔐 Apple OAuth: Configured');
+} else {
+  console.log('⚠️ Apple OAuth: Not configured (optional)');
+}
+
+// ==========================================
 // ROUTES - AUTHENTICATION
 // ==========================================
 
@@ -133,12 +158,25 @@ try {
 }
 
 // ==========================================
+// ROUTES - OAUTH (Google, Facebook, Apple)
+// ==========================================
+
+try {
+  const oauthRoutes = require('./routes/oauth.routes');
+  app.use('/api/auth', oauthRoutes);
+  console.log('✅ OAuth routes loaded (Google, Facebook, Apple)');
+} catch (err) {
+  console.log('⚠️ OAuth routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - USER
 // ==========================================
 
 try {
   const userRoutes = require('./routes/user.routes');
   app.use('/api/users', userRoutes);
+  app.use('/api/user', userRoutes); // Also mount at /api/user for preferences
   console.log('✅ User routes loaded');
 } catch (err) {
   console.log('⚠️ User routes not found:', err.message);
@@ -286,35 +324,27 @@ try {
 }
 
 // ==========================================
-// ROUTES - LIVE STREAMING (with Mux)
+// ROUTES - LIVE STREAMING
 // ==========================================
 
 try {
-  const liveRoutes = require('./routes/live.routes');
-  app.use('/api/live', liveRoutes);
-  console.log('✅ Live streaming routes loaded');
+  const streamRoutes = require('./routes/stream.routes');
+  app.use('/api/streams', streamRoutes);
+  console.log('✅ Stream routes loaded');
 } catch (err) {
-  console.log('⚠️ Live routes not found:', err.message);
+  console.log('⚠️ Stream routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - WEBRTC (Browser-based streaming)
-// Mobile device camera to Mux RTMP via WebSocket + FFmpeg
+// ROUTES - MUX LIVE STREAMING
 // ==========================================
 
 try {
-  const webrtcRoutes = require('./routes/webrtc.routes');
-  app.use('/api/webrtc', webrtcRoutes);
-  
-  // Initialize WebRTC WebSocket namespace for video streaming
-  if (webrtcRoutes.initializeWebSocket) {
-    webrtcRoutes.initializeWebSocket(io);
-    console.log('✅ WebRTC WebSocket initialized');
-  }
-  
-  console.log('✅ WebRTC routes loaded (browser streaming)');
+  const muxRoutes = require('./routes/mux.routes');
+  app.use('/api/mux', muxRoutes);
+  console.log('✅ Mux routes loaded');
 } catch (err) {
-  console.log('⚠️ WebRTC routes not found:', err.message);
+  console.log('⚠️ Mux routes not found:', err.message);
 }
 
 // ==========================================
@@ -469,13 +499,18 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '4.0.0',
+    version: '5.0.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
     muxWebhooks: MUX_WEBHOOK_CONFIGURED ? 'configured' : 'not configured',
+    oauth: {
+      google: GOOGLE_OAUTH_CONFIGURED ? 'configured' : 'not configured',
+      facebook: FACEBOOK_OAUTH_CONFIGURED ? 'configured' : 'not configured',
+      apple: APPLE_OAUTH_CONFIGURED ? 'configured' : 'not configured'
+    },
     features: [
-      'auth', 'users', 'blogs', 'posts', 'feed',
+      'auth', 'oauth-google', 'oauth-facebook', 'users', 'blogs', 'posts', 'feed',
       'comments', 'bookmarks', 'notifications',
       'reactions', 'messages', 'live-streaming',
       'nft', 'staking', 'admin', 'wallet', 'upload',
@@ -484,7 +519,7 @@ app.get('/api/health', (req, res) => {
       'vlogs', 'follow-system', 'token-wallet', 'groups',
       'marketplace', 'group-moderation', 'profile-editing',
       'mux-streaming', 'mux-recording-capture', 'webrtc-streaming',
-      'mobile-camera-streaming'
+      'mobile-camera-streaming', 'dark-mode', 'theme-preferences'
     ]
   });
 });
@@ -492,11 +527,16 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v4.0.0',
+    message: 'CYBEV API Server v5.0.0',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
-    webhooks: MUX_WEBHOOK_CONFIGURED ? 'enabled' : 'disabled'
+    webhooks: MUX_WEBHOOK_CONFIGURED ? 'enabled' : 'disabled',
+    oauth: {
+      google: GOOGLE_OAUTH_CONFIGURED,
+      facebook: FACEBOOK_OAUTH_CONFIGURED,
+      apple: APPLE_OAUTH_CONFIGURED
+    }
   });
 });
 
@@ -588,7 +628,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v4.0.0           ║
+║         CYBEV API Server v5.0.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -598,6 +638,9 @@ server.listen(PORT, () => {
 ║  🎬 Mux Streaming: ${MUX_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📼 Mux Recording: ${MUX_WEBHOOK_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📱 Mobile Streaming: Enabled             ║
+║  🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
+║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
+║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);

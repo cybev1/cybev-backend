@@ -1,7 +1,7 @@
 {
   "name": "cybev-backend",
   "version": "5.0.0",
-  "description": "CYBEV Backend API - Social Blogging Platform",
+  "description": "CYBEV Backend API - Social Blogging Platform with OAuth",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -19,12 +19,9 @@
     "socket.io": "^4.7.2",
     "axios": "^1.6.0",
     "nodemailer": "^6.9.0",
-    
     "google-auth-library": "^9.4.1",
-    
     "@mux/mux-node": "^7.3.0",
     "fluent-ffmpeg": "^2.1.2",
-    
     "web-push": "^3.6.0"
   },
   "devDependencies": {
@@ -32,5 +29,15 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  }
+  },
+  "keywords": [
+    "cybev",
+    "blogging",
+    "social",
+    "streaming",
+    "oauth",
+    "api"
+  ],
+  "author": "CYBEV",
+  "license": "MIT"
 }
