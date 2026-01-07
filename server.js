@@ -506,6 +506,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - CREATOR ANALYTICS
+// ==========================================
+
+try {
+  const creatorAnalyticsRoutes = require('./routes/creator-analytics.routes');
+  app.use('/api/creator-analytics', creatorAnalyticsRoutes);
+  console.log('✅ Creator analytics routes loaded');
+} catch (err) {
+  console.log('⚠️ Creator analytics routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - GROUPS
 // ==========================================
 
@@ -537,7 +549,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.1.0',
+    version: '5.2.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -557,7 +569,7 @@ app.get('/api/health', (req, res) => {
       'comments', 'bookmarks', 'notifications', 'email-notifications',
       'reactions', 'messages', 'live-streaming',
       'nft', 'staking', 'admin', 'wallet', 'upload',
-      'push-notifications', 'monetization', 'analytics',
+      'push-notifications', 'monetization', 'analytics', 'creator-analytics',
       'content', 'ai-blog-generation', 'share-to-timeline',
       'vlogs', 'follow-system', 'token-wallet', 'groups',
       'marketplace', 'group-moderation', 'profile-editing',
@@ -673,7 +685,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.1.0           ║
+║         CYBEV API Server v5.2.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -686,6 +698,7 @@ server.listen(PORT, () => {
 ║  🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
+║  📊 Creator Analytics: Enabled            ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
