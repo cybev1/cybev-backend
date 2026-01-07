@@ -384,6 +384,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - MOBILE APP
+// ==========================================
+
+try {
+  const mobileRoutes = require('./routes/mobile.routes');
+  app.use('/api/mobile', mobileRoutes);
+  console.log('✅ Mobile app routes loaded (Push Tokens, Devices, Deep Links)');
+} catch (err) {
+  console.log('⚠️ Mobile routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - VLOG
 // ==========================================
 
@@ -595,7 +607,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.4.0',
+    version: '5.5.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -617,6 +629,11 @@ app.get('/api/health', (req, res) => {
       facebook: FACEBOOK_OAUTH_CONFIGURED ? 'configured' : 'not configured',
       apple: APPLE_OAUTH_CONFIGURED ? 'configured' : 'not configured'
     },
+    mobile: {
+      version: '1.1.0',
+      pushNotifications: !!process.env.FCM_SERVER_KEY,
+      deepLinking: true
+    },
     features: [
       'auth', 'oauth-google', 'oauth-facebook', 'users', 'blogs', 'posts', 'feed',
       'comments', 'bookmarks', 'notifications', 'email-notifications',
@@ -630,7 +647,8 @@ app.get('/api/health', (req, res) => {
       'mobile-camera-streaming', 'dark-mode', 'theme-preferences',
       'notification-preferences', 'weekly-digest',
       'tips', 'donations', 'creator-earnings', 'multi-payment-providers',
-      'stream-scheduling', 'live-polls', 'super-chats', 'stream-donations'
+      'stream-scheduling', 'live-polls', 'super-chats', 'stream-donations',
+      'mobile-push-tokens', 'mobile-deep-linking', 'mobile-device-management'
     ]
   });
 });
@@ -740,7 +758,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.4.0           ║
+║         CYBEV API Server v5.5.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -749,7 +767,7 @@ server.listen(PORT, () => {
 ║  📤 Share to Timeline: Enabled            ║
 ║  🎬 Mux Streaming: ${MUX_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📼 Mux Recording: ${MUX_WEBHOOK_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
-║  📱 Mobile Streaming: Enabled             ║
+║  📱 Mobile App API: Enabled               ║
 ║  🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
