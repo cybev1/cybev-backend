@@ -160,6 +160,28 @@ if (BREVO_CONFIGURED) {
 }
 
 // ==========================================
+// PAYMENT CONFIGURATION CHECK
+// ==========================================
+
+const FLUTTERWAVE_CONFIGURED = !!process.env.FLUTTERWAVE_SECRET_KEY;
+const PAYSTACK_CONFIGURED = !!process.env.PAYSTACK_SECRET_KEY;
+const STRIPE_CONFIGURED = !!process.env.STRIPE_SECRET_KEY;
+const HUBTEL_CONFIGURED = !!(process.env.HUBTEL_CLIENT_ID && process.env.HUBTEL_CLIENT_SECRET);
+
+const configuredPayments = [
+  FLUTTERWAVE_CONFIGURED && 'Flutterwave',
+  PAYSTACK_CONFIGURED && 'Paystack', 
+  STRIPE_CONFIGURED && 'Stripe',
+  HUBTEL_CONFIGURED && 'Hubtel'
+].filter(Boolean);
+
+if (configuredPayments.length > 0) {
+  console.log(`💰 Payment Providers: ${configuredPayments.join(', ')}`);
+} else {
+  console.log('⚠️ Payment Providers: None configured (set FLUTTERWAVE_SECRET_KEY or PAYSTACK_SECRET_KEY)');
+}
+
+// ==========================================
 // ROUTES - AUTHENTICATION
 // ==========================================
 
@@ -446,6 +468,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - PAYMENTS (Flutterwave, Paystack, Hubtel, Stripe)
+// ==========================================
+
+try {
+  const paymentsRoutes = require('./routes/payments.routes');
+  app.use('/api/payments', paymentsRoutes);
+  console.log('✅ Payments routes loaded (Tips, Donations, Tokens)');
+} catch (err) {
+  console.log('⚠️ Payments routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - WALLET
 // ==========================================
 
@@ -549,7 +583,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.2.0',
+    version: '5.3.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -558,6 +592,13 @@ app.get('/api/health', (req, res) => {
       provider: EMAIL_PROVIDER,
       configured: BREVO_CONFIGURED,
       sender: EMAIL_SENDER
+    },
+    payments: {
+      flutterwave: FLUTTERWAVE_CONFIGURED,
+      paystack: PAYSTACK_CONFIGURED,
+      stripe: STRIPE_CONFIGURED,
+      hubtel: HUBTEL_CONFIGURED,
+      configured: configuredPayments
     },
     oauth: {
       google: GOOGLE_OAUTH_CONFIGURED ? 'configured' : 'not configured',
@@ -575,7 +616,8 @@ app.get('/api/health', (req, res) => {
       'marketplace', 'group-moderation', 'profile-editing',
       'mux-streaming', 'mux-recording-capture', 'webrtc-streaming',
       'mobile-camera-streaming', 'dark-mode', 'theme-preferences',
-      'notification-preferences', 'weekly-digest'
+      'notification-preferences', 'weekly-digest',
+      'tips', 'donations', 'creator-earnings', 'multi-payment-providers'
     ]
   });
 });
@@ -685,7 +727,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.2.0           ║
+║         CYBEV API Server v5.3.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -698,6 +740,7 @@ server.listen(PORT, () => {
 ║  🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
+║  💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.length + ' providers' : 'Disabled'}             ║
 ║  📊 Creator Analytics: Enabled            ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
