@@ -2,9 +2,9 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 5.0.0 - January 6, 2026 Update
-// ADDED: OAuth Routes (Google, Facebook, Apple)
-// ADDED: Dark Mode Theme Preferences
+// VERSION: 5.1.0 - January 7, 2026 Update
+// ADDED: Email System (Brevo/Multi-provider)
+// ADDED: Notification Preferences Routes
 // ============================================
 
 const express = require('express');
@@ -146,6 +146,20 @@ if (APPLE_OAUTH_CONFIGURED) {
 }
 
 // ==========================================
+// EMAIL CONFIGURATION CHECK
+// ==========================================
+
+const BREVO_CONFIGURED = !!process.env.BREVO_API_KEY;
+const EMAIL_PROVIDER = BREVO_CONFIGURED ? 'brevo' : 'console';
+const EMAIL_SENDER = process.env.BREVO_SENDER_EMAIL || 'noreply@cybev.io';
+
+if (BREVO_CONFIGURED) {
+  console.log(`📧 Email Service: Configured (Brevo → ${EMAIL_SENDER})`);
+} else {
+  console.log('⚠️ Email Service: Console mode (set BREVO_API_KEY for real emails)');
+}
+
+// ==========================================
 // ROUTES - AUTHENTICATION
 // ==========================================
 
@@ -180,6 +194,18 @@ try {
   console.log('✅ User routes loaded');
 } catch (err) {
   console.log('⚠️ User routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - NOTIFICATION PREFERENCES
+// ==========================================
+
+try {
+  const notificationPreferencesRoutes = require('./routes/notification.preferences.routes');
+  app.use('/api/notifications', notificationPreferencesRoutes);
+  console.log('✅ Notification preferences routes loaded');
+} catch (err) {
+  console.log('⚠️ Notification preferences routes not found:', err.message);
 }
 
 // ==========================================
@@ -288,30 +314,6 @@ try {
 }
 
 // ==========================================
-// ROUTES - SHARE (Timeline Sharing)
-// ==========================================
-
-try {
-  const shareRoutes = require('./routes/share.routes');
-  app.use('/api/share', shareRoutes);
-  console.log('✅ Share routes loaded');
-} catch (err) {
-  console.log('⚠️ Share routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - VLOGS (Video Stories)
-// ==========================================
-
-try {
-  const vlogRoutes = require('./routes/vlog.routes');
-  app.use('/api/vlogs', vlogRoutes);
-  console.log('✅ Vlog routes loaded');
-} catch (err) {
-  console.log('⚠️ Vlog routes not found:', err.message);
-}
-
-// ==========================================
 // ROUTES - MESSAGES
 // ==========================================
 
@@ -328,23 +330,35 @@ try {
 // ==========================================
 
 try {
-  const streamRoutes = require('./routes/stream.routes');
-  app.use('/api/streams', streamRoutes);
-  console.log('✅ Stream routes loaded');
+  const liveRoutes = require('./routes/live.routes');
+  app.use('/api/live', liveRoutes);
+  console.log('✅ Live streaming routes loaded');
 } catch (err) {
-  console.log('⚠️ Stream routes not found:', err.message);
+  console.log('⚠️ Live streaming routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - MUX LIVE STREAMING
+// ROUTES - WEBRTC STREAMING
 // ==========================================
 
 try {
-  const muxRoutes = require('./routes/mux.routes');
-  app.use('/api/mux', muxRoutes);
-  console.log('✅ Mux routes loaded');
+  const webrtcRoutes = require('./routes/webrtc.routes');
+  app.use('/api/webrtc', webrtcRoutes);
+  console.log('✅ WebRTC streaming routes loaded');
 } catch (err) {
-  console.log('⚠️ Mux routes not found:', err.message);
+  console.log('⚠️ WebRTC streaming routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - VLOG
+// ==========================================
+
+try {
+  const vlogRoutes = require('./routes/vlog.routes');
+  app.use('/api/vlogs', vlogRoutes);
+  console.log('✅ Vlog routes loaded');
+} catch (err) {
+  console.log('⚠️ Vlog routes not found:', err.message);
 }
 
 // ==========================================
@@ -381,6 +395,30 @@ try {
   console.log('✅ Admin routes loaded');
 } catch (err) {
   console.log('⚠️ Admin routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - HASHTAGS
+// ==========================================
+
+try {
+  const hashtagRoutes = require('./routes/hashtag.routes');
+  app.use('/api/hashtags', hashtagRoutes);
+  console.log('✅ Hashtag routes loaded');
+} catch (err) {
+  console.log('⚠️ Hashtag routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - SEARCH
+// ==========================================
+
+try {
+  const searchRoutes = require('./routes/search.routes');
+  app.use('/api/search', searchRoutes);
+  console.log('✅ Search routes loaded');
+} catch (err) {
+  console.log('⚠️ Search routes not found:', err.message);
 }
 
 // ==========================================
@@ -499,11 +537,16 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.0.0',
+    version: '5.1.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
     muxWebhooks: MUX_WEBHOOK_CONFIGURED ? 'configured' : 'not configured',
+    email: {
+      provider: EMAIL_PROVIDER,
+      configured: BREVO_CONFIGURED,
+      sender: EMAIL_SENDER
+    },
     oauth: {
       google: GOOGLE_OAUTH_CONFIGURED ? 'configured' : 'not configured',
       facebook: FACEBOOK_OAUTH_CONFIGURED ? 'configured' : 'not configured',
@@ -511,7 +554,7 @@ app.get('/api/health', (req, res) => {
     },
     features: [
       'auth', 'oauth-google', 'oauth-facebook', 'users', 'blogs', 'posts', 'feed',
-      'comments', 'bookmarks', 'notifications',
+      'comments', 'bookmarks', 'notifications', 'email-notifications',
       'reactions', 'messages', 'live-streaming',
       'nft', 'staking', 'admin', 'wallet', 'upload',
       'push-notifications', 'monetization', 'analytics',
@@ -519,7 +562,8 @@ app.get('/api/health', (req, res) => {
       'vlogs', 'follow-system', 'token-wallet', 'groups',
       'marketplace', 'group-moderation', 'profile-editing',
       'mux-streaming', 'mux-recording-capture', 'webrtc-streaming',
-      'mobile-camera-streaming', 'dark-mode', 'theme-preferences'
+      'mobile-camera-streaming', 'dark-mode', 'theme-preferences',
+      'notification-preferences', 'weekly-digest'
     ]
   });
 });
@@ -527,11 +571,12 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v5.0.0',
+    message: 'CYBEV API Server v5.1.0',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
     webhooks: MUX_WEBHOOK_CONFIGURED ? 'enabled' : 'disabled',
+    email: BREVO_CONFIGURED ? 'enabled' : 'console',
     oauth: {
       google: GOOGLE_OAUTH_CONFIGURED,
       facebook: FACEBOOK_OAUTH_CONFIGURED,
@@ -628,7 +673,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.0.0           ║
+║         CYBEV API Server v5.1.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -640,6 +685,7 @@ server.listen(PORT, () => {
 ║  📱 Mobile Streaming: Enabled             ║
 ║  🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
+║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
