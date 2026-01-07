@@ -370,6 +370,39 @@ router.post('/avatar', verifyToken, upload.single('avatar'), async (req, res) =>
 // PUBLIC PROFILE (by username)
 // ==========================================
 
+// Route: /profile/:username (for frontend compatibility)
+router.get('/profile/:username', async (req, res) => {
+  try {
+    const { username } = req.params;
+    
+    const user = await User.findOne({ username: username.toLowerCase() })
+      .select('name username bio avatar followerCount followingCount socialLinks createdAt');
+
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    res.json({
+      ok: true,
+      user: {
+        id: user._id,
+        name: user.name,
+        username: user.username,
+        bio: user.bio,
+        avatar: user.avatar,
+        followerCount: user.followerCount,
+        followingCount: user.followingCount,
+        socialLinks: user.socialLinks,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error) {
+    console.error('Get public profile error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to fetch user' });
+  }
+});
+
+// Route: /:username (alternative)
 router.get('/:username', async (req, res) => {
   try {
     const { username } = req.params;
