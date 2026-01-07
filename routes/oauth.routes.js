@@ -793,4 +793,63 @@ router.get('/me', authMiddleware, async (req, res) => {
   }
 });
 
+// ==========================================
+// COMPLETE ONBOARDING
+// ==========================================
+
+router.put('/complete-onboarding', authMiddleware, async (req, res) => {
+  try {
+    const { fullName, role, goals, experience, interests } = req.body;
+    const userId = req.user._id;
+
+    const updateData = {
+      hasCompletedOnboarding: true,
+      onboardingCompletedAt: new Date()
+    };
+
+    // Update name if provided
+    if (fullName) {
+      updateData.name = fullName;
+    }
+
+    // Store onboarding data
+    if (role || goals || experience || interests) {
+      updateData.onboardingData = {
+        role,
+        goals,
+        experience,
+        interests,
+        completedAt: new Date()
+      };
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: updateData },
+      { new: true, select: '-password' }
+    );
+
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    console.log('✅ Onboarding completed for:', user.email);
+
+    res.json({
+      ok: true,
+      success: true,
+      message: 'Onboarding completed',
+      user: {
+        id: user._id,
+        name: user.name,
+        username: user.username,
+        hasCompletedOnboarding: user.hasCompletedOnboarding
+      }
+    });
+  } catch (error) {
+    console.error('Complete onboarding error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to complete onboarding' });
+  }
+});
+
 module.exports = router;
