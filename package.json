@@ -1,7 +1,7 @@
 {
   "name": "cybev-backend",
-  "version": "5.1.0",
-  "description": "CYBEV Backend API - Social Blogging Platform with OAuth",
+  "version": "5.3.0",
+  "description": "CYBEV Backend API - Social Blogging Platform with OAuth & Monetization",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -29,7 +29,8 @@
   "optionalDependencies": {
     "@getbrevo/brevo": "^1.0.1",
     "resend": "^2.0.0",
-    "@sendgrid/mail": "^8.1.0"
+    "@sendgrid/mail": "^8.1.0",
+    "stripe": "^14.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
@@ -43,6 +44,8 @@
     "social",
     "streaming",
     "oauth",
+    "monetization",
+    "payments",
     "api"
   ],
   "author": "CYBEV",
