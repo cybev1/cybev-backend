@@ -372,6 +372,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - STREAM SCHEDULING & LIVE ENHANCEMENTS
+// ==========================================
+
+try {
+  const streamScheduleRoutes = require('./routes/stream-schedule.routes');
+  app.use('/api/stream-schedule', streamScheduleRoutes);
+  console.log('✅ Stream scheduling routes loaded (Polls, Donations, Scheduling)');
+} catch (err) {
+  console.log('⚠️ Stream scheduling routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - VLOG
 // ==========================================
 
@@ -583,7 +595,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.3.0',
+    version: '5.4.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -617,7 +629,8 @@ app.get('/api/health', (req, res) => {
       'mux-streaming', 'mux-recording-capture', 'webrtc-streaming',
       'mobile-camera-streaming', 'dark-mode', 'theme-preferences',
       'notification-preferences', 'weekly-digest',
-      'tips', 'donations', 'creator-earnings', 'multi-payment-providers'
+      'tips', 'donations', 'creator-earnings', 'multi-payment-providers',
+      'stream-scheduling', 'live-polls', 'super-chats', 'stream-donations'
     ]
   });
 });
@@ -727,7 +740,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.3.0           ║
+║         CYBEV API Server v5.4.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -741,7 +754,9 @@ server.listen(PORT, () => {
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.length + ' providers' : 'Disabled'}             ║
-║  📊 Creator Analytics: Enabled            ║
+║  📅 Stream Scheduling: Enabled            ║
+║  📊 Live Polls: Enabled                   ║
+║  💎 Super Chats: Enabled                  ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
