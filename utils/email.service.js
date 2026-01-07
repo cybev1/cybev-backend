@@ -11,10 +11,10 @@ const nodemailer = require('nodemailer');
 // Configuration
 // ==========================================
 
-const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || 'console'; // brevo, resend, sendgrid, smtp, console
-const FROM_EMAIL = process.env.FROM_EMAIL || 'noreply@cybev.io';
+const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || (process.env.BREVO_API_KEY ? 'brevo' : 'console');
+const FROM_EMAIL = process.env.BREVO_SENDER_EMAIL || process.env.FROM_EMAIL || 'noreply@cybev.io';
 const FROM_NAME = process.env.FROM_NAME || 'CYBEV';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'https://cybev.io';
+const FRONTEND_URL = process.env.FRONTEND_URL || process.env.CLIENT_URL || 'https://cybev.io';
 
 // Provider-specific configs
 const BREVO_API_KEY = process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY;
