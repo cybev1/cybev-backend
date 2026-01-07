@@ -195,19 +195,119 @@ async function sendPushToUser(userId, notification) {
   }
 }
 
-// FCM (Firebase Cloud Messaging) for Android
+// FCM V1 (Firebase Cloud Messaging) for Android
+// Uses Service Account authentication (new method)
 async function sendFCM(token, notification) {
-  const FCM_SERVER_KEY = process.env.FCM_SERVER_KEY;
-  
-  if (!FCM_SERVER_KEY) {
+  try {
+    // Try FCM V1 first (recommended)
+    const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+    
+    if (serviceAccountJson) {
+      return await sendFCMv1(token, notification, serviceAccountJson);
+    }
+    
+    // Fallback to legacy if configured
+    const FCM_SERVER_KEY = process.env.FCM_SERVER_KEY;
+    if (FCM_SERVER_KEY) {
+      return await sendFCMLegacy(token, notification, FCM_SERVER_KEY);
+    }
+    
     console.log('FCM not configured, skipping Android push');
-    return;
+    return null;
+  } catch (error) {
+    console.error('FCM send error:', error);
+    throw error;
   }
+}
 
+// FCM V1 API (New method with Service Account)
+async function sendFCMv1(token, notification, serviceAccountJson) {
+  const jwt = require('jsonwebtoken');
+  
+  let serviceAccount;
+  try {
+    serviceAccount = typeof serviceAccountJson === 'string' 
+      ? JSON.parse(serviceAccountJson) 
+      : serviceAccountJson;
+  } catch (e) {
+    throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT JSON');
+  }
+  
+  const projectId = serviceAccount.project_id;
+  
+  // Create JWT for authentication
+  const now = Math.floor(Date.now() / 1000);
+  const jwtPayload = {
+    iss: serviceAccount.client_email,
+    sub: serviceAccount.client_email,
+    aud: 'https://oauth2.googleapis.com/token',
+    iat: now,
+    exp: now + 3600,
+    scope: 'https://www.googleapis.com/auth/firebase.messaging'
+  };
+  
+  const signedJwt = jwt.sign(jwtPayload, serviceAccount.private_key, { algorithm: 'RS256' });
+  
+  // Get access token
+  const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${signedJwt}`
+  });
+  
+  const tokenData = await tokenResponse.json();
+  
+  if (!tokenData.access_token) {
+    throw new Error('Failed to get FCM access token');
+  }
+  
+  // Send notification via FCM V1
+  const fcmResponse = await fetch(
+    `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        message: {
+          token: token,
+          notification: {
+            title: notification.title,
+            body: notification.body
+          },
+          android: {
+            notification: {
+              icon: notification.icon || 'ic_notification',
+              color: '#7c3aed',
+              click_action: notification.clickAction || 'OPEN_APP'
+            }
+          },
+          data: notification.data ? 
+            Object.fromEntries(Object.entries(notification.data).map(([k, v]) => [k, String(v)])) 
+            : {}
+        }
+      })
+    }
+  );
+  
+  const result = await fcmResponse.json();
+  
+  if (result.error) {
+    throw new Error(result.error.message || 'FCM V1 send failed');
+  }
+  
+  console.log('✅ FCM V1 notification sent:', result.name);
+  return result;
+}
+
+// FCM Legacy API (Deprecated but may still work for some)
+async function sendFCMLegacy(token, notification, serverKey) {
   const response = await fetch('https://fcm.googleapis.com/fcm/send', {
     method: 'POST',
     headers: {
-      'Authorization': `key=${FCM_SERVER_KEY}`,
+      'Authorization': `key=${serverKey}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -226,7 +326,7 @@ async function sendFCM(token, notification) {
   const result = await response.json();
   
   if (result.failure > 0) {
-    throw new Error(result.results?.[0]?.error || 'FCM send failed');
+    throw new Error(result.results?.[0]?.error || 'FCM Legacy send failed');
   }
 
   return result;

@@ -396,6 +396,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - ADMIN ANALYTICS
+// ==========================================
+
+try {
+  const adminAnalyticsRoutes = require('./routes/admin-analytics.routes');
+  app.use('/api/admin-analytics', adminAnalyticsRoutes);
+  console.log('✅ Admin analytics routes loaded (Dashboard, Users, Content, Revenue)');
+} catch (err) {
+  console.log('⚠️ Admin analytics routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - VLOG
 // ==========================================
 
@@ -607,7 +619,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.5.0',
+    version: '5.6.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -631,7 +643,8 @@ app.get('/api/health', (req, res) => {
     },
     mobile: {
       version: '1.1.0',
-      pushNotifications: !!process.env.FCM_SERVER_KEY,
+      pushNotifications: !!(process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FCM_SERVER_KEY),
+      fcmVersion: process.env.FIREBASE_SERVICE_ACCOUNT ? 'v1' : (process.env.FCM_SERVER_KEY ? 'legacy' : 'not configured'),
       deepLinking: true
     },
     features: [
@@ -648,7 +661,9 @@ app.get('/api/health', (req, res) => {
       'notification-preferences', 'weekly-digest',
       'tips', 'donations', 'creator-earnings', 'multi-payment-providers',
       'stream-scheduling', 'live-polls', 'super-chats', 'stream-donations',
-      'mobile-push-tokens', 'mobile-deep-linking', 'mobile-device-management'
+      'mobile-push-tokens', 'mobile-deep-linking', 'mobile-device-management',
+      'admin-dashboard', 'admin-analytics', 'admin-user-management',
+      'admin-content-moderation', 'admin-revenue-tracking', 'admin-system-health'
     ]
   });
 });
@@ -758,7 +773,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.5.0           ║
+║         CYBEV API Server v5.6.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -772,9 +787,8 @@ server.listen(PORT, () => {
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.length + ' providers' : 'Disabled'}             ║
-║  📅 Stream Scheduling: Enabled            ║
-║  📊 Live Polls: Enabled                   ║
-║  💎 Super Chats: Enabled                  ║
+║  📊 Admin Dashboard: Enabled              ║
+║  👥 User Management: Enabled              ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
