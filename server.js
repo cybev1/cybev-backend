@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.1.0 - January 8, 2026 Update
-// ADDED: Enhanced Analytics, i18n, Hashtags, Search
+// VERSION: 6.2.0 - January 8, 2026 Update
+// ADDED: Website Builder with AI Generation
 // ============================================
 
 const express = require('express');
@@ -491,6 +491,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - WEBSITE BUILDER
+// ==========================================
+
+try {
+  const sitesRoutes = require('./routes/sites.routes');
+  app.use('/api/sites', sitesRoutes);
+  console.log('✅ Sites routes loaded (Website Builder, Domains, Templates)');
+} catch (err) {
+  console.log('⚠️ Sites routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - VLOG
 // ==========================================
 
@@ -702,7 +714,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '6.1.0',
+    version: '6.2.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -762,7 +774,8 @@ app.get('/api/health', (req, res) => {
       'quiet-hours', 'notification-preferences', 'notification-grouping',
       'enhanced-analytics', 'analytics-export', 'analytics-timeseries', 'audience-demographics',
       'i18n', 'localization', 'multi-language', 'rtl-support',
-      'hashtags', 'trending-hashtags', 'hashtag-follow', 'global-search', 'search-suggestions'
+      'hashtags', 'trending-hashtags', 'hashtag-follow', 'global-search', 'search-suggestions',
+      'website-builder', 'ai-site-generation', 'custom-domains', 'subdomains', 'site-templates', 'page-builder'
     ]
   });
 });
@@ -770,7 +783,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v6.1.0',
+    message: 'CYBEV API Server v6.2.0',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
@@ -872,7 +885,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v6.1.0           ║
+║         CYBEV API Server v6.2.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -896,6 +909,7 @@ server.listen(PORT, () => {
 ║  📈 Enhanced Analytics: Enabled           ║
 ║  🌍 Internationalization: Enabled         ║
 ║  #️⃣ Hashtags & Search: Enabled            ║
+║  🌐 Website Builder: Enabled              ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝

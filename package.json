@@ -1,7 +1,7 @@
 {
   "name": "cybev-backend",
-  "version": "6.1.0",
-  "description": "CYBEV Backend API - Complete Social Platform with OAuth, Monetization, Mobile, Admin, SEO, Events, Moderation, Notifications, Analytics, i18n, Hashtags & Search",
+  "version": "6.2.0",
+  "description": "CYBEV Backend API - Complete Social Platform with Website Builder, OAuth, Monetization, Mobile, Admin, SEO, Events, Moderation, Notifications, Analytics, i18n, Hashtags & Search",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -55,6 +55,7 @@
     "i18n",
     "hashtags",
     "search",
+    "website-builder",
     "api"
   ],
   "author": "CYBEV",
