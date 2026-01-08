@@ -8,8 +8,10 @@ const axios = require('axios');
 
 class ModerationService {
   constructor() {
-    this.openaiKey = process.env.OPENAI_API_KEY;
+    // AI Providers (DeepSeek primary, Claude fallback, OpenAI third)
+    this.deepseekKey = process.env.DEEPSEEK_API_KEY;
     this.anthropicKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+    this.openaiKey = process.env.OPENAI_API_KEY;
     this.perspectiveKey = process.env.PERSPECTIVE_API_KEY;
     
     // Default word filters (basic list - expand as needed)
@@ -36,7 +38,9 @@ class ModerationService {
     ];
 
     console.log('🛡️ Moderation Service initialized');
-    console.log(`   AI Analysis: ${this.anthropicKey || this.openaiKey ? '✅ Configured' : '⚠️ Not configured'}`);
+    console.log(`   DeepSeek (Primary): ${this.deepseekKey ? '✅ Configured' : '⚠️ Not configured'}`);
+    console.log(`   Claude (Fallback): ${this.anthropicKey ? '✅ Configured' : '⚠️ Not configured'}`);
+    console.log(`   OpenAI (Tertiary): ${this.openaiKey ? '✅ Configured' : '⚠️ Not configured'}`);
     console.log(`   Perspective API: ${this.perspectiveKey ? '✅ Configured' : '⚠️ Not configured'}`);
   }
 
@@ -245,25 +249,89 @@ class ModerationService {
   }
 
   /**
-   * Analyze content with AI (Claude/OpenAI)
+   * Analyze content with AI (DeepSeek -> Claude -> OpenAI fallback chain)
    */
   async analyzeWithAI(text) {
-    if (!this.anthropicKey && !this.openaiKey) {
-      return null;
+    // Try DeepSeek first (primary)
+    if (this.deepseekKey) {
+      try {
+        const result = await this.analyzeWithDeepSeek(text);
+        if (result) return result;
+      } catch (error) {
+        console.error('DeepSeek moderation error, trying fallback:', error.message);
+      }
     }
 
-    try {
-      // Use Claude if available
-      if (this.anthropicKey) {
-        return await this.analyzeWithClaude(text);
+    // Try Claude second (fallback)
+    if (this.anthropicKey) {
+      try {
+        const result = await this.analyzeWithClaude(text);
+        if (result) return result;
+      } catch (error) {
+        console.error('Claude moderation error, trying fallback:', error.message);
       }
-      // Fallback to OpenAI
-      if (this.openaiKey) {
+    }
+    
+    // Try OpenAI third (tertiary fallback)
+    if (this.openaiKey) {
+      try {
         return await this.analyzeWithOpenAI(text);
+      } catch (error) {
+        console.error('OpenAI moderation error:', error.message);
       }
-    } catch (error) {
-      console.error('AI analysis error:', error.message);
+    }
+
+    return null;
+  }
+
+  /**
+   * Analyze with DeepSeek (Primary)
+   */
+  async analyzeWithDeepSeek(text) {
+    try {
+      const response = await axios.post(
+        'https://api.deepseek.com/chat/completions',
+        {
+          model: 'deepseek-chat',
+          max_tokens: 500,
+          messages: [{
+            role: 'system',
+            content: 'You are a content moderation assistant. Analyze content and return ONLY valid JSON.'
+          }, {
+            role: 'user',
+            content: `Analyze this content for moderation. Rate each category 0-1:
+- toxicity (insults, threats)
+- hate_speech (discrimination, slurs)
+- violence (threats, graphic content)
+- self_harm (suicide, self-injury references)
+- spam (promotional, repetitive)
+- nsfw (adult content)
+
+Return JSON only, no markdown: {"scores":{"toxicity":0,"hate":0,"violence":0,"selfHarm":0,"spam":0,"nsfw":0},"flagged":false,"flags":[],"issues":[],"suggestions":[]}
+
+Content: "${text.substring(0, 1000)}"`
+          }]
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.deepseekKey}`
+          },
+          timeout: 15000
+        }
+      );
+
+      const content = response.data.choices?.[0]?.message?.content;
+      if (content) {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          return JSON.parse(jsonMatch[0]);
+        }
+      }
       return null;
+    } catch (error) {
+      console.error('DeepSeek analysis error:', error.message);
+      throw error;
     }
   }
 

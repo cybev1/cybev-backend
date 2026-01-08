@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 5.9.0 - January 8, 2026 Update
-// ADDED: Content Moderation & AI Safety
+// VERSION: 6.0.0 - January 8, 2026 Update
+// ADDED: Advanced Notifications (Digest, Scheduled, Bulk)
 // ============================================
 
 const express = require('express');
@@ -455,6 +455,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - ADVANCED NOTIFICATIONS
+// ==========================================
+
+try {
+  const advancedNotifRoutes = require('./routes/notifications-advanced.routes');
+  app.use('/api/notifications', advancedNotifRoutes);
+  console.log('✅ Advanced notification routes loaded (Digest, Scheduled, Bulk)');
+} catch (err) {
+  console.log('⚠️ Advanced notification routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - VLOG
 // ==========================================
 
@@ -666,7 +678,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.9.0',
+    version: '6.0.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -721,7 +733,9 @@ app.get('/api/health', (req, res) => {
       'events', 'event-rsvp', 'event-comments', 'event-attendees',
       'group-chat', 'group-polls', 'group-announcements', 'group-moderation-enhanced',
       'content-moderation', 'report-system', 'ai-content-analysis', 'word-filters',
-      'auto-moderation', 'user-trust-score', 'moderation-actions', 'appeal-system'
+      'auto-moderation', 'user-trust-score', 'moderation-actions', 'appeal-system',
+      'notification-digest', 'scheduled-notifications', 'bulk-notifications', 
+      'quiet-hours', 'notification-preferences', 'notification-grouping'
     ]
   });
 });
@@ -729,7 +743,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v5.9.0',
+    message: 'CYBEV API Server v6.0.0',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
@@ -831,7 +845,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.9.0           ║
+║         CYBEV API Server v6.0.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -851,6 +865,7 @@ server.listen(PORT, () => {
 ║  📅 Events System: Enabled                ║
 ║  💬 Group Chat: Enabled                   ║
 ║  🛡️ Content Moderation: Enabled           ║
+║  📬 Advanced Notifications: Enabled       ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
