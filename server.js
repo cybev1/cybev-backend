@@ -2,9 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 5.1.0 - January 7, 2026 Update
-// ADDED: Email System (Brevo/Multi-provider)
-// ADDED: Notification Preferences Routes
+// VERSION: 5.7.0 - January 8, 2026 Update
+// ADDED: SEO Routes for Social Previews & Sitemap
 // ============================================
 
 const express = require('express');
@@ -408,6 +407,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - SEO & SOCIAL PREVIEWS
+// ==========================================
+
+try {
+  const seoRoutes = require('./routes/seo.routes');
+  app.use('/api/seo', seoRoutes);
+  console.log('✅ SEO routes loaded (Social Previews, Sitemap Data)');
+} catch (err) {
+  console.log('⚠️ SEO routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - VLOG
 // ==========================================
 
@@ -619,7 +630,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '5.6.0',
+    version: '5.7.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -647,6 +658,12 @@ app.get('/api/health', (req, res) => {
       fcmVersion: process.env.FIREBASE_SERVICE_ACCOUNT ? 'v1' : (process.env.FCM_SERVER_KEY ? 'legacy' : 'not configured'),
       deepLinking: true
     },
+    seo: {
+      socialPreviews: true,
+      sitemapData: true,
+      openGraph: true,
+      twitterCards: true
+    },
     features: [
       'auth', 'oauth-google', 'oauth-facebook', 'users', 'blogs', 'posts', 'feed',
       'comments', 'bookmarks', 'notifications', 'email-notifications',
@@ -663,7 +680,8 @@ app.get('/api/health', (req, res) => {
       'stream-scheduling', 'live-polls', 'super-chats', 'stream-donations',
       'mobile-push-tokens', 'mobile-deep-linking', 'mobile-device-management',
       'admin-dashboard', 'admin-analytics', 'admin-user-management',
-      'admin-content-moderation', 'admin-revenue-tracking', 'admin-system-health'
+      'admin-content-moderation', 'admin-revenue-tracking', 'admin-system-health',
+      'seo-meta-tags', 'social-previews', 'dynamic-sitemap', 'open-graph', 'twitter-cards'
     ]
   });
 });
@@ -671,7 +689,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v5.1.0',
+    message: 'CYBEV API Server v5.7.0',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
@@ -773,7 +791,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v5.6.0           ║
+║         CYBEV API Server v5.7.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -789,6 +807,7 @@ server.listen(PORT, () => {
 ║  💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.length + ' providers' : 'Disabled'}             ║
 ║  📊 Admin Dashboard: Enabled              ║
 ║  👥 User Management: Enabled              ║
+║  🔍 SEO & Social: Enabled                 ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
