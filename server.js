@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.2.0 - January 8, 2026 Update
-// ADDED: Website Builder with AI Generation
+// VERSION: 6.3.0 - January 8, 2026 Update
+// ADDED: Domain Registration API (DomainNameAPI.com)
 // ============================================
 
 const express = require('express');
@@ -181,6 +181,18 @@ if (configuredPayments.length > 0) {
 }
 
 // ==========================================
+// DOMAIN API CONFIGURATION CHECK (NEW)
+// ==========================================
+
+const DOMAIN_API_CONFIGURED = !!(process.env.DOMAIN_API_USERNAME && process.env.DOMAIN_API_PASSWORD);
+
+if (DOMAIN_API_CONFIGURED) {
+  console.log('🌐 Domain API (DomainNameAPI): Configured');
+} else {
+  console.log('⚠️ Domain API: Not configured (set DOMAIN_API_USERNAME and DOMAIN_API_PASSWORD for domain registration)');
+}
+
+// ==========================================
 // ROUTES - AUTHENTICATION
 // ==========================================
 
@@ -236,42 +248,33 @@ try {
 try {
   const blogRoutes = require('./routes/blog.routes');
   app.use('/api/blogs', blogRoutes);
-  app.use('/blogs', blogRoutes); // Also mount at /blogs for backward compatibility
   console.log('✅ Blog routes loaded');
 } catch (err) {
   console.log('⚠️ Blog routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - CONTENT (AI BLOG GENERATION)
+// ROUTES - BLOGSITE
 // ==========================================
 
 try {
-  const contentRoutes = require('./routes/content.routes');
-  app.use('/api/content', contentRoutes);
-  console.log('✅ Content routes loaded');
+  const blogsiteRoutes = require('./routes/blogsite.routes');
+  app.use('/api/blogsites', blogsiteRoutes);
+  console.log('✅ Blogsite routes loaded');
 } catch (err) {
-  console.log('⚠️ Content routes not found:', err.message);
+  console.log('⚠️ Blogsite routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - POSTS (using posts.routes.js - the original)
+// ROUTES - POSTS
 // ==========================================
 
 try {
-  // Try posts.routes first (original file with authorId schema)
   const postsRoutes = require('./routes/posts.routes');
   app.use('/api/posts', postsRoutes);
   console.log('✅ Posts routes loaded');
 } catch (err) {
-  // Fallback to post.routes if posts.routes doesn't exist
-  try {
-    const postRoutes = require('./routes/post.routes');
-    app.use('/api/posts', postRoutes);
-    console.log('✅ Post routes loaded (fallback)');
-  } catch (err2) {
-    console.log('⚠️ Post routes not found:', err.message);
-  }
+  console.log('⚠️ Posts routes not found:', err.message);
 }
 
 // ==========================================
@@ -323,6 +326,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - ADVANCED NOTIFICATIONS
+// ==========================================
+
+try {
+  const advancedNotificationRoutes = require('./routes/notifications-advanced.routes');
+  app.use('/api/notifications', advancedNotificationRoutes);
+  console.log('✅ Advanced notification routes loaded (Digest, Scheduled, Bulk)');
+} catch (err) {
+  console.log('⚠️ Advanced notification routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - REACTIONS
 // ==========================================
 
@@ -347,15 +362,15 @@ try {
 }
 
 // ==========================================
-// ROUTES - LIVE STREAMING
+// ROUTES - LIVE STREAMING (Mux + WebRTC)
 // ==========================================
 
 try {
   const liveRoutes = require('./routes/live.routes');
   app.use('/api/live', liveRoutes);
-  console.log('✅ Live streaming routes loaded');
+  console.log('✅ Live routes loaded (Mux streaming)');
 } catch (err) {
-  console.log('⚠️ Live streaming routes not found:', err.message);
+  console.log('⚠️ Live routes not found:', err.message);
 }
 
 // ==========================================
@@ -365,153 +380,21 @@ try {
 try {
   const webrtcRoutes = require('./routes/webrtc.routes');
   app.use('/api/webrtc', webrtcRoutes);
-  console.log('✅ WebRTC streaming routes loaded');
+  console.log('✅ WebRTC routes loaded');
 } catch (err) {
-  console.log('⚠️ WebRTC streaming routes not found:', err.message);
+  console.log('⚠️ WebRTC routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - STREAM SCHEDULING & LIVE ENHANCEMENTS
+// ROUTES - STREAM SCHEDULE
 // ==========================================
 
 try {
   const streamScheduleRoutes = require('./routes/stream-schedule.routes');
-  app.use('/api/stream-schedule', streamScheduleRoutes);
-  console.log('✅ Stream scheduling routes loaded (Polls, Donations, Scheduling)');
+  app.use('/api/streams', streamScheduleRoutes);
+  console.log('✅ Stream schedule routes loaded');
 } catch (err) {
-  console.log('⚠️ Stream scheduling routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MOBILE APP
-// ==========================================
-
-try {
-  const mobileRoutes = require('./routes/mobile.routes');
-  app.use('/api/mobile', mobileRoutes);
-  console.log('✅ Mobile app routes loaded (Push Tokens, Devices, Deep Links)');
-} catch (err) {
-  console.log('⚠️ Mobile routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADMIN ANALYTICS
-// ==========================================
-
-try {
-  const adminAnalyticsRoutes = require('./routes/admin-analytics.routes');
-  app.use('/api/admin-analytics', adminAnalyticsRoutes);
-  console.log('✅ Admin analytics routes loaded (Dashboard, Users, Content, Revenue)');
-} catch (err) {
-  console.log('⚠️ Admin analytics routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SEO & SOCIAL PREVIEWS
-// ==========================================
-
-try {
-  const seoRoutes = require('./routes/seo.routes');
-  app.use('/api/seo', seoRoutes);
-  console.log('✅ SEO routes loaded (Social Previews, Sitemap Data)');
-} catch (err) {
-  console.log('⚠️ SEO routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - EVENTS
-// ==========================================
-
-try {
-  const eventsRoutes = require('./routes/events.routes');
-  app.use('/api/events', eventsRoutes);
-  console.log('✅ Events routes loaded (Create, RSVP, Comments)');
-} catch (err) {
-  console.log('⚠️ Events routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ENHANCED GROUPS (Polls, Chat, Announcements)
-// ==========================================
-
-try {
-  const groupEnhancedRoutes = require('./routes/group-enhanced.routes');
-  app.use('/api/groups', groupEnhancedRoutes);
-  console.log('✅ Enhanced group routes loaded (Polls, Chat, Announcements)');
-} catch (err) {
-  console.log('⚠️ Enhanced group routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - CONTENT MODERATION
-// ==========================================
-
-try {
-  const moderationRoutes = require('./routes/moderation.routes');
-  app.use('/api/moderation', moderationRoutes);
-  console.log('✅ Moderation routes loaded (Reports, Actions, Filters)');
-} catch (err) {
-  console.log('⚠️ Moderation routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADVANCED NOTIFICATIONS
-// ==========================================
-
-try {
-  const advancedNotifRoutes = require('./routes/notifications-advanced.routes');
-  app.use('/api/notifications', advancedNotifRoutes);
-  console.log('✅ Advanced notification routes loaded (Digest, Scheduled, Bulk)');
-} catch (err) {
-  console.log('⚠️ Advanced notification routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ENHANCED ANALYTICS
-// ==========================================
-
-try {
-  const analyticsEnhancedRoutes = require('./routes/analytics-enhanced.routes');
-  app.use('/api/analytics', analyticsEnhancedRoutes);
-  console.log('✅ Enhanced analytics routes loaded (Dashboard, Timeseries, Export)');
-} catch (err) {
-  console.log('⚠️ Enhanced analytics routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - INTERNATIONALIZATION
-// ==========================================
-
-try {
-  const i18nRoutes = require('./routes/i18n.routes');
-  app.use('/api/i18n', i18nRoutes);
-  console.log('✅ i18n routes loaded (Locales, Translations)');
-} catch (err) {
-  console.log('⚠️ i18n routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - WEBSITE BUILDER
-// ==========================================
-
-try {
-  const sitesRoutes = require('./routes/sites.routes');
-  app.use('/api/sites', sitesRoutes);
-  console.log('✅ Sites routes loaded (Website Builder, Domains, Templates)');
-} catch (err) {
-  console.log('⚠️ Sites routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - VLOG
-// ==========================================
-
-try {
-  const vlogRoutes = require('./routes/vlog.routes');
-  app.use('/api/vlogs', vlogRoutes);
-  console.log('✅ Vlog routes loaded');
-} catch (err) {
-  console.log('⚠️ Vlog routes not found:', err.message);
+  console.log('⚠️ Stream schedule routes not found:', err.message);
 }
 
 // ==========================================
@@ -524,6 +407,30 @@ try {
   console.log('✅ NFT routes loaded');
 } catch (err) {
   console.log('⚠️ NFT routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - MINTING
+// ==========================================
+
+try {
+  const mintRoutes = require('./routes/mint.routes');
+  app.use('/api/mint', mintRoutes);
+  console.log('✅ Mint routes loaded');
+} catch (err) {
+  console.log('⚠️ Mint routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - MINT BADGE
+// ==========================================
+
+try {
+  const mintBadgeRoutes = require('./routes/mint-badge.routes');
+  app.use('/api/mint-badge', mintBadgeRoutes);
+  console.log('✅ Mint badge routes loaded');
+} catch (err) {
+  console.log('⚠️ Mint badge routes not found:', err.message);
 }
 
 // ==========================================
@@ -551,27 +458,51 @@ try {
 }
 
 // ==========================================
-// ROUTES - HASHTAGS
+// ROUTES - ADMIN ANALYTICS
 // ==========================================
 
 try {
-  const hashtagRoutes = require('./routes/hashtag.routes');
-  app.use('/api/hashtags', hashtagRoutes);
-  console.log('✅ Hashtag routes loaded (Trending, Search, Follow)');
+  const adminAnalyticsRoutes = require('./routes/admin-analytics.routes');
+  app.use('/api/admin/analytics', adminAnalyticsRoutes);
+  console.log('✅ Admin analytics routes loaded');
 } catch (err) {
-  console.log('⚠️ Hashtag routes not found:', err.message);
+  console.log('⚠️ Admin analytics routes not found:', err.message);
 }
 
 // ==========================================
-// ROUTES - SEARCH
+// ROUTES - ADMIN CHARTS
 // ==========================================
 
 try {
-  const searchRoutes = require('./routes/search.routes');
-  app.use('/api/search', searchRoutes);
-  console.log('✅ Search routes loaded (Global, Users, Posts, Suggestions)');
+  const adminChartsRoutes = require('./routes/admin-charts.routes');
+  app.use('/api/admin/charts', adminChartsRoutes);
+  console.log('✅ Admin charts routes loaded');
 } catch (err) {
-  console.log('⚠️ Search routes not found:', err.message);
+  console.log('⚠️ Admin charts routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - ADMIN SUMMARY
+// ==========================================
+
+try {
+  const adminSummaryRoutes = require('./routes/admin-summary.routes');
+  app.use('/api/admin/summary', adminSummaryRoutes);
+  console.log('✅ Admin summary routes loaded');
+} catch (err) {
+  console.log('⚠️ Admin summary routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - ADMIN INSIGHT
+// ==========================================
+
+try {
+  const adminInsightRoutes = require('./routes/admin-insight.routes');
+  app.use('/api/admin/insight', adminInsightRoutes);
+  console.log('✅ Admin insight routes loaded');
+} catch (err) {
+  console.log('⚠️ Admin insight routes not found:', err.message);
 }
 
 // ==========================================
@@ -581,9 +512,141 @@ try {
 try {
   const pushRoutes = require('./routes/push.routes');
   app.use('/api/push', pushRoutes);
-  console.log('✅ Push notification routes loaded');
+  console.log('✅ Push routes loaded');
 } catch (err) {
   console.log('⚠️ Push routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - MOBILE
+// ==========================================
+
+try {
+  const mobileRoutes = require('./routes/mobile.routes');
+  app.use('/api/mobile', mobileRoutes);
+  console.log('✅ Mobile routes loaded');
+} catch (err) {
+  console.log('⚠️ Mobile routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - VLOG
+// ==========================================
+
+try {
+  const vlogRoutes = require('./routes/vlog.routes');
+  app.use('/api/vlogs', vlogRoutes);
+  console.log('✅ Vlog routes loaded');
+} catch (err) {
+  console.log('⚠️ Vlog routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - TIPPING
+// ==========================================
+
+try {
+  const tippingRoutes = require('./routes/tipping.routes');
+  app.use('/api/tips', tippingRoutes);
+  console.log('✅ Tipping routes loaded');
+} catch (err) {
+  console.log('⚠️ Tipping routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - SUBSCRIPTION
+// ==========================================
+
+try {
+  const subscriptionRoutes = require('./routes/subscription.routes');
+  app.use('/api/subscriptions', subscriptionRoutes);
+  console.log('✅ Subscription routes loaded');
+} catch (err) {
+  console.log('⚠️ Subscription routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - EARNINGS
+// ==========================================
+
+try {
+  const earningsRoutes = require('./routes/earnings.routes');
+  app.use('/api/earnings', earningsRoutes);
+  console.log('✅ Earnings routes loaded');
+} catch (err) {
+  console.log('⚠️ Earnings routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - CONTENT
+// ==========================================
+
+try {
+  const contentRoutes = require('./routes/content.routes');
+  app.use('/api/content', contentRoutes);
+  console.log('✅ Content routes loaded');
+} catch (err) {
+  console.log('⚠️ Content routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - AI
+// ==========================================
+
+try {
+  const aiRoutes = require('./routes/ai.routes');
+  app.use('/api/ai', aiRoutes);
+  console.log('✅ AI routes loaded');
+} catch (err) {
+  console.log('⚠️ AI routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - SHARE
+// ==========================================
+
+try {
+  const shareRoutes = require('./routes/share.routes');
+  app.use('/api/share', shareRoutes);
+  console.log('✅ Share routes loaded');
+} catch (err) {
+  console.log('⚠️ Share routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - REWARD
+// ==========================================
+
+try {
+  const rewardRoutes = require('./routes/reward.routes');
+  app.use('/api/rewards', rewardRoutes);
+  console.log('✅ Reward routes loaded');
+} catch (err) {
+  console.log('⚠️ Reward routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - LEADERBOARD
+// ==========================================
+
+try {
+  const leaderboardRoutes = require('./routes/leaderboard.routes');
+  app.use('/api/leaderboard', leaderboardRoutes);
+  console.log('✅ Leaderboard routes loaded');
+} catch (err) {
+  console.log('⚠️ Leaderboard routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - STORY
+// ==========================================
+
+try {
+  const storyRoutes = require('./routes/story.routes');
+  app.use('/api/stories', storyRoutes);
+  console.log('✅ Story routes loaded');
+} catch (err) {
+  console.log('⚠️ Story routes not found:', err.message);
 }
 
 // ==========================================
@@ -596,6 +659,114 @@ try {
   console.log('✅ Monetization routes loaded');
 } catch (err) {
   console.log('⚠️ Monetization routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - SITES (Website Builder)
+// ==========================================
+
+try {
+  const sitesRoutes = require('./routes/sites.routes');
+  app.use('/api/sites', sitesRoutes);
+  console.log('✅ Sites routes loaded (Website Builder, Domains, Templates)');
+} catch (err) {
+  console.log('⚠️ Sites routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - SEO
+// ==========================================
+
+try {
+  const seoRoutes = require('./routes/seo.routes');
+  app.use('/api/seo', seoRoutes);
+  console.log('✅ SEO routes loaded');
+} catch (err) {
+  console.log('⚠️ SEO routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - EVENTS
+// ==========================================
+
+try {
+  const eventsRoutes = require('./routes/events.routes');
+  app.use('/api/events', eventsRoutes);
+  console.log('✅ Events routes loaded');
+} catch (err) {
+  console.log('⚠️ Events routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - GROUP ENHANCED
+// ==========================================
+
+try {
+  const groupEnhancedRoutes = require('./routes/group-enhanced.routes');
+  app.use('/api/groups', groupEnhancedRoutes);
+  console.log('✅ Enhanced group routes loaded (Chat, Polls, Announcements)');
+} catch (err) {
+  console.log('⚠️ Enhanced group routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - MODERATION
+// ==========================================
+
+try {
+  const moderationRoutes = require('./routes/moderation.routes');
+  app.use('/api/moderation', moderationRoutes);
+  console.log('✅ Moderation routes loaded');
+} catch (err) {
+  console.log('⚠️ Moderation routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - ENHANCED ANALYTICS
+// ==========================================
+
+try {
+  const analyticsEnhancedRoutes = require('./routes/analytics-enhanced.routes');
+  app.use('/api/analytics', analyticsEnhancedRoutes);
+  console.log('✅ Enhanced analytics routes loaded');
+} catch (err) {
+  console.log('⚠️ Enhanced analytics routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - INTERNATIONALIZATION (i18n)
+// ==========================================
+
+try {
+  const i18nRoutes = require('./routes/i18n.routes');
+  app.use('/api/i18n', i18nRoutes);
+  console.log('✅ i18n routes loaded (10 languages)');
+} catch (err) {
+  console.log('⚠️ i18n routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - HASHTAGS
+// ==========================================
+
+try {
+  const hashtagRoutes = require('./routes/hashtag.routes');
+  app.use('/api/hashtags', hashtagRoutes);
+  console.log('✅ Hashtag routes loaded');
+} catch (err) {
+  console.log('⚠️ Hashtag routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - SEARCH
+// ==========================================
+
+try {
+  const searchRoutes = require('./routes/search.routes');
+  app.use('/api/search', searchRoutes);
+  console.log('✅ Search routes loaded');
+} catch (err) {
+  console.log('⚠️ Search routes not found:', err.message);
 }
 
 // ==========================================
@@ -647,13 +818,14 @@ try {
 }
 
 // ==========================================
-// ROUTES - DOMAIN
+// ROUTES - DOMAIN (Domain Registration & DNS)
 // ==========================================
 
 try {
   const domainRoutes = require('./routes/domain.routes');
   app.use('/api/domain', domainRoutes);
-  console.log('✅ Domain routes loaded');
+  app.use('/api/domains', domainRoutes); // Also mount at /api/domains (plural)
+  console.log('✅ Domain routes loaded (Registration, DNS, Transfer via DomainNameAPI)');
 } catch (err) {
   console.log('⚠️ Domain routes not found:', err.message);
 }
@@ -714,7 +886,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '6.2.0',
+    version: '6.3.0',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -735,6 +907,11 @@ app.get('/api/health', (req, res) => {
       google: GOOGLE_OAUTH_CONFIGURED ? 'configured' : 'not configured',
       facebook: FACEBOOK_OAUTH_CONFIGURED ? 'configured' : 'not configured',
       apple: APPLE_OAUTH_CONFIGURED ? 'configured' : 'not configured'
+    },
+    domainApi: {
+      configured: DOMAIN_API_CONFIGURED,
+      provider: 'DomainNameAPI.com',
+      features: DOMAIN_API_CONFIGURED ? ['registration', 'dns', 'transfer', 'renewal'] : []
     },
     mobile: {
       version: '1.1.0',
@@ -775,7 +952,8 @@ app.get('/api/health', (req, res) => {
       'enhanced-analytics', 'analytics-export', 'analytics-timeseries', 'audience-demographics',
       'i18n', 'localization', 'multi-language', 'rtl-support',
       'hashtags', 'trending-hashtags', 'hashtag-follow', 'global-search', 'search-suggestions',
-      'website-builder', 'ai-site-generation', 'custom-domains', 'subdomains', 'site-templates', 'page-builder'
+      'website-builder', 'ai-site-generation', 'custom-domains', 'subdomains', 'site-templates', 'page-builder',
+      'domain-registration', 'domain-dns-management', 'domain-transfer'
     ]
   });
 });
@@ -783,12 +961,13 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v6.2.0',
+    message: 'CYBEV API Server v6.3.0',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
     webhooks: MUX_WEBHOOK_CONFIGURED ? 'enabled' : 'disabled',
     email: BREVO_CONFIGURED ? 'enabled' : 'console',
+    domainApi: DOMAIN_API_CONFIGURED ? 'enabled' : 'disabled',
     oauth: {
       google: GOOGLE_OAUTH_CONFIGURED,
       facebook: FACEBOOK_OAUTH_CONFIGURED,
@@ -885,7 +1064,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v6.2.0           ║
+║         CYBEV API Server v6.3.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -899,6 +1078,7 @@ server.listen(PORT, () => {
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.length + ' providers' : 'Disabled'}             ║
+║  🌐 Domain API: ${DOMAIN_API_CONFIGURED ? 'Enabled' : 'Disabled'}               ║
 ║  📊 Admin Dashboard: Enabled              ║
 ║  👥 User Management: Enabled              ║
 ║  🔍 SEO & Social: Enabled                 ║

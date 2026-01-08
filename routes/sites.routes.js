@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/sites.routes.js
 // Website Builder API Routes
-// VERSION: 1.0
-// Squarespace-like site management
+// VERSION: 2.0
+// Added: Domain registration via DomainNameAPI
 // ============================================
 
 const express = require('express');
@@ -14,6 +14,14 @@ const crypto = require('crypto');
 const getSiteModel = () => {
   return mongoose.models.Site || require('../models/site.model');
 };
+
+// Get Domain service
+let domainService;
+try {
+  domainService = require('../services/domain.service');
+} catch (err) {
+  console.log('Domain service not found');
+}
 
 // Middleware
 const verifyToken = (req, res, next) => {
@@ -48,9 +56,8 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Site name is required' });
     }
 
-    // Check user's site limit (e.g., 5 sites for free users)
     const existingSites = await Site.countDocuments({ owner: req.user.id });
-    const maxSites = 10; // Adjust based on plan
+    const maxSites = 10;
     
     if (existingSites >= maxSites) {
       return res.status(403).json({ 
@@ -59,7 +66,6 @@ router.post('/', verifyToken, async (req, res) => {
       });
     }
 
-    // Create default homepage
     const defaultHomePage = {
       title: 'Home',
       slug: 'home',
@@ -89,19 +95,13 @@ router.post('/', verifyToken, async (req, res) => {
         },
         {
           type: 'blog-posts',
-          content: {
-            heading: 'Latest Posts',
-            count: 6
-          },
+          content: { heading: 'Latest Posts', count: 6 },
           settings: { padding: 'medium' },
           order: 2
         },
         {
           type: 'contact-form',
-          content: {
-            heading: 'Get in Touch',
-            submitText: 'Send Message'
-          },
+          content: { heading: 'Get in Touch', submitText: 'Send Message' },
           settings: { padding: 'medium' },
           order: 3
         }
@@ -113,9 +113,7 @@ router.post('/', verifyToken, async (req, res) => {
       name,
       tagline,
       category: category || 'personal-blog',
-      theme: {
-        template: template || 'minimal'
-      },
+      theme: { template: template || 'minimal' },
       pages: [defaultHomePage],
       navigation: {
         items: [
@@ -318,10 +316,8 @@ router.post('/:id/pages', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Site not found' });
     }
 
-    // Generate slug if not provided
     const pageSlug = slug || title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
-    // Check for duplicate slug
     if (site.pages.some(p => p.slug === pageSlug)) {
       return res.status(400).json({ ok: false, error: 'Page slug already exists' });
     }
@@ -370,7 +366,6 @@ router.put('/:id/pages/:pageId', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Page not found' });
     }
 
-    // Update fields
     if (title) site.pages[pageIndex].title = title;
     if (slug) site.pages[pageIndex].slug = slug;
     if (description !== undefined) site.pages[pageIndex].description = description;
@@ -408,7 +403,6 @@ router.delete('/:id/pages/:pageId', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Page not found' });
     }
 
-    // Don't allow deleting homepage
     if (site.pages[pageIndex].isHomePage) {
       return res.status(400).json({ ok: false, error: 'Cannot delete homepage' });
     }
@@ -424,14 +418,14 @@ router.delete('/:id/pages/:pageId', verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// DOMAIN MANAGEMENT
+// DOMAIN MANAGEMENT (with DomainNameAPI)
 // ==========================================
 
 /**
  * Check subdomain availability
- * GET /api/sites/domain/check
+ * GET /api/sites/domain/check-subdomain
  */
-router.get('/domain/check', async (req, res) => {
+router.get('/domain/check-subdomain', async (req, res) => {
   try {
     const Site = getSiteModel();
     const { subdomain } = req.query;
@@ -440,8 +434,7 @@ router.get('/domain/check', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Subdomain must be at least 3 characters' });
     }
 
-    // Reserved subdomains
-    const reserved = ['www', 'api', 'app', 'admin', 'mail', 'blog', 'help', 'support', 'cybev'];
+    const reserved = ['www', 'api', 'app', 'admin', 'mail', 'blog', 'help', 'support', 'cybev', 'sites'];
     if (reserved.includes(subdomain.toLowerCase())) {
       return res.json({ ok: true, available: false, reason: 'Reserved subdomain' });
     }
@@ -460,6 +453,141 @@ router.get('/domain/check', async (req, res) => {
 });
 
 /**
+ * Search available domains for purchase
+ * GET /api/sites/domain/search
+ */
+router.get('/domain/search', verifyToken, async (req, res) => {
+  try {
+    const { keyword, tlds } = req.query;
+    
+    if (!keyword || keyword.length < 2) {
+      return res.status(400).json({ ok: false, error: 'Keyword must be at least 2 characters' });
+    }
+
+    const cleanKeyword = keyword.toLowerCase().replace(/[^a-z0-9-]/g, '');
+    
+    if (!domainService || !domainService.isConfigured()) {
+      const defaultTlds = ['com', 'io', 'net', 'org', 'co'];
+      const suggestions = defaultTlds.map(tld => ({
+        domain: `${cleanKeyword}.${tld}`,
+        tld,
+        available: null,
+        price: null,
+        note: 'Domain API not configured'
+      }));
+      return res.json({ ok: true, suggestions });
+    }
+
+    const tldList = tlds ? tlds.split(',') : ['com', 'io', 'net', 'org', 'co'];
+    const suggestions = await domainService.suggestDomains(cleanKeyword, tldList);
+    
+    res.json({ ok: true, suggestions });
+  } catch (error) {
+    console.error('Search domains error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * Get domain pricing
+ * GET /api/sites/domain/pricing
+ */
+router.get('/domain/pricing', async (req, res) => {
+  try {
+    if (!domainService || !domainService.isConfigured()) {
+      return res.json({
+        ok: true,
+        pricing: [
+          { tld: 'com', registration: 12.99, renewal: 14.99, currency: 'USD' },
+          { tld: 'io', registration: 39.99, renewal: 39.99, currency: 'USD' },
+          { tld: 'net', registration: 12.99, renewal: 14.99, currency: 'USD' },
+          { tld: 'org', registration: 12.99, renewal: 14.99, currency: 'USD' },
+          { tld: 'co', registration: 29.99, renewal: 29.99, currency: 'USD' }
+        ],
+        note: 'Default pricing'
+      });
+    }
+
+    const pricing = await domainService.getAllTLDs();
+    res.json({ ok: true, pricing });
+  } catch (error) {
+    console.error('Get pricing error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
+ * Register a new domain for site
+ * POST /api/sites/:id/domain/register
+ */
+router.post('/:id/domain/register', verifyToken, async (req, res) => {
+  try {
+    const Site = getSiteModel();
+    const { domain, years = 1 } = req.body;
+    
+    if (!domain) {
+      return res.status(400).json({ ok: false, error: 'Domain required' });
+    }
+
+    const site = await Site.findOne({ _id: req.params.id, owner: req.user.id });
+    if (!site) {
+      return res.status(404).json({ ok: false, error: 'Site not found' });
+    }
+
+    if (!domainService || !domainService.isConfigured()) {
+      return res.status(503).json({ 
+        ok: false, 
+        error: 'Domain registration not available - API not configured' 
+      });
+    }
+
+    // Check availability first
+    const availability = await domainService.checkAvailability(domain.toLowerCase());
+    if (!availability.available) {
+      return res.status(400).json({ ok: false, error: 'Domain is not available' });
+    }
+
+    // Register the domain
+    const result = await domainService.registerDomain(domain.toLowerCase(), years);
+
+    if (result.success) {
+      // Setup DNS for CYBEV
+      await domainService.setupCYBEVDNS(domain.toLowerCase(), site.subdomain);
+      
+      // Update site with registered domain
+      site.registeredDomain = {
+        domain: domain.toLowerCase(),
+        registeredAt: new Date(),
+        expiresAt: result.expirationDate,
+        autoRenew: true
+      };
+      
+      // Also set as custom domain
+      site.customDomain = {
+        domain: domain.toLowerCase(),
+        verified: true, // Auto-verified since we own it
+        verifiedAt: new Date(),
+        sslEnabled: true
+      };
+      
+      await site.save();
+
+      res.json({
+        ok: true,
+        domain: domain.toLowerCase(),
+        expirationDate: result.expirationDate,
+        url: `https://${domain.toLowerCase()}`
+      });
+    } else {
+      res.status(400).json({ ok: false, error: result.error });
+    }
+  } catch (error) {
+    console.error('Register domain error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+/**
  * Update subdomain
  * PUT /api/sites/:id/subdomain
  */
@@ -472,7 +600,6 @@ router.put('/:id/subdomain', verifyToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Subdomain must be at least 3 characters' });
     }
 
-    // Check availability
     const exists = await Site.findOne({ 
       subdomain: subdomain.toLowerCase(),
       _id: { $ne: req.params.id }
@@ -504,10 +631,10 @@ router.put('/:id/subdomain', verifyToken, async (req, res) => {
 });
 
 /**
- * Add custom domain
- * POST /api/sites/:id/domain
+ * Connect existing custom domain
+ * POST /api/sites/:id/domain/connect
  */
-router.post('/:id/domain', verifyToken, async (req, res) => {
+router.post('/:id/domain/connect', verifyToken, async (req, res) => {
   try {
     const Site = getSiteModel();
     const { domain } = req.body;
@@ -516,13 +643,11 @@ router.post('/:id/domain', verifyToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Domain required' });
     }
 
-    // Basic domain validation
     const domainRegex = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9]?\.[a-zA-Z]{2,}$/;
     if (!domainRegex.test(domain)) {
       return res.status(400).json({ ok: false, error: 'Invalid domain format' });
     }
 
-    // Check if domain already in use
     const existing = await Site.findOne({
       'customDomain.domain': domain.toLowerCase(),
       _id: { $ne: req.params.id }
@@ -532,7 +657,6 @@ router.post('/:id/domain', verifyToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Domain already in use' });
     }
 
-    // Generate verification token
     const verificationToken = crypto.randomBytes(16).toString('hex');
 
     const site = await Site.findOneAndUpdate(
@@ -555,21 +679,15 @@ router.post('/:id/domain', verifyToken, async (req, res) => {
     res.json({
       ok: true,
       domain: site.customDomain.domain,
-      verification: {
-        type: 'CNAME',
-        name: '_cybev-verify',
-        value: verificationToken,
-        instructions: `Add a CNAME record: _cybev-verify.${domain} → ${verificationToken}.verify.cybev.io`
-      },
-      cname: {
-        type: 'CNAME',
-        name: domain,
-        value: 'sites.cybev.io',
-        instructions: `Add a CNAME record: ${domain} → sites.cybev.io`
+      instructions: {
+        step1: 'Add a CNAME record pointing your domain to sites.cybev.io',
+        step2: `Add a TXT record: _cybev-verify.${domain} → ${verificationToken}`,
+        cname: { name: domain, value: 'sites.cybev.io' },
+        txt: { name: `_cybev-verify.${domain}`, value: verificationToken }
       }
     });
   } catch (error) {
-    console.error('Add domain error:', error);
+    console.error('Connect domain error:', error);
     res.status(500).json({ ok: false, error: error.message });
   }
 });
@@ -590,12 +708,9 @@ router.post('/:id/domain/verify', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Site or domain not found' });
     }
 
-    // In production, you would actually verify DNS records here
-    // For now, we'll simulate verification
     const dns = require('dns').promises;
     
     try {
-      // Check CNAME record
       const records = await dns.resolveCname(site.customDomain.domain);
       const hasCorrectCname = records.some(r => r.includes('cybev.io'));
       
@@ -607,10 +722,9 @@ router.post('/:id/domain/verify', verifyToken, async (req, res) => {
         });
       }
 
-      // Mark as verified
       site.customDomain.verified = true;
       site.customDomain.verifiedAt = new Date();
-      site.customDomain.sslEnabled = true; // In production, trigger SSL provisioning
+      site.customDomain.sslEnabled = true;
       await site.save();
 
       res.json({
@@ -619,7 +733,6 @@ router.post('/:id/domain/verify', verifyToken, async (req, res) => {
         url: `https://${site.customDomain.domain}`
       });
     } catch (dnsError) {
-      // DNS lookup failed
       res.json({
         ok: true,
         verified: false,
@@ -662,37 +775,28 @@ router.delete('/:id/domain', verifyToken, async (req, res) => {
 
 /**
  * Get available templates
- * GET /api/sites/templates
+ * GET /api/sites/templates/list
  */
 router.get('/templates/list', async (req, res) => {
   try {
     const { category } = req.query;
 
     const templates = [
-      // Personal
-      { id: 'minimal', name: 'Minimal', category: 'personal', preview: '/templates/minimal.jpg', description: 'Clean, simple design for personal blogs' },
-      { id: 'portfolio', name: 'Portfolio', category: 'personal', preview: '/templates/portfolio.jpg', description: 'Showcase your work beautifully' },
-      { id: 'writer', name: 'Writer', category: 'personal', preview: '/templates/writer.jpg', description: 'Perfect for authors and bloggers' },
-      
-      // Business
-      { id: 'corporate', name: 'Corporate', category: 'business', preview: '/templates/corporate.jpg', description: 'Professional business website' },
-      { id: 'agency', name: 'Agency', category: 'business', preview: '/templates/agency.jpg', description: 'Creative agency template' },
-      { id: 'startup', name: 'Startup', category: 'business', preview: '/templates/startup.jpg', description: 'Modern startup landing page' },
-      
-      // Creative
-      { id: 'artist', name: 'Artist', category: 'creative', preview: '/templates/artist.jpg', description: 'Visual-focused for artists' },
-      { id: 'photographer', name: 'Photographer', category: 'creative', preview: '/templates/photographer.jpg', description: 'Gallery-centric layout' },
-      { id: 'musician', name: 'Musician', category: 'creative', preview: '/templates/musician.jpg', description: 'Audio-ready with dark theme' },
-      
-      // Ministry
-      { id: 'church', name: 'Church', category: 'ministry', preview: '/templates/church.jpg', description: 'Warm, welcoming church website' },
-      { id: 'ministry', name: 'Ministry', category: 'ministry', preview: '/templates/ministry.jpg', description: 'Ministry and nonprofit template' },
-      { id: 'devotional', name: 'Devotional', category: 'ministry', preview: '/templates/devotional.jpg', description: 'Daily devotional blog' },
-      
-      // Media
-      { id: 'podcast', name: 'Podcast', category: 'media', preview: '/templates/podcast.jpg', description: 'Podcast showcase template' },
-      { id: 'magazine', name: 'Magazine', category: 'media', preview: '/templates/magazine.jpg', description: 'News and magazine layout' },
-      { id: 'video', name: 'Video Blog', category: 'media', preview: '/templates/video.jpg', description: 'Video-centric vlog template' }
+      { id: 'minimal', name: 'Minimal', category: 'personal', description: 'Clean, simple design' },
+      { id: 'portfolio', name: 'Portfolio', category: 'personal', description: 'Showcase your work' },
+      { id: 'writer', name: 'Writer', category: 'personal', description: 'Perfect for bloggers' },
+      { id: 'corporate', name: 'Corporate', category: 'business', description: 'Professional business' },
+      { id: 'agency', name: 'Agency', category: 'business', description: 'Creative agency' },
+      { id: 'startup', name: 'Startup', category: 'business', description: 'Modern startup' },
+      { id: 'artist', name: 'Artist', category: 'creative', description: 'Visual-focused' },
+      { id: 'photographer', name: 'Photographer', category: 'creative', description: 'Gallery layout' },
+      { id: 'musician', name: 'Musician', category: 'creative', description: 'Audio-ready dark theme' },
+      { id: 'church', name: 'Church', category: 'ministry', description: 'Warm welcoming' },
+      { id: 'ministry', name: 'Ministry', category: 'ministry', description: 'Faith-focused' },
+      { id: 'devotional', name: 'Devotional', category: 'ministry', description: 'Daily devotional' },
+      { id: 'podcast', name: 'Podcast', category: 'media', description: 'Podcast showcase' },
+      { id: 'magazine', name: 'Magazine', category: 'media', description: 'News layout' },
+      { id: 'video', name: 'Video Blog', category: 'media', description: 'Video-centric' }
     ];
 
     const filtered = category 
@@ -716,27 +820,19 @@ router.get('/templates/list', async (req, res) => {
  */
 router.post('/ai/generate', verifyToken, async (req, res) => {
   try {
-    const { 
-      prompt, 
-      category, 
-      style,
-      includePages = ['home', 'about', 'contact'],
-      generateContent = true 
-    } = req.body;
+    const { prompt, category, style } = req.body;
 
     if (!prompt) {
       return res.status(400).json({ ok: false, error: 'Prompt required' });
     }
 
-    // Get AI service
     let aiService;
     try {
       aiService = require('../services/ai.service');
     } catch (err) {
-      console.log('AI service not available, using fallback');
+      console.log('AI service not available');
     }
 
-    // Generate site structure and content with AI
     let generatedSite = {
       name: 'My Website',
       tagline: 'Welcome to my site',
@@ -777,7 +873,6 @@ Return JSON only:
       }
     }
 
-    // Create the site
     const Site = getSiteModel();
     const site = new Site({
       owner: req.user.id,
@@ -802,10 +897,7 @@ Return JSON only:
         sections: [
           {
             type: 'hero',
-            content: {
-              heading: generatedSite.name,
-              subheading: generatedSite.tagline
-            },
+            content: { heading: generatedSite.name, subheading: generatedSite.tagline },
             order: 0
           }
         ]
@@ -835,41 +927,6 @@ Return JSON only:
   }
 });
 
-/**
- * Generate content for a section with AI
- * POST /api/sites/ai/content
- */
-router.post('/ai/content', verifyToken, async (req, res) => {
-  try {
-    const { sectionType, context, tone = 'professional' } = req.body;
-
-    let aiService;
-    try {
-      aiService = require('../services/ai.service');
-    } catch (err) {
-      return res.status(500).json({ ok: false, error: 'AI service not available' });
-    }
-
-    const prompt = `Generate content for a ${sectionType} section on a website.
-Context: ${context}
-Tone: ${tone}
-
-Return JSON with appropriate fields for this section type.`;
-
-    const response = await aiService.generateContent(prompt);
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      res.json({ ok: true, content: JSON.parse(jsonMatch[0]) });
-    } else {
-      res.json({ ok: true, content: { text: response } });
-    }
-  } catch (error) {
-    console.error('AI content error:', error);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
 // ==========================================
 // PUBLIC SITE RENDERING
 // ==========================================
@@ -883,45 +940,23 @@ router.get('/public/:domain', async (req, res) => {
     const Site = getSiteModel();
     const { domain } = req.params;
 
-    const site = await Site.findByDomain(domain);
+    const site = await Site.findOne({
+      $or: [
+        { subdomain: domain },
+        { 'customDomain.domain': domain, 'customDomain.verified': true }
+      ],
+      status: 'published'
+    }).populate('owner', 'name username avatar');
 
-    if (!site || site.status !== 'published') {
+    if (!site) {
       return res.status(404).json({ ok: false, error: 'Site not found' });
     }
 
-    // Increment view count
     Site.findByIdAndUpdate(site._id, { $inc: { 'stats.views': 1 } }).exec();
 
     res.json({ ok: true, site });
   } catch (error) {
     console.error('Get public site error:', error);
-    res.status(500).json({ ok: false, error: error.message });
-  }
-});
-
-/**
- * Get public page
- * GET /api/sites/public/:domain/:slug
- */
-router.get('/public/:domain/:slug', async (req, res) => {
-  try {
-    const Site = getSiteModel();
-    const { domain, slug } = req.params;
-
-    const site = await Site.findByDomain(domain);
-
-    if (!site || site.status !== 'published') {
-      return res.status(404).json({ ok: false, error: 'Site not found' });
-    }
-
-    const page = site.getPageBySlug(slug);
-    if (!page || !page.isPublished) {
-      return res.status(404).json({ ok: false, error: 'Page not found' });
-    }
-
-    res.json({ ok: true, page, site: { name: site.name, theme: site.theme } });
-  } catch (error) {
-    console.error('Get public page error:', error);
     res.status(500).json({ ok: false, error: error.message });
   }
 });
