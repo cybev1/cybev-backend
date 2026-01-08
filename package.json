@@ -1,7 +1,7 @@
 {
   "name": "cybev-backend",
-  "version": "5.6.0",
-  "description": "CYBEV Backend API - Social Blogging Platform with OAuth, Monetization, Mobile & Admin",
+  "version": "5.7.0",
+  "description": "CYBEV Backend API - Social Blogging Platform with OAuth, Monetization, Mobile, Admin & SEO",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -46,6 +46,7 @@
     "oauth",
     "monetization",
     "payments",
+    "seo",
     "api"
   ],
   "author": "CYBEV",
