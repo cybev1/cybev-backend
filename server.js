@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.3.0 - January 8, 2026 Update
-// ADDED: Domain Registration API (DomainNameAPI.com)
+// VERSION: 6.4.2 - January 9, 2026 Update
+// FIXED: /api/sites/my, /api/blogs/my, /api/follow/check route order
 // ============================================
 
 const express = require('express');
@@ -181,7 +181,7 @@ if (configuredPayments.length > 0) {
 }
 
 // ==========================================
-// DOMAIN API CONFIGURATION CHECK (NEW)
+// DOMAIN API CONFIGURATION CHECK
 // ==========================================
 
 const DOMAIN_API_CONFIGURED = !!(process.env.DOMAIN_API_USERNAME && process.env.DOMAIN_API_PASSWORD);
@@ -230,6 +230,18 @@ try {
 }
 
 // ==========================================
+// ROUTES - USER PROFILE (Cover Image Upload)
+// ==========================================
+
+try {
+  const userProfileRoutes = require('./routes/user-profile.routes');
+  app.use('/api/users', userProfileRoutes);
+  console.log('✅ User profile routes loaded (Cover Image Upload)');
+} catch (err) {
+  console.log('⚠️ User profile routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - NOTIFICATION PREFERENCES
 // ==========================================
 
@@ -239,6 +251,19 @@ try {
   console.log('✅ Notification preferences routes loaded');
 } catch (err) {
   console.log('⚠️ Notification preferences routes not found:', err.message);
+}
+
+// ==========================================
+// ROUTES - BLOGS /my (MUST BE BEFORE blog.routes.js)
+// FIX: /api/blogs/my was being caught by /:id route
+// ==========================================
+
+try {
+  const blogsMyRoutes = require('./routes/blogs-my.routes');
+  app.use('/api/blogs', blogsMyRoutes);
+  console.log('✅ Blogs /my routes loaded (before /:id)');
+} catch (err) {
+  console.log('⚠️ Blogs /my routes not found:', err.message);
 }
 
 // ==========================================
@@ -458,18 +483,6 @@ try {
 }
 
 // ==========================================
-// ROUTES - ADMIN ANALYTICS
-// ==========================================
-
-try {
-  const adminAnalyticsRoutes = require('./routes/admin-analytics.routes');
-  app.use('/api/admin/analytics', adminAnalyticsRoutes);
-  console.log('✅ Admin analytics routes loaded');
-} catch (err) {
-  console.log('⚠️ Admin analytics routes not found:', err.message);
-}
-
-// ==========================================
 // ROUTES - ADMIN CHARTS
 // ==========================================
 
@@ -662,6 +675,19 @@ try {
 }
 
 // ==========================================
+// ROUTES - SITES /my (MUST BE BEFORE sites.routes.js)
+// FIX: /api/sites/my was being caught by /:id route
+// ==========================================
+
+try {
+  const sitesMyRoutes = require('./routes/sites-my.routes');
+  app.use('/api/sites', sitesMyRoutes);
+  console.log('✅ Sites /my routes loaded (before /:id)');
+} catch (err) {
+  console.log('⚠️ Sites /my routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - SITES (Website Builder)
 // ==========================================
 
@@ -806,6 +832,19 @@ try {
 }
 
 // ==========================================
+// ROUTES - FOLLOW CHECK (MUST BE BEFORE follow.routes.js)
+// FIX: /api/follow/check/:userId endpoint
+// ==========================================
+
+try {
+  const followCheckRoutes = require('./routes/follow-check.routes');
+  app.use('/api/follow', followCheckRoutes);
+  console.log('✅ Follow /check routes loaded');
+} catch (err) {
+  console.log('⚠️ Follow /check routes not found:', err.message);
+}
+
+// ==========================================
 // ROUTES - FOLLOW
 // ==========================================
 
@@ -886,7 +925,7 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     ok: true, 
     status: 'healthy',
-    version: '6.3.0',
+    version: '6.4.2',
     timestamp: new Date().toISOString(),
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     mux: MUX_CONFIGURED ? 'configured' : 'not configured',
@@ -953,7 +992,8 @@ app.get('/api/health', (req, res) => {
       'i18n', 'localization', 'multi-language', 'rtl-support',
       'hashtags', 'trending-hashtags', 'hashtag-follow', 'global-search', 'search-suggestions',
       'website-builder', 'ai-site-generation', 'custom-domains', 'subdomains', 'site-templates', 'page-builder',
-      'domain-registration', 'domain-dns-management', 'domain-transfer'
+      'domain-registration', 'domain-dns-management', 'domain-transfer',
+      'cover-image-upload', 'profile-cover', 'ai-website-builder'
     ]
   });
 });
@@ -961,7 +1001,7 @@ app.get('/api/health', (req, res) => {
 // Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v6.3.0',
+    message: 'CYBEV API Server v6.4.2',
     documentation: '/api/health',
     status: 'running',
     mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
@@ -1064,7 +1104,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v6.3.0           ║
+║         CYBEV API Server v6.4.2           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -1090,6 +1130,7 @@ server.listen(PORT, () => {
 ║  🌍 Internationalization: Enabled         ║
 ║  #️⃣ Hashtags & Search: Enabled            ║
 ║  🌐 Website Builder: Enabled              ║
+║  🖼️ Profile Cover Upload: Enabled         ║
 ║  🌙 Dark Mode: Enabled                    ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
