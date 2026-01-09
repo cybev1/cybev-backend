@@ -1,7 +1,7 @@
 // ============================================
 // FILE: models/user.model.js
 // User Model with OAuth Provider Support
-// VERSION: 5.0 - Social Auth Ready
+// VERSION: 5.1 - Added coverImage for profile covers
 // ============================================
 
 const mongoose = require('mongoose');
@@ -46,7 +46,31 @@ const userSchema = new mongoose.Schema({
   },
   
   // ==========================================
-  // OAuth Provider Fields (NEW)
+  // NEW: Cover Image for Profile
+  // ==========================================
+  coverImage: {
+    type: String,
+    default: ''
+  },
+  
+  // ==========================================
+  // NEW: Location for Profile
+  // ==========================================
+  location: {
+    type: String,
+    default: ''
+  },
+  
+  // ==========================================
+  // NEW: Website for Profile
+  // ==========================================
+  website: {
+    type: String,
+    default: ''
+  },
+  
+  // ==========================================
+  // OAuth Provider Fields
   // ==========================================
   oauthProvider: {
     type: String,
@@ -113,13 +137,18 @@ const userSchema = new mongoose.Schema({
   },
   
   // ==========================================
-  // Social Stats
+  // Social Stats (UPDATED - standardized names)
   // ==========================================
   followerCount: {
     type: Number,
     default: 0
   },
   followingCount: {
+    type: Number,
+    default: 0
+  },
+  // Also support alternative naming
+  followersCount: {
     type: Number,
     default: 0
   },
@@ -153,7 +182,7 @@ const userSchema = new mongoose.Schema({
   },
   
   // ==========================================
-  // User Preferences (Updated)
+  // User Preferences
   // ==========================================
   preferences: {
     emailNotifications: {
@@ -170,14 +199,13 @@ const userSchema = new mongoose.Schema({
     },
     theme: {
       type: String,
-      enum: ['light', 'dark', 'system', 'auto'], // 'auto' is legacy alias for 'system'
+      enum: ['light', 'dark', 'system', 'auto'],
       default: 'system'
     },
     language: {
       type: String,
       default: 'en'
     },
-    // Notification preferences
     notifications: {
       likes: { type: Boolean, default: true },
       comments: { type: Boolean, default: true },
@@ -253,7 +281,7 @@ const userSchema = new mongoose.Schema({
       default: Date.now
     },
     location: String,
-    provider: String // 'email', 'google', 'facebook', etc.
+    provider: String
   }],
   trustedIPs: [{
     ip: String,
@@ -294,9 +322,8 @@ const userSchema = new mongoose.Schema({
 // Pre-save Hooks
 // ==========================================
 
-// Hash password before saving (only if modified and exists)
+// Hash password before saving
 userSchema.pre('save', async function(next) {
-  // Skip if password not modified or not present (OAuth users)
   if (!this.isModified('password') || !this.password) return next();
   
   try {
@@ -343,6 +370,17 @@ userSchema.pre('save', function(next) {
   next();
 });
 
+// Sync followerCount and followersCount
+userSchema.pre('save', function(next) {
+  if (this.isModified('followerCount')) {
+    this.followersCount = this.followerCount;
+  }
+  if (this.isModified('followersCount')) {
+    this.followerCount = this.followersCount;
+  }
+  next();
+});
+
 // ==========================================
 // Instance Methods
 // ==========================================
@@ -359,7 +397,6 @@ userSchema.methods.toJSON = function() {
   delete obj.emailVerificationToken;
   delete obj.twoFactorSecret;
   delete obj.backupCodes;
-  // Remove OAuth tokens from response
   if (obj.oauthProfile) {
     Object.keys(obj.oauthProfile).forEach(provider => {
       if (obj.oauthProfile[provider]) {
@@ -372,12 +409,10 @@ userSchema.methods.toJSON = function() {
   return obj;
 };
 
-// Check if user can login with password
 userSchema.methods.canUsePassword = function() {
   return !!this.password && this.linkedProviders.includes('email');
 };
 
-// Link a new OAuth provider
 userSchema.methods.linkProvider = function(provider, profileData) {
   if (!this.oauthProfile) {
     this.oauthProfile = {};
@@ -389,7 +424,6 @@ userSchema.methods.linkProvider = function(provider, profileData) {
   }
 };
 
-// Unlink an OAuth provider
 userSchema.methods.unlinkProvider = function(provider) {
   if (this.oauthProfile && this.oauthProfile[provider]) {
     this.oauthProfile[provider] = undefined;
