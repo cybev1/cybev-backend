@@ -1,13 +1,13 @@
 // ============================================
 // FILE: models/site.model.js
 // Website/Blog Site Model
-// VERSION: 1.0
+// VERSION: 2.0 - Fixed for Website Builder
 // Squarespace-like website builder
 // ============================================
 
 const mongoose = require('mongoose');
 
-// Page Section Schema (for drag-drop builder)
+// Page Section Schema (for drag-drop builder) - Made flexible with Mixed
 const sectionSchema = new mongoose.Schema({
   type: {
     type: String,
@@ -19,44 +19,34 @@ const sectionSchema = new mongoose.Schema({
       'blog-posts', 'blog-featured',
       'testimonials', 'team',
       'pricing', 'features',
-      'contact-form', 'newsletter',
+      'contact-form', 'newsletter', 'contact',
       'faq', 'accordion',
       'social-links', 'social-feed',
       'map', 'embed',
       'divider', 'spacer',
+      'cta', 'footer',
       'custom-html'
-    ],
-    required: true
+    ]
   },
   content: mongoose.Schema.Types.Mixed,
-  settings: {
-    backgroundColor: String,
-    backgroundImage: String,
-    textColor: String,
-    padding: { type: String, default: 'medium' },
-    alignment: { type: String, default: 'center' },
-    animation: String,
-    customCss: String
-  },
+  settings: mongoose.Schema.Types.Mixed,
   order: { type: Number, default: 0 }
-});
+}, { _id: false, strict: false });
 
-// Page Schema
+// Page Schema - Made flexible
 const pageSchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  slug: { type: String, required: true },
+  id: String,
+  title: String,
+  name: String,
+  slug: String,
   description: String,
   isHomePage: { type: Boolean, default: false },
-  isPublished: { type: Boolean, default: false },
+  isPublished: { type: Boolean, default: true },
   sections: [sectionSchema],
-  seo: {
-    title: String,
-    description: String,
-    keywords: [String],
-    ogImage: String
-  },
+  blocks: [mongoose.Schema.Types.Mixed], // NEW: Support blocks array
+  seo: mongoose.Schema.Types.Mixed,
   order: { type: Number, default: 0 }
-}, { timestamps: true });
+}, { timestamps: true, _id: false, strict: false });
 
 // Main Site Schema
 const siteSchema = new mongoose.Schema({
@@ -78,7 +68,7 @@ const siteSchema = new mongoose.Schema({
   },
   description: {
     type: String,
-    maxlength: 1000
+    maxlength: 2000
   },
   category: {
     type: String,
@@ -86,9 +76,16 @@ const siteSchema = new mongoose.Schema({
       'personal-blog', 'portfolio', 'business', 'restaurant',
       'photography', 'music', 'art', 'church', 'ministry',
       'podcast', 'magazine', 'news', 'education', 'nonprofit',
-      'consultant', 'agency', 'ecommerce', 'other'
+      'consultant', 'agency', 'ecommerce', 'startup', 'saas',
+      'community', 'shop', 'blog', 'landing', 'other'
     ],
-    default: 'personal-blog'
+    default: 'business'
+  },
+
+  // Template (NEW)
+  template: {
+    type: String,
+    default: 'business'
   },
 
   // Domain Settings
@@ -100,24 +97,24 @@ const siteSchema = new mongoose.Schema({
     trim: true
   },
   customDomain: {
-    domain: String,
-    verified: { type: Boolean, default: false },
-    verificationToken: String,
-    sslEnabled: { type: Boolean, default: false },
-    verifiedAt: Date
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
 
-  // Theme & Design
+  // Theme & Design - Made flexible with Mixed
   theme: {
-    template: { type: String, default: 'minimal' },
-    primaryColor: { type: String, default: '#7c3aed' },
-    secondaryColor: { type: String, default: '#ec4899' },
-    backgroundColor: { type: String, default: '#ffffff' },
-    textColor: { type: String, default: '#1f2937' },
-    fontHeading: { type: String, default: 'Inter' },
-    fontBody: { type: String, default: 'Inter' },
-    borderRadius: { type: String, default: '8px' },
-    customCss: String
+    type: mongoose.Schema.Types.Mixed,
+    default: {
+      template: 'minimal',
+      primaryColor: '#7c3aed',
+      secondaryColor: '#ec4899',
+      backgroundColor: '#ffffff',
+      textColor: '#1f2937',
+      fontHeading: 'Inter',
+      fontBody: 'Inter',
+      colorTheme: 'purple',
+      fontPair: 'modern'
+    }
   },
 
   // Branding
@@ -128,32 +125,23 @@ const siteSchema = new mongoose.Schema({
     ogImage: String
   },
 
-  // Navigation
+  // NEW: Simple blocks array for website builder
+  blocks: [mongoose.Schema.Types.Mixed],
+
+  // Navigation - Made flexible
   navigation: {
-    style: { type: String, enum: ['standard', 'centered', 'sidebar', 'overlay'], default: 'standard' },
-    items: [{
-      label: String,
-      url: String,
-      pageId: mongoose.Schema.Types.ObjectId,
-      isExternal: Boolean,
-      order: Number
-    }],
-    showSocial: { type: Boolean, default: true }
+    type: mongoose.Schema.Types.Mixed,
+    default: {
+      style: 'standard',
+      items: [],
+      showSocial: true
+    }
   },
 
-  // Footer
+  // Footer - Made flexible
   footer: {
-    content: String,
-    showSocial: { type: Boolean, default: true },
-    showNewsletter: { type: Boolean, default: false },
-    columns: [{
-      title: String,
-      links: [{
-        label: String,
-        url: String
-      }]
-    }],
-    copyright: String
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
 
   // Social Links
@@ -176,8 +164,8 @@ const siteSchema = new mongoose.Schema({
     showContactForm: { type: Boolean, default: true }
   },
 
-  // Pages
-  pages: [pageSchema],
+  // Pages - Made flexible
+  pages: [mongoose.Schema.Types.Mixed],
 
   // Blog Settings
   blogSettings: {
@@ -189,26 +177,29 @@ const siteSchema = new mongoose.Schema({
     layout: { type: String, enum: ['grid', 'list', 'magazine'], default: 'grid' }
   },
 
-  // SEO
+  // SEO - Made flexible
   seo: {
-    title: String,
-    description: String,
-    keywords: [String],
-    googleAnalyticsId: String,
-    enableIndexing: { type: Boolean, default: true }
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
+  
+  // SEO Fields (flat for easy access)
+  favicon: String,
+  ogImage: String,
+  ogTitle: String,
+  ogDescription: String,
+  googleAnalytics: String,
 
   // Integrations
   integrations: {
-    googleAnalytics: String,
-    facebookPixel: String,
-    mailchimpApiKey: String,
-    mailchimpListId: String,
-    customScripts: {
-      head: String,
-      body: String
-    }
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
+  
+  // Advanced
+  customHead: String,
+  customCss: String,
+  password: String,
 
   // Stats
   stats: {
@@ -216,11 +207,13 @@ const siteSchema = new mongoose.Schema({
     visitors: { type: Number, default: 0 },
     pageViews: { type: Number, default: 0 }
   },
+  views: { type: Number, default: 0 },
+  thumbnail: String,
 
   // Status
   status: {
     type: String,
-    enum: ['draft', 'published', 'maintenance', 'suspended'],
+    enum: ['draft', 'published', 'maintenance', 'suspended', 'archived'],
     default: 'draft'
   },
   publishedAt: Date,
@@ -233,7 +226,8 @@ const siteSchema = new mongoose.Schema({
   }
 
 }, {
-  timestamps: true
+  timestamps: true,
+  strict: false // Allow additional fields
 });
 
 // Indexes
@@ -242,6 +236,7 @@ siteSchema.index({ subdomain: 1 }, { unique: true, sparse: true });
 siteSchema.index({ 'customDomain.domain': 1 }, { sparse: true });
 siteSchema.index({ status: 1 });
 siteSchema.index({ category: 1 });
+siteSchema.index({ template: 1 });
 
 // Virtual for full URL
 siteSchema.virtual('url').get(function() {
@@ -275,21 +270,32 @@ siteSchema.pre('save', async function(next) {
     
     this.subdomain = subdomain;
   }
+  
+  // Sync views
+  if (this.stats?.views && !this.views) {
+    this.views = this.stats.views;
+  }
+  
   next();
 });
 
 // Methods
 siteSchema.methods.getHomePage = function() {
-  return this.pages.find(p => p.isHomePage) || this.pages[0];
+  return this.pages?.find(p => p.isHomePage) || this.pages?.[0];
 };
 
 siteSchema.methods.getPageBySlug = function(slug) {
-  return this.pages.find(p => p.slug === slug);
+  return this.pages?.find(p => p.slug === slug);
 };
 
 siteSchema.methods.publish = async function() {
   this.status = 'published';
   this.publishedAt = new Date();
+  return this.save();
+};
+
+siteSchema.methods.unpublish = async function() {
+  this.status = 'draft';
   return this.save();
 };
 
@@ -303,4 +309,17 @@ siteSchema.statics.findByDomain = function(domain) {
   }).populate('owner', 'name username avatar');
 };
 
-module.exports = mongoose.model('Site', siteSchema);
+siteSchema.statics.findBySubdomain = function(subdomain) {
+  return this.findOne({ subdomain: subdomain.toLowerCase() })
+    .populate('owner', 'name username avatar');
+};
+
+// Check if model exists before creating
+let Site;
+try {
+  Site = mongoose.model('Site');
+} catch {
+  Site = mongoose.model('Site', siteSchema);
+}
+
+module.exports = Site;
