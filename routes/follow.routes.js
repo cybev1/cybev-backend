@@ -1,451 +1,718 @@
 // ============================================
 // FILE: routes/follow.routes.js
-// Follow System with Suggested Follows
+// Follow System API Routes
+// VERSION: 6.4.2 - Complete Facebook-like Follow System
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
+// Models
+const getFollowModel = () => mongoose.models.Follow || require('../models/follow.model');
+const getUserModel = () => mongoose.models.User || require('../models/user.model');
+
 // Auth middleware
-let verifyToken;
-try {
-  verifyToken = require('../middleware/verifyToken');
-} catch (e) {
-  try { verifyToken = require('../middleware/auth.middleware'); } catch (e2) {
-    try { verifyToken = require('../middleware/auth'); } catch (e3) {
-      verifyToken = (req, res, next) => {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-        if (!token) return res.status(401).json({ error: 'No token' });
-        try {
-          const jwt = require('jsonwebtoken');
-          req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
-          next();
-        } catch { return res.status(401).json({ error: 'Invalid token' }); }
-      };
-    }
+const verifyToken = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
+  try {
+    const jwt = require('jsonwebtoken');
+    req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+    next();
+  } catch { 
+    return res.status(401).json({ ok: false, error: 'Invalid token' }); 
   }
-}
+};
 
 // Optional auth
 const optionalAuth = (req, res, next) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = req.headers.authorization?.split(' ')[1];
   if (token) {
     try {
       const jwt = require('jsonwebtoken');
-      req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+      req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
     } catch {}
   }
   next();
 };
 
-// Load models
-let User, Blog;
-try { User = require('../models/user.model'); } catch (e) { User = mongoose.model('User'); }
-try { Blog = require('../models/blog.model'); } catch (e) { Blog = mongoose.model('Blog'); }
-
-// ==========================================
-// POST /api/follow/:userId - Follow a user
-// ==========================================
-router.post('/:userId', verifyToken, async (req, res) => {
+// Helper: Update user follow counts
+const updateUserCounts = async (userId) => {
   try {
-    const targetUserId = req.params.userId;
-    const currentUserId = req.user.id;
+    const Follow = getFollowModel();
+    const User = getUserModel();
     
-    if (targetUserId === currentUserId) {
-      return res.status(400).json({ success: false, error: 'Cannot follow yourself' });
-    }
-    
-    // Get both users
-    const [currentUser, targetUser] = await Promise.all([
-      User.findById(currentUserId),
-      User.findById(targetUserId)
+    const [followersCount, followingCount] = await Promise.all([
+      Follow.countDocuments({ following: userId, status: 'active' }),
+      Follow.countDocuments({ follower: userId, status: 'active' })
     ]);
     
-    if (!targetUser) {
-      return res.status(404).json({ success: false, error: 'User not found' });
+    await User.findByIdAndUpdate(userId, {
+      followersCount,
+      followingCount
+    });
+    
+    return { followersCount, followingCount };
+  } catch (err) {
+    console.error('Update counts error:', err);
+  }
+};
+
+// Helper: Create notification
+const createNotification = async (userId, type, data) => {
+  try {
+    const Notification = mongoose.models.Notification;
+    if (!Notification) return;
+    
+    await Notification.create({
+      user: userId,
+      type,
+      ...data
+    });
+  } catch (err) {
+    console.error('Notification error:', err);
+  }
+};
+
+// ==========================================
+// FOLLOW / UNFOLLOW
+// ==========================================
+
+// POST /api/follow/:userId - Follow a user
+router.post('/:userId', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const followerId = req.user.id;
+    
+    // Validate userId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
     }
     
-    // Initialize arrays if needed
-    if (!currentUser.following) currentUser.following = [];
-    if (!targetUser.followers) targetUser.followers = [];
+    // Can't follow yourself
+    if (userId === followerId) {
+      return res.status(400).json({ ok: false, error: 'Cannot follow yourself' });
+    }
+    
+    const Follow = getFollowModel();
+    const User = getUserModel();
+    
+    // Check if target user exists
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
     
     // Check if already following
-    const alreadyFollowing = currentUser.following.some(
-      id => id.toString() === targetUserId
-    );
+    const existingFollow = await Follow.findOne({
+      follower: followerId,
+      following: userId
+    });
     
-    if (alreadyFollowing) {
-      return res.status(400).json({ success: false, error: 'Already following' });
+    if (existingFollow) {
+      if (existingFollow.status === 'active') {
+        return res.status(400).json({ ok: false, error: 'Already following this user' });
+      }
+      // Reactivate if was inactive
+      existingFollow.status = 'active';
+      await existingFollow.save();
+    } else {
+      // Create new follow
+      await Follow.create({
+        follower: followerId,
+        following: userId,
+        status: 'active'
+      });
     }
     
-    // Add to following/followers
-    currentUser.following.push(targetUserId);
-    targetUser.followers.push(currentUserId);
+    // Update counts for both users
+    const [followerCounts, followingCounts] = await Promise.all([
+      updateUserCounts(followerId),
+      updateUserCounts(userId)
+    ]);
     
-    // Update counts
-    currentUser.followingCount = currentUser.following.length;
-    targetUser.followersCount = targetUser.followers.length;
+    // Create notification
+    await createNotification(userId, 'follow', {
+      fromUser: followerId,
+      message: 'started following you'
+    });
     
-    await Promise.all([currentUser.save(), targetUser.save()]);
-    
-    console.log(`👤 ${currentUserId} followed ${targetUserId}`);
-    
-    // Create notification (optional)
-    try {
-      const Notification = mongoose.model('Notification');
-      await Notification.create({
-        recipient: targetUserId,
-        sender: currentUserId,
-        type: 'follow',
-        message: `${currentUser.name || currentUser.username} started following you`,
-        read: false
-      });
-    } catch {}
+    // Get updated follower info
+    const follower = await User.findById(followerId).select('name username avatar');
     
     res.json({
-      success: true,
-      message: `You are now following ${targetUser.name || targetUser.username}!`,
-      following: true,
-      followersCount: targetUser.followersCount
+      ok: true,
+      message: 'Successfully followed user',
+      isFollowing: true,
+      follower,
+      counts: {
+        targetFollowers: followingCounts?.followersCount || 0,
+        yourFollowing: followerCounts?.followingCount || 0
+      }
     });
     
   } catch (error) {
     console.error('Follow error:', error);
-    res.status(500).json({ success: false, error: 'Failed to follow' });
+    
+    // Handle duplicate key error
+    if (error.code === 11000) {
+      return res.status(400).json({ ok: false, error: 'Already following this user' });
+    }
+    
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// ==========================================
 // DELETE /api/follow/:userId - Unfollow a user
-// ==========================================
 router.delete('/:userId', verifyToken, async (req, res) => {
   try {
-    const targetUserId = req.params.userId;
-    const currentUserId = req.user.id;
+    const { userId } = req.params;
+    const followerId = req.user.id;
     
-    const [currentUser, targetUser] = await Promise.all([
-      User.findById(currentUserId),
-      User.findById(targetUserId)
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    
+    const result = await Follow.findOneAndDelete({
+      follower: followerId,
+      following: userId
+    });
+    
+    if (!result) {
+      return res.status(400).json({ ok: false, error: 'Not following this user' });
+    }
+    
+    // Update counts
+    const [followerCounts, followingCounts] = await Promise.all([
+      updateUserCounts(followerId),
+      updateUserCounts(userId)
     ]);
     
-    if (!targetUser) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-    
-    // Remove from following/followers
-    if (currentUser.following) {
-      currentUser.following = currentUser.following.filter(
-        id => id.toString() !== targetUserId
-      );
-      currentUser.followingCount = currentUser.following.length;
-    }
-    
-    if (targetUser.followers) {
-      targetUser.followers = targetUser.followers.filter(
-        id => id.toString() !== currentUserId
-      );
-      targetUser.followersCount = targetUser.followers.length;
-    }
-    
-    await Promise.all([currentUser.save(), targetUser.save()]);
-    
-    console.log(`👤 ${currentUserId} unfollowed ${targetUserId}`);
-    
     res.json({
-      success: true,
-      message: `You unfollowed ${targetUser.name || targetUser.username}`,
-      following: false,
-      followersCount: targetUser.followersCount
+      ok: true,
+      message: 'Successfully unfollowed user',
+      isFollowing: false,
+      counts: {
+        targetFollowers: followingCounts?.followersCount || 0,
+        yourFollowing: followerCounts?.followingCount || 0
+      }
     });
     
   } catch (error) {
     console.error('Unfollow error:', error);
-    res.status(500).json({ success: false, error: 'Failed to unfollow' });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// ==========================================
-// GET /api/follow/check/:userId - Check if following
-// ==========================================
-router.get('/check/:userId', verifyToken, async (req, res) => {
+// POST /api/follow/:userId/toggle - Toggle follow (convenience endpoint)
+router.post('/:userId/toggle', verifyToken, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('following');
+    const { userId } = req.params;
+    const followerId = req.user.id;
     
-    const isFollowing = user?.following?.some(
-      id => id.toString() === req.params.userId
-    ) || false;
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
     
-    res.json({ 
-      success: true, 
-      following: isFollowing,
-      isFollowing: isFollowing  // Alias for compatibility
+    if (userId === followerId) {
+      return res.status(400).json({ ok: false, error: 'Cannot follow yourself' });
+    }
+    
+    const Follow = getFollowModel();
+    const User = getUserModel();
+    
+    // Check if target user exists
+    const targetUser = await User.findById(userId);
+    if (!targetUser) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+    
+    // Check current follow status
+    const existingFollow = await Follow.findOne({
+      follower: followerId,
+      following: userId,
+      status: 'active'
     });
     
-  } catch (error) {
-    console.error('Check follow error:', error);
-    res.status(500).json({ success: false, following: false, isFollowing: false });
-  }
-});
-
-// ==========================================
-// GET /api/follow/followers/:userId - Get user's followers
-// ==========================================
-router.get('/followers/:userId', optionalAuth, async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
+    let isFollowing;
     
-    const user = await User.findById(req.params.userId)
-      .populate({
-        path: 'followers',
-        select: 'name username profilePicture avatar bio followersCount',
-        options: {
-          skip: (parseInt(page) - 1) * parseInt(limit),
-          limit: parseInt(limit)
-        }
-      });
-    
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-    
-    // Check which ones current user follows
-    let currentUserFollowing = [];
-    if (req.user) {
-      const currentUser = await User.findById(req.user.id).select('following');
-      currentUserFollowing = currentUser?.following?.map(id => id.toString()) || [];
-    }
-    
-    const followers = (user.followers || []).map(follower => ({
-      ...follower.toObject(),
-      isFollowedByMe: currentUserFollowing.includes(follower._id.toString())
-    }));
-    
-    res.json({
-      success: true,
-      followers,
-      total: user.followersCount || 0,
-      page: parseInt(page)
-    });
-    
-  } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch followers' });
-  }
-});
-
-// ==========================================
-// GET /api/follow/following/:userId - Get who user is following
-// ==========================================
-router.get('/following/:userId', optionalAuth, async (req, res) => {
-  try {
-    const { page = 1, limit = 20 } = req.query;
-    
-    const user = await User.findById(req.params.userId)
-      .populate({
-        path: 'following',
-        select: 'name username profilePicture avatar bio followersCount',
-        options: {
-          skip: (parseInt(page) - 1) * parseInt(limit),
-          limit: parseInt(limit)
-        }
-      });
-    
-    if (!user) {
-      return res.status(404).json({ success: false, error: 'User not found' });
-    }
-    
-    res.json({
-      success: true,
-      following: user.following || [],
-      total: user.followingCount || 0,
-      page: parseInt(page)
-    });
-    
-  } catch (error) {
-    res.status(500).json({ success: false, error: 'Failed to fetch following' });
-  }
-});
-
-// ==========================================
-// GET /api/follow/suggestions - Get suggested users to follow
-// ==========================================
-router.get('/suggestions', optionalAuth, async (req, res) => {
-  try {
-    const { limit = 5 } = req.query;
-    
-    let excludeIds = [];
-    
-    if (req.user) {
-      const currentUser = await User.findById(req.user.id).select('following');
-      const following = currentUser?.following?.map(id => id.toString()) || [];
-      excludeIds = [...following, req.user.id];
-    }
-    
-    // Convert to ObjectIds safely
-    const excludeObjectIds = excludeIds
-      .filter(id => mongoose.Types.ObjectId.isValid(id))
-      .map(id => new mongoose.Types.ObjectId(id));
-    
-    // Find popular users to suggest
-    let suggestions = [];
-    
-    try {
-      suggestions = await User.aggregate([
-        // Exclude self and already following
-        { $match: excludeObjectIds.length > 0 ? { _id: { $nin: excludeObjectIds } } : {} },
-        
-        // Add score based on followers and activity
-        {
-          $addFields: {
-            score: {
-              $add: [
-                { $ifNull: ['$followersCount', 0] },
-                { $multiply: [{ $ifNull: ['$blogsCount', 0] }, 5] },
-                { $multiply: [{ $ifNull: ['$totalViews', 0] }, 0.01] }
-              ]
-            }
-          }
-        },
-        
-        // Sort by score
-        { $sort: { score: -1, createdAt: -1 } },
-        
-        // Limit
-        { $limit: parseInt(limit) },
-        
-        // Project fields
-        {
-          $project: {
-            name: 1,
-            username: 1,
-            profilePicture: 1,
-            avatar: 1,
-            bio: 1,
-            followersCount: 1,
-            blogsCount: 1,
-            verified: 1,
-            score: 1
-          }
-        }
-      ]);
-    } catch (aggError) {
-      console.log('Aggregate error, falling back to simple query:', aggError.message);
-      // Fallback to simple query
-      suggestions = await User.find(
-        excludeObjectIds.length > 0 ? { _id: { $nin: excludeObjectIds } } : {}
-      )
-      .select('name username profilePicture avatar bio followersCount')
-      .sort({ followersCount: -1, createdAt: -1 })
-      .limit(parseInt(limit))
-      .lean();
-    }
-    
-    // If not enough suggestions, get recent users
-    if (suggestions.length < parseInt(limit)) {
-      const existingIds = [...excludeIds, ...suggestions.map(s => s._id.toString())];
-      const validExistingIds = existingIds
-        .filter(id => mongoose.Types.ObjectId.isValid(id))
-        .map(id => new mongoose.Types.ObjectId(id));
+    if (existingFollow) {
+      // Unfollow
+      await Follow.findByIdAndDelete(existingFollow._id);
+      isFollowing = false;
+    } else {
+      // Follow
+      await Follow.findOneAndUpdate(
+        { follower: followerId, following: userId },
+        { follower: followerId, following: userId, status: 'active' },
+        { upsert: true, new: true }
+      );
+      isFollowing = true;
       
-      const additional = await User.find(
-        validExistingIds.length > 0 ? { _id: { $nin: validExistingIds } } : {}
-      )
-      .select('name username profilePicture avatar bio followersCount')
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit) - suggestions.length)
-      .lean();
-      
-      suggestions.push(...additional);
+      // Create notification
+      await createNotification(userId, 'follow', {
+        fromUser: followerId,
+        message: 'started following you'
+      });
     }
     
-    res.json({
-      success: true,
-      suggestions: suggestions.map(user => ({
-        ...user,
-        isFollowing: false,
-        suggestedReason: user.score > 100 ? 'Popular creator' : 
-                        user.blogsCount > 5 ? 'Active writer' : 
-                        'New to CYBEV'
-      }))
-    });
-    
-  } catch (error) {
-    console.error('Suggestions error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fetch suggestions' });
-  }
-});
-
-// ==========================================
-// GET /api/follow/suggested-creators - Get top creators to follow
-// ==========================================
-router.get('/suggested-creators', optionalAuth, async (req, res) => {
-  try {
-    const { limit = 10 } = req.query;
-    
-    let excludeIds = [];
-    
-    if (req.user) {
-      const currentUser = await User.findById(req.user.id).select('following');
-      excludeIds = [...(currentUser?.following?.map(id => id.toString()) || []), req.user.id];
-    }
-    
-    // Find users with most content/engagement
-    const creators = await Blog.aggregate([
-      { $match: { status: 'published' } },
-      {
-        $group: {
-          _id: '$author',
-          blogsCount: { $sum: 1 },
-          totalViews: { $sum: { $ifNull: ['$views', 0] } },
-          totalLikes: { $sum: { $size: { $ifNull: ['$likes', []] } } }
-        }
-      },
-      {
-        $match: {
-          _id: { $nin: excludeIds.map(id => mongoose.Types.ObjectId(id)) }
-        }
-      },
-      { $sort: { totalViews: -1, blogsCount: -1 } },
-      { $limit: parseInt(limit) },
-      {
-        $lookup: {
-          from: 'users',
-          localField: '_id',
-          foreignField: '_id',
-          as: 'user'
-        }
-      },
-      { $unwind: '$user' },
-      {
-        $project: {
-          _id: '$user._id',
-          name: '$user.name',
-          username: '$user.username',
-          profilePicture: '$user.profilePicture',
-          avatar: '$user.avatar',
-          bio: '$user.bio',
-          followersCount: '$user.followersCount',
-          blogsCount: 1,
-          totalViews: 1,
-          totalLikes: 1
-        }
-      }
+    // Update counts
+    const [followerCounts, followingCounts] = await Promise.all([
+      updateUserCounts(followerId),
+      updateUserCounts(userId)
     ]);
     
     res.json({
-      success: true,
-      creators: creators.map(c => ({
-        ...c,
-        isFollowing: false
-      }))
+      ok: true,
+      isFollowing,
+      message: isFollowing ? 'Now following' : 'Unfollowed',
+      counts: {
+        targetFollowers: followingCounts?.followersCount || 0,
+        yourFollowing: followerCounts?.followingCount || 0
+      }
     });
     
   } catch (error) {
-    console.error('Suggested creators error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fetch creators' });
+    console.error('Toggle follow error:', error);
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-console.log('✅ Follow routes loaded');
+// ==========================================
+// GET FOLLOWERS / FOLLOWING
+// ==========================================
+
+// GET /api/follow/:userId/followers - Get user's followers
+router.get('/:userId/followers', optionalAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { page = 1, limit = 20, search } = req.query;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Build query
+    let query = { following: userId, status: 'active' };
+    
+    // Get followers with pagination
+    const [follows, total] = await Promise.all([
+      Follow.find(query)
+        .populate('follower', 'name username avatar bio followersCount followingCount')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Follow.countDocuments(query)
+    ]);
+    
+    // Extract follower data
+    let followers = follows.map(f => ({
+      ...f.follower,
+      followedAt: f.createdAt
+    }));
+    
+    // Search filter (applied after populate)
+    if (search) {
+      const searchLower = search.toLowerCase();
+      followers = followers.filter(f => 
+        f.name?.toLowerCase().includes(searchLower) ||
+        f.username?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    // Check if current user follows each follower
+    if (req.user) {
+      const followingIds = await Follow.find({
+        follower: req.user.id,
+        following: { $in: followers.map(f => f._id) },
+        status: 'active'
+      }).select('following');
+      
+      const followingSet = new Set(followingIds.map(f => f.following.toString()));
+      
+      followers = followers.map(f => ({
+        ...f,
+        isFollowing: followingSet.has(f._id.toString()),
+        isMe: f._id.toString() === req.user.id
+      }));
+    }
+    
+    res.json({
+      ok: true,
+      followers,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get followers error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// GET /api/follow/:userId/following - Get users that this user follows
+router.get('/:userId/following', optionalAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { page = 1, limit = 20, search } = req.query;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    let query = { follower: userId, status: 'active' };
+    
+    const [follows, total] = await Promise.all([
+      Follow.find(query)
+        .populate('following', 'name username avatar bio followersCount followingCount')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      Follow.countDocuments(query)
+    ]);
+    
+    let following = follows.map(f => ({
+      ...f.following,
+      followedAt: f.createdAt
+    }));
+    
+    // Search filter
+    if (search) {
+      const searchLower = search.toLowerCase();
+      following = following.filter(f => 
+        f.name?.toLowerCase().includes(searchLower) ||
+        f.username?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    // Check if current user follows each user
+    if (req.user) {
+      const followingIds = await Follow.find({
+        follower: req.user.id,
+        following: { $in: following.map(f => f._id) },
+        status: 'active'
+      }).select('following');
+      
+      const followingSet = new Set(followingIds.map(f => f.following.toString()));
+      
+      following = following.map(f => ({
+        ...f,
+        isFollowing: followingSet.has(f._id.toString()),
+        isMe: f._id.toString() === req.user.id
+      }));
+    }
+    
+    res.json({
+      ok: true,
+      following,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get following error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ==========================================
+// STATUS CHECKS
+// ==========================================
+
+// GET /api/follow/:userId/status - Check follow status
+router.get('/:userId/status', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.id;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    
+    // Check both directions
+    const [following, followedBy] = await Promise.all([
+      Follow.findOne({ follower: currentUserId, following: userId, status: 'active' }),
+      Follow.findOne({ follower: userId, following: currentUserId, status: 'active' })
+    ]);
+    
+    res.json({
+      ok: true,
+      isFollowing: !!following,
+      isFollowedBy: !!followedBy,
+      isMutual: !!(following && followedBy)
+    });
+    
+  } catch (error) {
+    console.error('Check status error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// GET /api/follow/:userId/counts - Get follow counts
+router.get('/:userId/counts', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    
+    const [followersCount, followingCount] = await Promise.all([
+      Follow.countDocuments({ following: userId, status: 'active' }),
+      Follow.countDocuments({ follower: userId, status: 'active' })
+    ]);
+    
+    res.json({
+      ok: true,
+      followersCount,
+      followingCount
+    });
+    
+  } catch (error) {
+    console.error('Get counts error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ==========================================
+// MUTUAL / SUGGESTIONS
+// ==========================================
+
+// GET /api/follow/:userId/mutuals - Get mutual follows
+router.get('/:userId/mutuals', optionalAuth, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 20 } = req.query;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    
+    // Get users that userId follows
+    const following = await Follow.find({ follower: userId, status: 'active' }).select('following');
+    const followingIds = following.map(f => f.following);
+    
+    // Find which of those follow back
+    const mutualFollows = await Follow.find({
+      follower: { $in: followingIds },
+      following: userId,
+      status: 'active'
+    })
+      .populate('follower', 'name username avatar bio')
+      .limit(parseInt(limit));
+    
+    const mutuals = mutualFollows.map(f => f.follower);
+    
+    res.json({
+      ok: true,
+      mutuals,
+      count: mutuals.length
+    });
+    
+  } catch (error) {
+    console.error('Get mutuals error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// GET /api/follow/suggestions - Get follow suggestions
+router.get('/suggestions', verifyToken, async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    const userId = req.user.id;
+    
+    const Follow = getFollowModel();
+    const User = getUserModel();
+    
+    // Get users current user follows
+    const following = await Follow.find({ follower: userId, status: 'active' }).select('following');
+    const followingIds = following.map(f => f.following.toString());
+    followingIds.push(userId); // Exclude self
+    
+    // Strategy 1: Friends of friends
+    let suggestions = [];
+    
+    if (followingIds.length > 1) {
+      suggestions = await Follow.aggregate([
+        // Find who my followings follow
+        { $match: { 
+          follower: { $in: following.map(f => f.following) }, 
+          status: 'active' 
+        }},
+        // Exclude users I already follow and myself
+        { $match: { 
+          following: { $nin: followingIds.map(id => new mongoose.Types.ObjectId(id)) } 
+        }},
+        // Group by suggested user
+        { $group: { _id: '$following', mutualCount: { $sum: 1 } } },
+        // Sort by mutual count
+        { $sort: { mutualCount: -1 } },
+        // Limit
+        { $limit: parseInt(limit) },
+        // Lookup user details
+        {
+          $lookup: {
+            from: 'users',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'user'
+          }
+        },
+        { $unwind: '$user' },
+        {
+          $project: {
+            _id: '$user._id',
+            name: '$user.name',
+            username: '$user.username',
+            avatar: '$user.avatar',
+            bio: '$user.bio',
+            followersCount: '$user.followersCount',
+            mutualCount: 1
+          }
+        }
+      ]);
+    }
+    
+    // Strategy 2: Popular users (if not enough suggestions)
+    if (suggestions.length < parseInt(limit)) {
+      const remainingCount = parseInt(limit) - suggestions.length;
+      const suggestionIds = suggestions.map(s => s._id.toString());
+      
+      const popularUsers = await User.find({
+        _id: { $nin: [...followingIds, ...suggestionIds].map(id => new mongoose.Types.ObjectId(id)) },
+        isActive: { $ne: false }
+      })
+        .select('name username avatar bio followersCount')
+        .sort({ followersCount: -1 })
+        .limit(remainingCount);
+      
+      suggestions = [
+        ...suggestions,
+        ...popularUsers.map(u => ({ ...u.toObject(), mutualCount: 0 }))
+      ];
+    }
+    
+    res.json({
+      ok: true,
+      suggestions
+    });
+    
+  } catch (error) {
+    console.error('Get suggestions error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ==========================================
+// REMOVE FOLLOWER
+// ==========================================
+
+// DELETE /api/follow/:userId/remove-follower - Remove someone from your followers
+router.delete('/:userId/remove-follower', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.id;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+    
+    const Follow = getFollowModel();
+    
+    // Remove the follow where userId follows currentUser
+    const result = await Follow.findOneAndDelete({
+      follower: userId,
+      following: currentUserId
+    });
+    
+    if (!result) {
+      return res.status(400).json({ ok: false, error: 'This user is not following you' });
+    }
+    
+    // Update counts
+    await Promise.all([
+      updateUserCounts(userId),
+      updateUserCounts(currentUserId)
+    ]);
+    
+    res.json({
+      ok: true,
+      message: 'Follower removed'
+    });
+    
+  } catch (error) {
+    console.error('Remove follower error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ==========================================
+// BATCH OPERATIONS
+// ==========================================
+
+// POST /api/follow/batch/status - Check follow status for multiple users
+router.post('/batch/status', verifyToken, async (req, res) => {
+  try {
+    const { userIds } = req.body;
+    const currentUserId = req.user.id;
+    
+    if (!Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ ok: false, error: 'userIds array required' });
+    }
+    
+    // Limit batch size
+    const limitedIds = userIds.slice(0, 100);
+    
+    const Follow = getFollowModel();
+    
+    // Get all follows from current user to these users
+    const follows = await Follow.find({
+      follower: currentUserId,
+      following: { $in: limitedIds },
+      status: 'active'
+    }).select('following');
+    
+    const followingSet = new Set(follows.map(f => f.following.toString()));
+    
+    const statuses = {};
+    limitedIds.forEach(id => {
+      statuses[id] = followingSet.has(id);
+    });
+    
+    res.json({
+      ok: true,
+      statuses
+    });
+    
+  } catch (error) {
+    console.error('Batch status error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
 
 module.exports = router;
