@@ -282,7 +282,8 @@ const routes = [
   ['analytics', '/api/analytics', './routes/analytics.routes'],
   ['creator-analytics', '/api/creator-analytics', './routes/creator-analytics.routes'],
   ['group', '/api/groups', './routes/group.routes'],
-  ['marketplace', '/api/marketplace', './routes/marketplace.routes']
+  ['marketplace', '/api/marketplace', './routes/marketplace.routes'],
+  ['church', '/api/church', './routes/church.routes']  // Online Church Management System
 ];
 
 routes.forEach(([name, path, file]) => {
