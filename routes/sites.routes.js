@@ -84,30 +84,55 @@ async function getTemplateImages(template, siteName) {
     saas: ['software technology cloud', 'dashboard analytics', 'tech platform'],
     music: ['music concert stage', 'musician performance', 'recording studio'],
     community: ['community people gathering', 'group collaboration', 'social networking'],
-    church: ['church worship praise', 'christian community', 'church congregation']
+    church: ['church worship congregation', 'christian praise worship', 'church service']
   };
   
-  const terms = searchTerms[template] || searchTerms.business;
-  const nameQuery = siteName.toLowerCase().replace(/[^a-z\s]/g, '');
+  // Detect church/religious content from site name
+  const nameLower = (siteName || '').toLowerCase();
+  const churchKeywords = ['church', 'pastor', 'ministry', 'christ', 'christian', 'jesus', 'worship', 'prayer', 'fellowship', 'bible', 'gospel', 'faith', 'ce ', 'lw ', 'blw'];
+  const isChurch = churchKeywords.some(kw => nameLower.includes(kw));
   
-  console.log(`🎨 Searching images for: ${template} - ${nameQuery}`);
+  // Override template if church-related
+  const effectiveTemplate = isChurch ? 'church' : (template || 'business');
+  const terms = searchTerms[effectiveTemplate] || searchTerms.business;
+  
+  // Build search query
+  let nameQuery = siteName.toLowerCase().replace(/[^a-z\s]/g, '').trim();
+  
+  // For church sites, use church-specific search terms
+  if (isChurch) {
+    nameQuery = 'church worship praise christian';
+    console.log(`⛪ Detected church site: ${siteName}`);
+  }
+  
+  console.log(`🎨 Searching images for: ${effectiveTemplate} - ${nameQuery}`);
   
   // Search for images in parallel
   const [heroImage, feature1, feature2, feature3] = await Promise.all([
     searchImage(`${nameQuery} ${terms[0]}`, 'landscape'),
     searchImage(terms[1], 'square'),
     searchImage(terms[2], 'square'),
-    searchImage(`${nameQuery} professional`, 'square')
+    searchImage(isChurch ? 'church community' : `${nameQuery} professional`, 'square')
   ]);
   
   return {
-    heroImage: heroImage || `https://images.unsplash.com/photo-1557683316-973673baf926?w=1200&h=800&fit=crop`,
+    heroImage: heroImage || (isChurch 
+      ? 'https://images.unsplash.com/photo-1438232992991-995b7058bbb3?w=1200&h=800&fit=crop'
+      : 'https://images.unsplash.com/photo-1557683316-973673baf926?w=1200&h=800&fit=crop'),
     featureImages: [feature1, feature2, feature3].filter(Boolean)
   };
 }
 
 // Generate AI content for hero section
 function generateHeroContent(template, siteName, description) {
+  // Detect church/religious content from site name
+  const nameLower = (siteName || '').toLowerCase();
+  const churchKeywords = ['church', 'pastor', 'ministry', 'christ', 'christian', 'jesus', 'worship', 'prayer', 'fellowship', 'bible', 'gospel', 'faith', 'ce ', 'lw ', 'blw'];
+  const isChurch = churchKeywords.some(kw => nameLower.includes(kw));
+  
+  // Override template if church-related
+  const effectiveTemplate = isChurch ? 'church' : template;
+  
   const content = {
     business: {
       title: siteName || 'Grow Your Business',
@@ -151,12 +176,12 @@ function generateHeroContent(template, siteName, description) {
     },
     church: {
       title: siteName || 'Welcome Home',
-      subtitle: description || 'A place of worship, fellowship, and spiritual growth.',
-      buttonText: 'Visit Us'
+      subtitle: description || 'A place of worship, fellowship, and spiritual transformation. Join us!',
+      buttonText: 'Join Us'
     }
   };
   
-  return content[template] || content.business;
+  return content[effectiveTemplate] || content.business;
 }
 
 // Helper: Get default blocks with AI images
