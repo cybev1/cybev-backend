@@ -66,17 +66,26 @@ const RESERVED_SUBDOMAINS = [
 ];
 
 app.use((req, res, next) => {
-  const host = req.headers.host || req.hostname || '';
-  let subdomain = null;
+  // Check for forwarded host from Cloudflare Worker (priority)
+  const originalHost = req.headers['x-original-host'] || req.headers['x-forwarded-host'] || '';
+  const directHost = req.headers.host || req.hostname || '';
   
-  if (host.includes('cybev.io')) {
+  // Use original host if present (from Cloudflare Worker), otherwise use direct host
+  const host = originalHost || directHost;
+  
+  // Also check for X-Subdomain header set by worker
+  let subdomain = req.headers['x-subdomain'] || null;
+  
+  // If no X-Subdomain header, parse from host
+  if (!subdomain && host.includes('cybev.io')) {
     const parts = host.split('.');
     if (parts.length >= 3 && parts[0] !== 'www' && parts[0] !== 'api') {
       subdomain = parts[0].toLowerCase();
     }
   }
   
-  if (host.includes('localhost')) {
+  // Local development support
+  if (!subdomain && host.includes('localhost')) {
     const parts = host.split('.');
     if (parts.length > 1 && !parts[0].includes('localhost')) {
       subdomain = parts[0].toLowerCase();
@@ -84,7 +93,14 @@ app.use((req, res, next) => {
   }
   
   req.subdomain = subdomain;
+  req.originalHost = host;
   req.isSubdomainRequest = !!subdomain && !RESERVED_SUBDOMAINS.includes(subdomain);
+  
+  // Log subdomain requests for debugging
+  if (req.isSubdomainRequest) {
+    console.log(`🌐 Subdomain request: ${subdomain}.cybev.io → ${req.path}`);
+  }
+  
   next();
 });
 
