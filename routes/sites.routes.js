@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/sites.routes.js
 // Website Builder API - NATIVE MONGODB FIX
-// VERSION: 6.4.5 - Bypasses Mongoose completely
+// VERSION: 6.5.0 - With AI Image Generation
 // ============================================
 
 const express = require('express');
@@ -33,41 +33,166 @@ try {
 // ==========================================
 const getSitesCollection = () => mongoose.connection.db.collection('sites');
 
-// Helper: Get default blocks
-function getTemplateBlocks(template) {
-  const titles = {
-    business: ['Grow Your Business', 'Professional solutions for modern enterprises'],
-    portfolio: ['Creative Works', 'Showcasing design excellence'],
-    blog: ['Stories & Ideas', 'Thoughts that inspire and inform'],
-    shop: ['Shop Now', 'Discover amazing products'],
-    startup: ['Launch Your Vision', 'The future starts here'],
-    saas: ['Supercharge Your Workflow', 'Automation made simple'],
-    music: ['Listen Now', 'New album dropping soon'],
-    community: ['Join Our Community', 'Connect, learn, and grow together']
+// ==========================================
+// AI IMAGE SEARCH - Pexels & Unsplash
+// ==========================================
+async function searchImage(query, orientation = 'landscape') {
+  try {
+    // Try Pexels first
+    if (process.env.PEXELS_API_KEY) {
+      const fetch = (await import('node-fetch')).default;
+      const res = await fetch(
+        `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5&orientation=${orientation}`,
+        { headers: { Authorization: process.env.PEXELS_API_KEY }, timeout: 10000 }
+      );
+      const data = await res.json();
+      if (data.photos?.length) {
+        const photo = data.photos[Math.floor(Math.random() * Math.min(data.photos.length, 3))];
+        return photo.src.large2x || photo.src.large;
+      }
+    }
+    
+    // Try Unsplash
+    if (process.env.UNSPLASH_ACCESS_KEY) {
+      const fetch = (await import('node-fetch')).default;
+      const res = await fetch(
+        `https://api.unsplash.com/search/photos?query=${encodeURIComponent(query)}&per_page=5&orientation=${orientation}`,
+        { headers: { Authorization: `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}` }, timeout: 10000 }
+      );
+      const data = await res.json();
+      if (data.results?.length) {
+        const photo = data.results[Math.floor(Math.random() * Math.min(data.results.length, 3))];
+        return photo.urls.regular;
+      }
+    }
+    
+    return null;
+  } catch (err) {
+    console.log('Image search error:', err.message);
+    return null;
+  }
+}
+
+// Get AI images for template
+async function getTemplateImages(template, siteName) {
+  const searchTerms = {
+    business: ['professional office business', 'business team meeting', 'corporate success'],
+    portfolio: ['creative design workspace', 'art studio creative', 'designer portfolio'],
+    blog: ['writing desk workspace', 'coffee laptop blogging', 'content creation'],
+    shop: ['ecommerce shopping retail', 'online store products', 'shopping bags'],
+    startup: ['startup innovation tech', 'modern workspace startup', 'technology business'],
+    saas: ['software technology cloud', 'dashboard analytics', 'tech platform'],
+    music: ['music concert stage', 'musician performance', 'recording studio'],
+    community: ['community people gathering', 'group collaboration', 'social networking'],
+    church: ['church worship praise', 'christian community', 'church congregation']
   };
   
-  const [title, subtitle] = titles[template] || ['Welcome to My Website', 'Create amazing experiences with CYBEV'];
+  const terms = searchTerms[template] || searchTerms.business;
+  const nameQuery = siteName.toLowerCase().replace(/[^a-z\s]/g, '');
   
-  return [
+  console.log(`🎨 Searching images for: ${template} - ${nameQuery}`);
+  
+  // Search for images in parallel
+  const [heroImage, feature1, feature2, feature3] = await Promise.all([
+    searchImage(`${nameQuery} ${terms[0]}`, 'landscape'),
+    searchImage(terms[1], 'square'),
+    searchImage(terms[2], 'square'),
+    searchImage(`${nameQuery} professional`, 'square')
+  ]);
+  
+  return {
+    heroImage: heroImage || `https://images.unsplash.com/photo-1557683316-973673baf926?w=1200&h=800&fit=crop`,
+    featureImages: [feature1, feature2, feature3].filter(Boolean)
+  };
+}
+
+// Generate AI content for hero section
+function generateHeroContent(template, siteName, description) {
+  const content = {
+    business: {
+      title: siteName || 'Grow Your Business',
+      subtitle: description || 'Professional solutions for modern enterprises. We help you succeed.',
+      buttonText: 'Get Started'
+    },
+    portfolio: {
+      title: siteName || 'Creative Portfolio',
+      subtitle: description || 'Showcasing exceptional design and creative excellence.',
+      buttonText: 'View Work'
+    },
+    blog: {
+      title: siteName || 'Stories & Ideas',
+      subtitle: description || 'Thoughts that inspire, inform, and ignite curiosity.',
+      buttonText: 'Start Reading'
+    },
+    shop: {
+      title: siteName || 'Shop Now',
+      subtitle: description || 'Discover amazing products crafted with care.',
+      buttonText: 'Browse Collection'
+    },
+    startup: {
+      title: siteName || 'Launch Your Vision',
+      subtitle: description || 'The future starts here. Join us on this journey.',
+      buttonText: 'Learn More'
+    },
+    saas: {
+      title: siteName || 'Supercharge Your Workflow',
+      subtitle: description || 'Automation made simple. Start your free trial today.',
+      buttonText: 'Try Free'
+    },
+    music: {
+      title: siteName || 'Listen Now',
+      subtitle: description || 'New album dropping soon. Stay tuned for the latest tracks.',
+      buttonText: 'Stream Now'
+    },
+    community: {
+      title: siteName || 'Join Our Community',
+      subtitle: description || 'Connect, learn, and grow together with like-minded people.',
+      buttonText: 'Join Now'
+    },
+    church: {
+      title: siteName || 'Welcome Home',
+      subtitle: description || 'A place of worship, fellowship, and spiritual growth.',
+      buttonText: 'Visit Us'
+    }
+  };
+  
+  return content[template] || content.business;
+}
+
+// Helper: Get default blocks with AI images
+async function getTemplateBlocks(template, siteName, description) {
+  // Get AI-generated images
+  const images = await getTemplateImages(template, siteName || 'business');
+  const heroContent = generateHeroContent(template, siteName, description);
+  
+  const blocks = [
     {
-      id: 'block-hero',
+      id: `block-${Date.now()}-hero`,
       type: 'hero',
-      content: { title, subtitle, buttonText: 'Get Started', buttonLink: '#', align: 'center' }
+      content: {
+        title: heroContent.title,
+        subtitle: heroContent.subtitle,
+        buttonText: heroContent.buttonText,
+        buttonLink: '#contact',
+        backgroundImage: images.heroImage,
+        align: 'center',
+        overlay: true
+      }
     },
     {
-      id: 'block-features',
+      id: `block-${Date.now()}-features`,
       type: 'features',
       content: {
         title: 'Our Features',
         items: [
-          { icon: 'zap', title: 'Fast', description: 'Lightning fast performance' },
-          { icon: 'shield', title: 'Secure', description: 'Enterprise-grade security' },
-          { icon: 'heart', title: 'Loved', description: 'Trusted by millions' }
+          { icon: 'zap', title: 'Fast', description: 'Lightning fast performance', image: images.featureImages[0] },
+          { icon: 'shield', title: 'Secure', description: 'Enterprise-grade security', image: images.featureImages[1] },
+          { icon: 'heart', title: 'Loved', description: 'Trusted by millions', image: images.featureImages[2] }
         ]
       }
     },
     {
-      id: 'block-cta',
+      id: `block-${Date.now()}-cta`,
       type: 'cta',
       content: {
         title: 'Ready to get started?',
@@ -77,14 +202,26 @@ function getTemplateBlocks(template) {
       }
     },
     {
-      id: 'block-footer',
+      id: `block-${Date.now()}-contact`,
+      type: 'contact',
+      content: {
+        title: 'Get in Touch',
+        email: 'contact@example.com',
+        phone: '+1 234 567 890',
+        address: '123 Main Street'
+      }
+    },
+    {
+      id: `block-${Date.now()}-footer`,
       type: 'footer',
       content: {
-        copyright: '© 2026 Your Company. All rights reserved.',
+        copyright: `© ${new Date().getFullYear()} ${siteName || 'Your Company'}. All rights reserved.`,
         links: [{ label: 'Privacy', url: '/privacy' }, { label: 'Terms', url: '/terms' }]
       }
     }
   ];
+  
+  return blocks;
 }
 
 // ==========================================
@@ -167,14 +304,14 @@ router.get('/subdomain/:subdomain', async (req, res) => {
 });
 
 // ==========================================
-// POST /api/sites - CREATE (NATIVE MONGODB)
+// POST /api/sites - CREATE (WITH AI IMAGES)
 // ==========================================
 router.post('/', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     const { name, description, subdomain, template, theme } = req.body;
     
-    console.log('📝 Creating site:', name, subdomain, template);
+    console.log('📝 Creating site with AI images:', name, subdomain, template);
     
     if (!name || !subdomain) {
       return res.status(400).json({ ok: false, error: 'Name and subdomain required' });
@@ -186,8 +323,10 @@ router.post('/', verifyToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Subdomain already taken' });
     }
     
-    // Get blocks as actual array objects
-    const blocks = getTemplateBlocks(template || 'business');
+    // Get blocks with AI-generated images (async)
+    console.log('🎨 Generating AI images for site...');
+    const blocks = await getTemplateBlocks(template || 'business', name, description);
+    console.log('✅ AI images generated');
     
     // Create document - NATIVE MONGODB INSERT
     const doc = {
@@ -201,6 +340,7 @@ router.post('/', verifyToken, async (req, res) => {
       blocks: blocks,
       pages: [{ id: 'home', name: 'Home', slug: '/', blocks: blocks }],
       views: 0,
+      aiGenerated: true,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -209,7 +349,7 @@ router.post('/', verifyToken, async (req, res) => {
     
     if (result.insertedId) {
       const site = await getSitesCollection().findOne({ _id: result.insertedId });
-      console.log('✅ Site created:', site.subdomain);
+      console.log('✅ Site created with AI images:', site.subdomain);
       res.status(201).json({ ok: true, site });
     } else {
       throw new Error('Insert failed');
