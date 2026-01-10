@@ -648,14 +648,47 @@ router.get('/check-stream/:muxStreamId', verifyToken, async (req, res) => {
 // ==========================================
 
 // ==========================================
+// GET /api/live/site/:subdomain - Get live stream for a site
+// ==========================================
+router.get('/site/:subdomain', optionalAuth, async (req, res) => {
+  try {
+    const { subdomain } = req.params;
+    
+    // Find active stream for this site subdomain
+    const stream = await LiveStream.findOne({
+      $or: [
+        { siteSubdomain: subdomain },
+        { 'metadata.subdomain': subdomain }
+      ],
+      status: 'live',
+      isActive: true
+    }).populate('streamer', 'name username profilePicture');
+    
+    if (!stream) {
+      return res.json({ success: true, stream: null, message: 'No active stream for this site' });
+    }
+    
+    res.json({ success: true, stream });
+  } catch (error) {
+    console.error('Get site stream error:', error);
+    res.json({ success: true, stream: null });
+  }
+});
+
+// ==========================================
 // GET /api/live/:id - Get single stream
 // ==========================================
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
     // Skip if id matches known routes (safety check)
-    const knownRoutes = ['streams', 'active', 'stream-key', 'my-stream', 'cleanup', 'debug', 'fix-status'];
+    const knownRoutes = ['streams', 'active', 'stream-key', 'my-stream', 'cleanup', 'debug', 'fix-status', 'site'];
     if (knownRoutes.includes(req.params.id)) {
       return res.status(404).json({ success: false, error: 'Invalid route' });
+    }
+    
+    // Validate ObjectId format to prevent CastError
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
     }
     
     const stream = await LiveStream.findById(req.params.id)
