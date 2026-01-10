@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.4.2 - January 9, 2026 Update
-// FIXED: /api/sites/my, /api/blogs/my, /api/follow/check route order
+// VERSION: 6.5.0 - Wildcard Subdomain Support
+// NEW: Subdomain middleware + Site renderer
 // ============================================
 
 const express = require('express');
@@ -16,14 +16,15 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-// Socket.IO setup with expanded CORS
+// Socket.IO setup with expanded CORS (including wildcard subdomains)
 const io = socketIO(server, {
   cors: {
     origin: [
       process.env.FRONTEND_URL || '*',
       'http://localhost:3000',
       'https://cybev.io',
-      'https://www.cybev.io'
+      'https://www.cybev.io',
+      /\.cybev\.io$/  // Allow ALL subdomains
     ],
     methods: ['GET', 'POST'],
     credentials: true
@@ -32,25 +33,97 @@ const io = socketIO(server, {
 
 // Make io accessible to routes
 app.set('io', io);
-global.io = io; // Also make globally available
+global.io = io;
 
 // ==========================================
-// CORS MIDDLEWARE (Before everything)
+// CORS MIDDLEWARE (Includes wildcard subdomains)
 // ==========================================
 
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || '*',
-    'http://localhost:3000',
-    'https://cybev.io',
-    'https://www.cybev.io'
-  ],
+  origin: function(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (origin.includes('localhost')) return callback(null, true);
+    if (origin.includes('cybev.io')) return callback(null, true);
+    if (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) {
+      return callback(null, true);
+    }
+    return callback(null, true);
+  },
   credentials: true
 }));
 
 // ==========================================
-// CRITICAL: WEBHOOK ROUTES (BEFORE json middleware)
-// Mux webhooks require raw body for signature verification
+// SUBDOMAIN MIDDLEWARE (EARLY - Before routes)
+// ==========================================
+
+const RESERVED_SUBDOMAINS = [
+  'www', 'api', 'app', 'admin', 'mail', 'smtp', 'pop', 'imap',
+  'ftp', 'ssh', 'cdn', 'assets', 'static', 'media', 'img', 'images',
+  'blog', 'shop', 'store', 'help', 'support', 'docs', 'status',
+  'billing', 'dashboard', 'studio', 'dev', 'staging', 'test',
+  'ns1', 'ns2', 'mx', 'webmail', 'cpanel', 'whm', 'autoconfig',
+  'autodiscover', '_dmarc', '_domainkey', 'webdisk', 'cpcalendars', 'cpcontacts'
+];
+
+app.use((req, res, next) => {
+  const host = req.headers.host || req.hostname || '';
+  let subdomain = null;
+  
+  if (host.includes('cybev.io')) {
+    const parts = host.split('.');
+    if (parts.length >= 3 && parts[0] !== 'www' && parts[0] !== 'api') {
+      subdomain = parts[0].toLowerCase();
+    }
+  }
+  
+  if (host.includes('localhost')) {
+    const parts = host.split('.');
+    if (parts.length > 1 && !parts[0].includes('localhost')) {
+      subdomain = parts[0].toLowerCase();
+    }
+  }
+  
+  req.subdomain = subdomain;
+  req.isSubdomainRequest = !!subdomain && !RESERVED_SUBDOMAINS.includes(subdomain);
+  next();
+});
+
+// ==========================================
+// SUBDOMAIN SITE RENDERER (Before API routes)
+// ==========================================
+
+app.use(async (req, res, next) => {
+  if (req.path.startsWith('/api')) return next();
+  if (!req.isSubdomainRequest) return next();
+  if (mongoose.connection.readyState !== 1) return next();
+  
+  try {
+    const sitesCollection = mongoose.connection.db.collection('sites');
+    const site = await sitesCollection.findOne({
+      subdomain: req.subdomain,
+      status: 'published'
+    });
+    
+    if (!site) {
+      return res.status(404).send(generateErrorPage(
+        'Site Not Found',
+        `The site "${req.subdomain}.cybev.io" does not exist or is not published yet.`
+      ));
+    }
+    
+    sitesCollection.updateOne({ _id: site._id }, { $inc: { views: 1 } }).catch(() => {});
+    
+    const html = generateSiteHTML(site);
+    res.setHeader('Content-Type', 'text/html');
+    res.send(html);
+  } catch (err) {
+    console.error('Subdomain render error:', err);
+    next();
+  }
+});
+
+// ==========================================
+// WEBHOOK ROUTES (BEFORE json middleware)
 // ==========================================
 
 app.use('/api/webhooks/mux', express.raw({ type: 'application/json' }));
@@ -58,21 +131,20 @@ app.use('/api/webhooks/mux', express.raw({ type: 'application/json' }));
 try {
   const webhookRoutes = require('./routes/webhooks.routes');
   app.use('/api/webhooks', webhookRoutes);
-  console.log('✅ Webhook routes loaded (Mux recording capture)');
+  console.log('✅ Webhook routes loaded');
 } catch (err) {
   console.log('⚠️ Webhook routes not found:', err.message);
 }
 
 // ==========================================
-// JSON MIDDLEWARE (After webhooks)
+// JSON MIDDLEWARE
 // ==========================================
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// Request logging
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}${req.subdomain ? ` [${req.subdomain}]` : ''}`);
   next();
 });
 
@@ -83,936 +155,149 @@ app.use((req, res, next) => {
 const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || process.env.DATABASE_URL;
 
 if (!MONGODB_URI) {
-  console.error('❌ MONGODB_URI environment variable not set!');
-  console.log('⚠️ Server will start but database operations will fail');
+  console.error('❌ MONGODB_URI not set!');
 } else {
   mongoose.connect(MONGODB_URI)
     .then(() => console.log('✅ MongoDB connected'))
-    .catch(err => {
-      console.error('❌ MongoDB connection error:', err.message);
-      console.log('⚠️ Server will continue without database - some features unavailable');
-    });
+    .catch(err => console.error('❌ MongoDB error:', err.message));
 }
 
-// Handle connection events
 mongoose.connection.on('connected', () => console.log('📦 MongoDB connected'));
 mongoose.connection.on('error', (err) => console.error('📦 MongoDB error:', err.message));
 mongoose.connection.on('disconnected', () => console.log('📦 MongoDB disconnected'));
 
 // ==========================================
-// MUX CONFIGURATION CHECK
+// CONFIGURATION CHECKS
 // ==========================================
 
 const MUX_CONFIGURED = !!(process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET);
 const MUX_WEBHOOK_CONFIGURED = !!process.env.MUX_WEBHOOK_SECRET;
-
-if (MUX_CONFIGURED) {
-  console.log('🎬 Mux Live Streaming: Configured');
-} else {
-  console.log('⚠️ Mux Live Streaming: Not configured (set MUX_TOKEN_ID and MUX_TOKEN_SECRET)');
-}
-
-if (MUX_WEBHOOK_CONFIGURED) {
-  console.log('📼 Mux Recording Capture: Configured');
-} else {
-  console.log('⚠️ Mux Recording Capture: Not configured (set MUX_WEBHOOK_SECRET)');
-}
-
-// ==========================================
-// OAUTH CONFIGURATION CHECK
-// ==========================================
-
 const GOOGLE_OAUTH_CONFIGURED = !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
 const FACEBOOK_OAUTH_CONFIGURED = !!(process.env.FACEBOOK_APP_ID && process.env.FACEBOOK_APP_SECRET);
 const APPLE_OAUTH_CONFIGURED = !!(process.env.APPLE_CLIENT_ID && process.env.APPLE_KEY_ID);
-
-if (GOOGLE_OAUTH_CONFIGURED) {
-  console.log('🔐 Google OAuth: Configured');
-} else {
-  console.log('⚠️ Google OAuth: Not configured (set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)');
-}
-
-if (FACEBOOK_OAUTH_CONFIGURED) {
-  console.log('🔐 Facebook OAuth: Configured');
-} else {
-  console.log('⚠️ Facebook OAuth: Not configured (set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET)');
-}
-
-if (APPLE_OAUTH_CONFIGURED) {
-  console.log('🔐 Apple OAuth: Configured');
-} else {
-  console.log('⚠️ Apple OAuth: Not configured (optional)');
-}
-
-// ==========================================
-// EMAIL CONFIGURATION CHECK
-// ==========================================
-
 const BREVO_CONFIGURED = !!process.env.BREVO_API_KEY;
 const EMAIL_PROVIDER = BREVO_CONFIGURED ? 'brevo' : 'console';
 const EMAIL_SENDER = process.env.BREVO_SENDER_EMAIL || 'noreply@cybev.io';
-
-if (BREVO_CONFIGURED) {
-  console.log(`📧 Email Service: Configured (Brevo → ${EMAIL_SENDER})`);
-} else {
-  console.log('⚠️ Email Service: Console mode (set BREVO_API_KEY for real emails)');
-}
-
-// ==========================================
-// PAYMENT CONFIGURATION CHECK
-// ==========================================
-
 const FLUTTERWAVE_CONFIGURED = !!process.env.FLUTTERWAVE_SECRET_KEY;
 const PAYSTACK_CONFIGURED = !!process.env.PAYSTACK_SECRET_KEY;
 const STRIPE_CONFIGURED = !!process.env.STRIPE_SECRET_KEY;
 const HUBTEL_CONFIGURED = !!(process.env.HUBTEL_CLIENT_ID && process.env.HUBTEL_CLIENT_SECRET);
-
-const configuredPayments = [
-  FLUTTERWAVE_CONFIGURED && 'Flutterwave',
-  PAYSTACK_CONFIGURED && 'Paystack', 
-  STRIPE_CONFIGURED && 'Stripe',
-  HUBTEL_CONFIGURED && 'Hubtel'
-].filter(Boolean);
-
-if (configuredPayments.length > 0) {
-  console.log(`💰 Payment Providers: ${configuredPayments.join(', ')}`);
-} else {
-  console.log('⚠️ Payment Providers: None configured (set FLUTTERWAVE_SECRET_KEY or PAYSTACK_SECRET_KEY)');
-}
-
-// ==========================================
-// DOMAIN API CONFIGURATION CHECK
-// ==========================================
-
 const DOMAIN_API_CONFIGURED = !!(process.env.DOMAIN_API_USERNAME && process.env.DOMAIN_API_PASSWORD);
 
-if (DOMAIN_API_CONFIGURED) {
-  console.log('🌐 Domain API (DomainNameAPI): Configured');
-} else {
-  console.log('⚠️ Domain API: Not configured (set DOMAIN_API_USERNAME and DOMAIN_API_PASSWORD for domain registration)');
-}
-
-// ==========================================
-// ROUTES - AUTHENTICATION
-// ==========================================
-
-try {
-  const authRoutes = require('./routes/auth.routes');
-  app.use('/api/auth', authRoutes);
-  console.log('✅ Auth routes loaded');
-} catch (err) {
-  console.log('⚠️ Auth routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - OAUTH (Google, Facebook, Apple)
-// ==========================================
-
-try {
-  const oauthRoutes = require('./routes/oauth.routes');
-  app.use('/api/auth', oauthRoutes);
-  console.log('✅ OAuth routes loaded (Google, Facebook, Apple)');
-} catch (err) {
-  console.log('⚠️ OAuth routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - USER
-// ==========================================
-
-try {
-  const userRoutes = require('./routes/user.routes');
-  app.use('/api/users', userRoutes);
-  app.use('/api/user', userRoutes); // Also mount at /api/user for preferences
-  console.log('✅ User routes loaded');
-} catch (err) {
-  console.log('⚠️ User routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - USER PROFILE (Cover Image Upload)
-// ==========================================
-
-try {
-  const userProfileRoutes = require('./routes/user-profile.routes');
-  app.use('/api/users', userProfileRoutes);
-  console.log('✅ User profile routes loaded (Cover Image Upload)');
-} catch (err) {
-  console.log('⚠️ User profile routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - NOTIFICATION PREFERENCES
-// ==========================================
-
-try {
-  const notificationPreferencesRoutes = require('./routes/notification.preferences.routes');
-  app.use('/api/notifications', notificationPreferencesRoutes);
-  console.log('✅ Notification preferences routes loaded');
-} catch (err) {
-  console.log('⚠️ Notification preferences routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - BLOGS /my (MUST BE BEFORE blog.routes.js)
-// FIX: /api/blogs/my was being caught by /:id route
-// ==========================================
-
-try {
-  const blogsMyRoutes = require('./routes/blogs-my.routes');
-  app.use('/api/blogs', blogsMyRoutes);
-  console.log('✅ Blogs /my routes loaded (before /:id)');
-} catch (err) {
-  console.log('⚠️ Blogs /my routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - BLOG
-// ==========================================
-
-try {
-  const blogRoutes = require('./routes/blog.routes');
-  app.use('/api/blogs', blogRoutes);
-  console.log('✅ Blog routes loaded');
-} catch (err) {
-  console.log('⚠️ Blog routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - BLOGSITE
-// ==========================================
-
-try {
-  const blogsiteRoutes = require('./routes/blogsite.routes');
-  app.use('/api/blogsites', blogsiteRoutes);
-  console.log('✅ Blogsite routes loaded');
-} catch (err) {
-  console.log('⚠️ Blogsite routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - POSTS
-// ==========================================
-
-try {
-  const postsRoutes = require('./routes/posts.routes');
-  app.use('/api/posts', postsRoutes);
-  console.log('✅ Posts routes loaded');
-} catch (err) {
-  console.log('⚠️ Posts routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - FEED
-// ==========================================
-
-try {
-  const feedRoutes = require('./routes/feed.routes');
-  app.use('/api/feed', feedRoutes);
-  console.log('✅ Feed routes loaded');
-} catch (err) {
-  console.log('⚠️ Feed routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - COMMENTS
-// ==========================================
-
-try {
-  const commentRoutes = require('./routes/comment.routes');
-  app.use('/api/comments', commentRoutes);
-  console.log('✅ Comment routes loaded');
-} catch (err) {
-  console.log('⚠️ Comment routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - BOOKMARKS
-// ==========================================
-
-try {
-  const bookmarkRoutes = require('./routes/bookmark.routes');
-  app.use('/api/bookmarks', bookmarkRoutes);
-  console.log('✅ Bookmark routes loaded');
-} catch (err) {
-  console.log('⚠️ Bookmark routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - NOTIFICATIONS
-// ==========================================
-
-try {
-  const notificationRoutes = require('./routes/notification.routes');
-  app.use('/api/notifications', notificationRoutes);
-  console.log('✅ Notification routes loaded');
-} catch (err) {
-  console.log('⚠️ Notification routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADVANCED NOTIFICATIONS
-// ==========================================
-
-try {
-  const advancedNotificationRoutes = require('./routes/notifications-advanced.routes');
-  app.use('/api/notifications', advancedNotificationRoutes);
-  console.log('✅ Advanced notification routes loaded (Digest, Scheduled, Bulk)');
-} catch (err) {
-  console.log('⚠️ Advanced notification routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - REACTIONS
-// ==========================================
-
-try {
-  const reactionRoutes = require('./routes/reaction.routes');
-  app.use('/api/reactions', reactionRoutes);
-  console.log('✅ Reaction routes loaded');
-} catch (err) {
-  console.log('⚠️ Reaction routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MESSAGES
-// ==========================================
-
-try {
-  const messageRoutes = require('./routes/message.routes');
-  app.use('/api/messages', messageRoutes);
-  console.log('✅ Message routes loaded');
-} catch (err) {
-  console.log('⚠️ Message routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - LIVE STREAMING (Mux + WebRTC)
-// ==========================================
-
-try {
-  const liveRoutes = require('./routes/live.routes');
-  app.use('/api/live', liveRoutes);
-  console.log('✅ Live routes loaded (Mux streaming)');
-} catch (err) {
-  console.log('⚠️ Live routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - WEBRTC STREAMING
-// ==========================================
-
-try {
-  const webrtcRoutes = require('./routes/webrtc.routes');
-  app.use('/api/webrtc', webrtcRoutes);
-  console.log('✅ WebRTC routes loaded');
-} catch (err) {
-  console.log('⚠️ WebRTC routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - STREAM SCHEDULE
-// ==========================================
-
-try {
-  const streamScheduleRoutes = require('./routes/stream-schedule.routes');
-  app.use('/api/streams', streamScheduleRoutes);
-  console.log('✅ Stream schedule routes loaded');
-} catch (err) {
-  console.log('⚠️ Stream schedule routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - NFT
-// ==========================================
-
-try {
-  const nftRoutes = require('./routes/nft.routes');
-  app.use('/api/nft', nftRoutes);
-  console.log('✅ NFT routes loaded');
-} catch (err) {
-  console.log('⚠️ NFT routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MINTING
-// ==========================================
-
-try {
-  const mintRoutes = require('./routes/mint.routes');
-  app.use('/api/mint', mintRoutes);
-  console.log('✅ Mint routes loaded');
-} catch (err) {
-  console.log('⚠️ Mint routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MINT BADGE
-// ==========================================
-
-try {
-  const mintBadgeRoutes = require('./routes/mint-badge.routes');
-  app.use('/api/mint-badge', mintBadgeRoutes);
-  console.log('✅ Mint badge routes loaded');
-} catch (err) {
-  console.log('⚠️ Mint badge routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - STAKING
-// ==========================================
-
-try {
-  const stakingRoutes = require('./routes/staking.routes');
-  app.use('/api/staking', stakingRoutes);
-  console.log('✅ Staking routes loaded');
-} catch (err) {
-  console.log('⚠️ Staking routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADMIN
-// ==========================================
-
-try {
-  const adminRoutes = require('./routes/admin.routes');
-  app.use('/api/admin', adminRoutes);
-  console.log('✅ Admin routes loaded');
-} catch (err) {
-  console.log('⚠️ Admin routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADMIN CHARTS
-// ==========================================
-
-try {
-  const adminChartsRoutes = require('./routes/admin-charts.routes');
-  app.use('/api/admin/charts', adminChartsRoutes);
-  console.log('✅ Admin charts routes loaded');
-} catch (err) {
-  console.log('⚠️ Admin charts routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADMIN SUMMARY
-// ==========================================
-
-try {
-  const adminSummaryRoutes = require('./routes/admin-summary.routes');
-  app.use('/api/admin/summary', adminSummaryRoutes);
-  console.log('✅ Admin summary routes loaded');
-} catch (err) {
-  console.log('⚠️ Admin summary routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ADMIN INSIGHT
-// ==========================================
-
-try {
-  const adminInsightRoutes = require('./routes/admin-insight.routes');
-  app.use('/api/admin/insight', adminInsightRoutes);
-  console.log('✅ Admin insight routes loaded');
-} catch (err) {
-  console.log('⚠️ Admin insight routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - PUSH NOTIFICATIONS
-// ==========================================
-
-try {
-  const pushRoutes = require('./routes/push.routes');
-  app.use('/api/push', pushRoutes);
-  console.log('✅ Push routes loaded');
-} catch (err) {
-  console.log('⚠️ Push routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MOBILE
-// ==========================================
-
-try {
-  const mobileRoutes = require('./routes/mobile.routes');
-  app.use('/api/mobile', mobileRoutes);
-  console.log('✅ Mobile routes loaded');
-} catch (err) {
-  console.log('⚠️ Mobile routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - VLOG
-// ==========================================
-
-try {
-  const vlogRoutes = require('./routes/vlog.routes');
-  app.use('/api/vlogs', vlogRoutes);
-  console.log('✅ Vlog routes loaded');
-} catch (err) {
-  console.log('⚠️ Vlog routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - TIPPING
-// ==========================================
-
-try {
-  const tippingRoutes = require('./routes/tipping.routes');
-  app.use('/api/tips', tippingRoutes);
-  console.log('✅ Tipping routes loaded');
-} catch (err) {
-  console.log('⚠️ Tipping routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SUBSCRIPTION
-// ==========================================
-
-try {
-  const subscriptionRoutes = require('./routes/subscription.routes');
-  app.use('/api/subscriptions', subscriptionRoutes);
-  console.log('✅ Subscription routes loaded');
-} catch (err) {
-  console.log('⚠️ Subscription routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - EARNINGS
-// ==========================================
-
-try {
-  const earningsRoutes = require('./routes/earnings.routes');
-  app.use('/api/earnings', earningsRoutes);
-  console.log('✅ Earnings routes loaded');
-} catch (err) {
-  console.log('⚠️ Earnings routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - CONTENT
-// ==========================================
-
-try {
-  const contentRoutes = require('./routes/content.routes');
-  app.use('/api/content', contentRoutes);
-  console.log('✅ Content routes loaded');
-} catch (err) {
-  console.log('⚠️ Content routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - AI
-// ==========================================
-
-try {
-  const aiRoutes = require('./routes/ai.routes');
-  app.use('/api/ai', aiRoutes);
-  console.log('✅ AI routes loaded');
-} catch (err) {
-  console.log('⚠️ AI routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SHARE
-// ==========================================
-
-try {
-  const shareRoutes = require('./routes/share.routes');
-  app.use('/api/share', shareRoutes);
-  console.log('✅ Share routes loaded');
-} catch (err) {
-  console.log('⚠️ Share routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - REWARD
-// ==========================================
-
-try {
-  const rewardRoutes = require('./routes/reward.routes');
-  app.use('/api/rewards', rewardRoutes);
-  console.log('✅ Reward routes loaded');
-} catch (err) {
-  console.log('⚠️ Reward routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - LEADERBOARD
-// ==========================================
-
-try {
-  const leaderboardRoutes = require('./routes/leaderboard.routes');
-  app.use('/api/leaderboard', leaderboardRoutes);
-  console.log('✅ Leaderboard routes loaded');
-} catch (err) {
-  console.log('⚠️ Leaderboard routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - STORY
-// ==========================================
-
-try {
-  const storyRoutes = require('./routes/story.routes');
-  app.use('/api/stories', storyRoutes);
-  console.log('✅ Story routes loaded');
-} catch (err) {
-  console.log('⚠️ Story routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MONETIZATION
-// ==========================================
-
-try {
-  const monetizationRoutes = require('./routes/monetization.routes');
-  app.use('/api/monetization', monetizationRoutes);
-  console.log('✅ Monetization routes loaded');
-} catch (err) {
-  console.log('⚠️ Monetization routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SITES /my (MUST BE BEFORE sites.routes.js)
-// FIX: /api/sites/my was being caught by /:id route
-// ==========================================
-
-try {
-  const sitesMyRoutes = require('./routes/sites-my.routes');
-  app.use('/api/sites', sitesMyRoutes);
-  console.log('✅ Sites /my routes loaded (before /:id)');
-} catch (err) {
-  console.log('⚠️ Sites /my routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SITES (Website Builder)
-// ==========================================
-
-try {
-  const sitesRoutes = require('./routes/sites.routes');
-  app.use('/api/sites', sitesRoutes);
-  console.log('✅ Sites routes loaded (Website Builder, Domains, Templates)');
-} catch (err) {
-  console.log('⚠️ Sites routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SEO
-// ==========================================
-
-try {
-  const seoRoutes = require('./routes/seo.routes');
-  app.use('/api/seo', seoRoutes);
-  console.log('✅ SEO routes loaded');
-} catch (err) {
-  console.log('⚠️ SEO routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - EVENTS
-// ==========================================
-
-try {
-  const eventsRoutes = require('./routes/events.routes');
-  app.use('/api/events', eventsRoutes);
-  console.log('✅ Events routes loaded');
-} catch (err) {
-  console.log('⚠️ Events routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - GROUP ENHANCED
-// ==========================================
-
-try {
-  const groupEnhancedRoutes = require('./routes/group-enhanced.routes');
-  app.use('/api/groups', groupEnhancedRoutes);
-  console.log('✅ Enhanced group routes loaded (Chat, Polls, Announcements)');
-} catch (err) {
-  console.log('⚠️ Enhanced group routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MODERATION
-// ==========================================
-
-try {
-  const moderationRoutes = require('./routes/moderation.routes');
-  app.use('/api/moderation', moderationRoutes);
-  console.log('✅ Moderation routes loaded');
-} catch (err) {
-  console.log('⚠️ Moderation routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ENHANCED ANALYTICS
-// ==========================================
-
-try {
-  const analyticsEnhancedRoutes = require('./routes/analytics-enhanced.routes');
-  app.use('/api/analytics', analyticsEnhancedRoutes);
-  console.log('✅ Enhanced analytics routes loaded');
-} catch (err) {
-  console.log('⚠️ Enhanced analytics routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - INTERNATIONALIZATION (i18n)
-// ==========================================
-
-try {
-  const i18nRoutes = require('./routes/i18n.routes');
-  app.use('/api/i18n', i18nRoutes);
-  console.log('✅ i18n routes loaded (10 languages)');
-} catch (err) {
-  console.log('⚠️ i18n routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - HASHTAGS
-// ==========================================
-
-try {
-  const hashtagRoutes = require('./routes/hashtag.routes');
-  app.use('/api/hashtags', hashtagRoutes);
-  console.log('✅ Hashtag routes loaded');
-} catch (err) {
-  console.log('⚠️ Hashtag routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - SEARCH
-// ==========================================
-
-try {
-  const searchRoutes = require('./routes/search.routes');
-  app.use('/api/search', searchRoutes);
-  console.log('✅ Search routes loaded');
-} catch (err) {
-  console.log('⚠️ Search routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - PAYMENTS (Flutterwave, Paystack, Hubtel, Stripe)
-// ==========================================
-
-try {
-  const paymentsRoutes = require('./routes/payments.routes');
-  app.use('/api/payments', paymentsRoutes);
-  console.log('✅ Payments routes loaded (Tips, Donations, Tokens)');
-} catch (err) {
-  console.log('⚠️ Payments routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - WALLET
-// ==========================================
-
-try {
-  const walletRoutes = require('./routes/wallet.routes');
-  app.use('/api/wallet', walletRoutes);
-  console.log('✅ Wallet routes loaded');
-} catch (err) {
-  console.log('⚠️ Wallet routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - UPLOAD
-// ==========================================
-
-try {
-  const uploadRoutes = require('./routes/upload.routes');
-  app.use('/api/upload', uploadRoutes);
-  console.log('✅ Upload routes loaded');
-} catch (err) {
-  console.log('⚠️ Upload routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - FOLLOW CHECK (MUST BE BEFORE follow.routes.js)
-// FIX: /api/follow/check/:userId endpoint
-// ==========================================
-
-try {
-  const followCheckRoutes = require('./routes/follow-check.routes');
-  app.use('/api/follow', followCheckRoutes);
-  console.log('✅ Follow /check routes loaded');
-} catch (err) {
-  console.log('⚠️ Follow /check routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - FOLLOW
-// ==========================================
-
-try {
-  const followRoutes = require('./routes/follow.routes');
-  app.use('/api/follow', followRoutes);
-  console.log('✅ Follow routes loaded');
-} catch (err) {
-  console.log('⚠️ Follow routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - DOMAIN (Domain Registration & DNS)
-// ==========================================
-
-try {
-  const domainRoutes = require('./routes/domain.routes');
-  app.use('/api/domain', domainRoutes);
-  app.use('/api/domains', domainRoutes); // Also mount at /api/domains (plural)
-  console.log('✅ Domain routes loaded (Registration, DNS, Transfer via DomainNameAPI)');
-} catch (err) {
-  console.log('⚠️ Domain routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - ANALYTICS
-// ==========================================
-
-try {
-  const analyticsRoutes = require('./routes/analytics.routes');
-  app.use('/api/analytics', analyticsRoutes);
-  console.log('✅ Analytics routes loaded');
-} catch (err) {
-  console.log('⚠️ Analytics routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - CREATOR ANALYTICS
-// ==========================================
-
-try {
-  const creatorAnalyticsRoutes = require('./routes/creator-analytics.routes');
-  app.use('/api/creator-analytics', creatorAnalyticsRoutes);
-  console.log('✅ Creator analytics routes loaded');
-} catch (err) {
-  console.log('⚠️ Creator analytics routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - GROUPS
-// ==========================================
-
-try {
-  const groupRoutes = require('./routes/group.routes');
-  app.use('/api/groups', groupRoutes);
-  console.log('✅ Group routes loaded');
-} catch (err) {
-  console.log('⚠️ Group routes not found:', err.message);
-}
-
-// ==========================================
-// ROUTES - MARKETPLACE
-// ==========================================
-
-try {
-  const marketplaceRoutes = require('./routes/marketplace.routes');
-  app.use('/api/marketplace', marketplaceRoutes);
-  console.log('✅ Marketplace routes loaded');
-} catch (err) {
-  console.log('⚠️ Marketplace routes not found:', err.message);
-}
+const configuredPayments = [
+  FLUTTERWAVE_CONFIGURED && 'flutterwave',
+  PAYSTACK_CONFIGURED && 'paystack',
+  STRIPE_CONFIGURED && 'stripe',
+  HUBTEL_CONFIGURED && 'hubtel'
+].filter(Boolean);
+
+console.log(`🎬 Mux: ${MUX_CONFIGURED ? 'Configured' : 'Not configured'}`);
+console.log(`🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Configured' : 'Not configured'}`);
+console.log(`🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Configured' : 'Not configured'}`);
+console.log(`📧 Email: ${BREVO_CONFIGURED ? 'Brevo' : 'Console'}`);
+console.log(`💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.join(', ') : 'None'}`);
+
+// ==========================================
+// ALL API ROUTES
+// ==========================================
+
+const routes = [
+  ['auth', '/api/auth', './routes/auth.routes'],
+  ['oauth', '/api/auth', './routes/oauth.routes'],
+  ['user', '/api/users', './routes/user.routes'],
+  ['user-alt', '/api/user', './routes/user.routes'],
+  ['user-profile', '/api/users', './routes/user-profile.routes'],
+  ['notification-prefs', '/api/notifications', './routes/notification.preferences.routes'],
+  ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],
+  ['blog', '/api/blogs', './routes/blog.routes'],
+  ['blogsite', '/api/blogsites', './routes/blogsite.routes'],
+  ['posts', '/api/posts', './routes/posts.routes'],
+  ['feed', '/api/feed', './routes/feed.routes'],
+  ['comments', '/api/comments', './routes/comment.routes'],
+  ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
+  ['notifications', '/api/notifications', './routes/notification.routes'],
+  ['notifications-adv', '/api/notifications', './routes/notifications-advanced.routes'],
+  ['reactions', '/api/reactions', './routes/reaction.routes'],
+  ['messages', '/api/messages', './routes/message.routes'],
+  ['live', '/api/live', './routes/live.routes'],
+  ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
+  ['stream-schedule', '/api/streams', './routes/stream-schedule.routes'],
+  ['nft', '/api/nft', './routes/nft.routes'],
+  ['mint', '/api/mint', './routes/mint.routes'],
+  ['mint-badge', '/api/mint-badge', './routes/mint-badge.routes'],
+  ['staking', '/api/staking', './routes/staking.routes'],
+  ['admin', '/api/admin', './routes/admin.routes'],
+  ['admin-charts', '/api/admin/charts', './routes/admin-charts.routes'],
+  ['admin-summary', '/api/admin', './routes/admin-summary.routes'],
+  ['admin-insight', '/api/admin', './routes/admin-insight.routes'],
+  ['push', '/api/push', './routes/push.routes'],
+  ['mobile', '/api/mobile', './routes/mobile.routes'],
+  ['vlog', '/api/vlogs', './routes/vlog.routes'],
+  ['vlog-alt', '/api/vlog', './routes/vlog.routes'],
+  ['tipping', '/api/tips', './routes/tipping.routes'],
+  ['subscription', '/api/subscriptions', './routes/subscription.routes'],
+  ['earnings', '/api/earnings', './routes/earnings.routes'],
+  ['content', '/api/content', './routes/content.routes'],
+  ['ai', '/api/ai', './routes/ai.routes'],
+  ['ai-site', '/api/ai', './routes/ai-site.routes'],
+  ['share', '/api/share', './routes/share.routes'],
+  ['share-alt', '/api/shares', './routes/share.routes'],
+  ['reward', '/api/rewards', './routes/reward.routes'],
+  ['leaderboard', '/api/leaderboard', './routes/leaderboard.routes'],
+  ['story', '/api/stories', './routes/story.routes'],
+  ['monetization', '/api/monetization', './routes/monetization.routes'],
+  ['sites-my', '/api/sites', './routes/sites-my.routes'],
+  ['sites', '/api/sites', './routes/sites.routes'],
+  ['seo', '/api/seo', './routes/seo.routes'],
+  ['events', '/api/events', './routes/events.routes'],
+  ['group-enhanced', '/api/groups', './routes/group-enhanced.routes'],
+  ['moderation', '/api/moderation', './routes/moderation.routes'],
+  ['analytics-enhanced', '/api/analytics', './routes/analytics-enhanced.routes'],
+  ['i18n', '/api/i18n', './routes/i18n.routes'],
+  ['hashtag', '/api/hashtags', './routes/hashtag.routes'],
+  ['search', '/api/search', './routes/search.routes'],
+  ['payments', '/api/payments', './routes/payments.routes'],
+  ['wallet', '/api/wallet', './routes/wallet.routes'],
+  ['upload', '/api/upload', './routes/upload.routes'],
+  ['follow-check', '/api/follow', './routes/follow-check.routes'],
+  ['follow', '/api/follow', './routes/follow.routes'],
+  ['domain', '/api/domain', './routes/domain.routes'],
+  ['domain-alt', '/api/domains', './routes/domain.routes'],
+  ['analytics', '/api/analytics', './routes/analytics.routes'],
+  ['creator-analytics', '/api/creator-analytics', './routes/creator-analytics.routes'],
+  ['group', '/api/groups', './routes/group.routes'],
+  ['marketplace', '/api/marketplace', './routes/marketplace.routes']
+];
+
+routes.forEach(([name, path, file]) => {
+  try {
+    app.use(path, require(file));
+    console.log(`✅ ${name} routes loaded`);
+  } catch (err) {
+    console.log(`⚠️ ${name} routes not found:`, err.message);
+  }
+});
 
 // ==========================================
 // HEALTH CHECK
 // ==========================================
 
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    ok: true, 
-    status: 'healthy',
-    version: '6.4.2',
-    timestamp: new Date().toISOString(),
+  res.json({
+    ok: true,
+    version: '6.5.0',
+    subdomain: req.subdomain || null,
+    wildcardSubdomains: 'enabled',
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-    mux: MUX_CONFIGURED ? 'configured' : 'not configured',
-    muxWebhooks: MUX_WEBHOOK_CONFIGURED ? 'configured' : 'not configured',
-    email: {
-      provider: EMAIL_PROVIDER,
-      configured: BREVO_CONFIGURED,
-      sender: EMAIL_SENDER
-    },
-    payments: {
-      flutterwave: FLUTTERWAVE_CONFIGURED,
-      paystack: PAYSTACK_CONFIGURED,
-      stripe: STRIPE_CONFIGURED,
-      hubtel: HUBTEL_CONFIGURED,
-      configured: configuredPayments
-    },
-    oauth: {
-      google: GOOGLE_OAUTH_CONFIGURED ? 'configured' : 'not configured',
-      facebook: FACEBOOK_OAUTH_CONFIGURED ? 'configured' : 'not configured',
-      apple: APPLE_OAUTH_CONFIGURED ? 'configured' : 'not configured'
-    },
-    domainApi: {
-      configured: DOMAIN_API_CONFIGURED,
-      provider: 'DomainNameAPI.com',
-      features: DOMAIN_API_CONFIGURED ? ['registration', 'dns', 'transfer', 'renewal'] : []
-    },
-    mobile: {
-      version: '1.1.0',
-      pushNotifications: !!(process.env.FIREBASE_SERVICE_ACCOUNT || process.env.FCM_SERVER_KEY),
-      fcmVersion: process.env.FIREBASE_SERVICE_ACCOUNT ? 'v1' : (process.env.FCM_SERVER_KEY ? 'legacy' : 'not configured'),
-      deepLinking: true
-    },
-    seo: {
-      socialPreviews: true,
-      sitemapData: true,
-      openGraph: true,
-      twitterCards: true
-    },
-    features: [
-      'auth', 'oauth-google', 'oauth-facebook', 'users', 'blogs', 'posts', 'feed',
-      'comments', 'bookmarks', 'notifications', 'email-notifications',
-      'reactions', 'messages', 'live-streaming',
-      'nft', 'staking', 'admin', 'wallet', 'upload',
-      'push-notifications', 'monetization', 'analytics', 'creator-analytics',
-      'content', 'ai-blog-generation', 'share-to-timeline',
-      'vlogs', 'follow-system', 'token-wallet', 'groups',
-      'marketplace', 'group-moderation', 'profile-editing',
-      'mux-streaming', 'mux-recording-capture', 'webrtc-streaming',
-      'mobile-camera-streaming', 'dark-mode', 'theme-preferences',
-      'notification-preferences', 'weekly-digest',
-      'tips', 'donations', 'creator-earnings', 'multi-payment-providers',
-      'stream-scheduling', 'live-polls', 'super-chats', 'stream-donations',
-      'mobile-push-tokens', 'mobile-deep-linking', 'mobile-device-management',
-      'admin-dashboard', 'admin-analytics', 'admin-user-management',
-      'admin-content-moderation', 'admin-revenue-tracking', 'admin-system-health',
-      'seo-meta-tags', 'social-previews', 'dynamic-sitemap', 'open-graph', 'twitter-cards',
-      'events', 'event-rsvp', 'event-comments', 'event-attendees',
-      'group-chat', 'group-polls', 'group-announcements', 'group-moderation-enhanced',
-      'content-moderation', 'report-system', 'ai-content-analysis', 'word-filters',
-      'auto-moderation', 'user-trust-score', 'moderation-actions', 'appeal-system',
-      'notification-digest', 'scheduled-notifications', 'bulk-notifications', 
-      'quiet-hours', 'notification-preferences', 'notification-grouping',
-      'enhanced-analytics', 'analytics-export', 'analytics-timeseries', 'audience-demographics',
-      'i18n', 'localization', 'multi-language', 'rtl-support',
-      'hashtags', 'trending-hashtags', 'hashtag-follow', 'global-search', 'search-suggestions',
-      'website-builder', 'ai-site-generation', 'custom-domains', 'subdomains', 'site-templates', 'page-builder',
-      'domain-registration', 'domain-dns-management', 'domain-transfer',
-      'cover-image-upload', 'profile-cover', 'ai-website-builder'
-    ]
+    timestamp: new Date().toISOString()
   });
 });
 
-// Root route
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v6.4.2',
-    documentation: '/api/health',
-    status: 'running',
-    mux: MUX_CONFIGURED ? 'enabled' : 'disabled',
-    webhooks: MUX_WEBHOOK_CONFIGURED ? 'enabled' : 'disabled',
-    email: BREVO_CONFIGURED ? 'enabled' : 'console',
-    domainApi: DOMAIN_API_CONFIGURED ? 'enabled' : 'disabled',
-    oauth: {
-      google: GOOGLE_OAUTH_CONFIGURED,
-      facebook: FACEBOOK_OAUTH_CONFIGURED,
-      apple: APPLE_OAUTH_CONFIGURED
-    }
+    message: 'CYBEV API Server v6.5.0',
+    wildcardSubdomains: 'enabled',
+    subdomain: req.subdomain || null
   });
 });
 
@@ -1021,80 +306,202 @@ app.get('/', (req, res) => {
 // ==========================================
 
 io.on('connection', (socket) => {
-  console.log('🔌 User connected:', socket.id);
-
-  // Join user's personal room
-  socket.on('join', (userId) => {
-    socket.join(`user:${userId}`);
-    console.log(`User ${userId} joined their room`);
-  });
-
-  // Join conversation room
-  socket.on('join-conversation', (conversationId) => {
-    socket.join(`conversation:${conversationId}`);
-  });
-
-  // Leave conversation room
-  socket.on('leave-conversation', (conversationId) => {
-    socket.leave(`conversation:${conversationId}`);
-  });
-
-  // Typing indicator
+  console.log('🔌 Connected:', socket.id);
+  
+  socket.on('join', (userId) => socket.join(`user:${userId}`));
+  socket.on('join-conversation', (id) => socket.join(`conversation:${id}`));
+  socket.on('leave-conversation', (id) => socket.leave(`conversation:${id}`));
   socket.on('typing', ({ conversationId, userId, isTyping }) => {
     socket.to(`conversation:${conversationId}`).emit('user-typing', { userId, isTyping });
   });
-
-  // Join live stream
-  socket.on('join-stream', (streamId) => {
-    socket.join(`stream:${streamId}`);
-    // Notify others in the stream
-    socket.to(`stream:${streamId}`).emit('viewer-joined', { socketId: socket.id });
+  socket.on('join-stream', (id) => {
+    socket.join(`stream:${id}`);
+    socket.to(`stream:${id}`).emit('viewer-joined', { socketId: socket.id });
   });
-
-  // Leave live stream
-  socket.on('leave-stream', (streamId) => {
-    socket.leave(`stream:${streamId}`);
-    socket.to(`stream:${streamId}`).emit('viewer-left', { socketId: socket.id });
+  socket.on('leave-stream', (id) => {
+    socket.leave(`stream:${id}`);
+    socket.to(`stream:${id}`).emit('viewer-left', { socketId: socket.id });
   });
-
-  // Stream chat message
-  socket.on('stream-chat', ({ streamId, message }) => {
-    io.to(`stream:${streamId}`).emit('chat-message', message);
-  });
-
-  // Stream reaction
-  socket.on('stream-reaction', ({ streamId, emoji, userId }) => {
-    io.to(`stream:${streamId}`).emit('reaction', { emoji, userId });
-  });
-
-  // Disconnect
-  socket.on('disconnect', () => {
-    console.log('🔌 User disconnected:', socket.id);
-  });
+  socket.on('stream-chat', ({ streamId, message }) => io.to(`stream:${streamId}`).emit('chat-message', message));
+  socket.on('stream-reaction', ({ streamId, emoji, userId }) => io.to(`stream:${streamId}`).emit('reaction', { emoji, userId }));
+  socket.on('disconnect', () => console.log('🔌 Disconnected:', socket.id));
 });
 
 // ==========================================
 // ERROR HANDLING
 // ==========================================
 
-// 404 handler
 app.use((req, res) => {
-  res.status(404).json({ 
-    ok: false, 
-    error: 'Endpoint not found',
-    path: req.path 
-  });
+  res.status(404).json({ ok: false, error: 'Not found', path: req.path });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
-  console.error('Server error:', err);
-  res.status(500).json({ 
-    ok: false, 
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? err.message : undefined
-  });
+  console.error('Error:', err);
+  res.status(500).json({ ok: false, error: 'Server error' });
 });
+
+// ==========================================
+// SITE HTML GENERATOR
+// ==========================================
+
+function generateSiteHTML(site) {
+  const theme = site.theme || {};
+  const primary = theme.colors?.primary || '#7c3aed';
+  const secondary = theme.colors?.secondary || '#ec4899';
+  const fontH = theme.fonts?.heading || 'Inter';
+  const fontB = theme.fonts?.body || 'Inter';
+  const blocks = site.blocks || [];
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${esc(site.ogTitle || site.name)}</title>
+  <meta name="description" content="${esc(site.description || '')}">
+  <meta property="og:title" content="${esc(site.ogTitle || site.name)}">
+  <meta property="og:description" content="${esc(site.description || '')}">
+  ${site.ogImage ? `<meta property="og:image" content="${esc(site.ogImage)}">` : ''}
+  <meta property="og:url" content="https://${site.subdomain}.cybev.io">
+  ${site.favicon ? `<link rel="icon" href="${esc(site.favicon)}">` : ''}
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=${fontH.replace(/ /g, '+')}:wght@400;600;700&family=${fontB.replace(/ /g, '+')}:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root{--p:${primary};--s:${secondary}}
+    body{font-family:'${fontB}',sans-serif}
+    h1,h2,h3,h4,h5,h6{font-family:'${fontH}',sans-serif}
+    .bg-grad{background:linear-gradient(135deg,var(--p),var(--s))}
+    .text-p{color:var(--p)}
+    ${site.customCss || ''}
+  </style>
+  ${site.customHead || ''}
+  ${site.googleAnalytics ? `<script async src="https://www.googletagmanager.com/gtag/js?id=${esc(site.googleAnalytics)}"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','${esc(site.googleAnalytics)}');</script>` : ''}
+</head>
+<body class="antialiased">
+  <nav class="fixed top-0 left-0 right-0 z-50 bg-white/90 backdrop-blur-md border-b">
+    <div class="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+      <a href="/" class="text-xl font-bold">${esc(site.name)}</a>
+      <div class="flex gap-6"><a href="/" class="text-gray-600 hover:text-gray-900">Home</a><a href="#contact" class="text-gray-600 hover:text-gray-900">Contact</a></div>
+    </div>
+  </nav>
+  <main class="pt-16">${blocks.map(b => renderBlock(b, {primary, secondary})).join('')}</main>
+  <div class="py-4 text-center text-gray-400 text-sm border-t">Powered by <a href="https://cybev.io" class="text-p hover:underline">CYBEV</a></div>
+  <script>lucide.createIcons();</script>
+</body>
+</html>`;
+}
+
+function renderBlock(block, t) {
+  const {type, content: c} = block;
+  if (!c) return '';
+  
+  switch(type) {
+    case 'hero':
+      const bg = c.backgroundImage 
+        ? `background:linear-gradient(rgba(0,0,0,0.5),rgba(0,0,0,0.5)),url('${esc(c.backgroundImage)}');background-size:cover;background-position:center`
+        : `background:linear-gradient(135deg,${t.primary},${t.secondary})`;
+      return `<section class="min-h-[70vh] flex items-center justify-center text-white" style="${bg}">
+        <div class="max-w-4xl mx-auto px-6 text-center">
+          <h1 class="text-4xl md:text-6xl font-bold mb-6">${esc(c.title)}</h1>
+          <p class="text-xl md:text-2xl opacity-90 mb-8">${esc(c.subtitle)}</p>
+          ${c.buttonText ? `<a href="${esc(c.buttonLink||'#')}" class="inline-block px-8 py-4 bg-white text-gray-900 rounded-full font-semibold hover:bg-gray-100">${esc(c.buttonText)}</a>` : ''}
+        </div>
+      </section>`;
+      
+    case 'features':
+      return `<section class="py-20 px-6 bg-gray-50">
+        <div class="max-w-6xl mx-auto">
+          ${c.title ? `<h2 class="text-3xl md:text-4xl font-bold text-center mb-12">${esc(c.title)}</h2>` : ''}
+          <div class="grid md:grid-cols-3 gap-8">
+            ${(c.items||[]).map(i => `<div class="bg-white p-8 rounded-2xl shadow-sm text-center">
+              <div class="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6" style="background:${t.primary}15">
+                <i data-lucide="${i.icon||'zap'}" class="w-8 h-8" style="color:${t.primary}"></i>
+              </div>
+              <h3 class="text-xl font-bold mb-3">${esc(i.title)}</h3>
+              <p class="text-gray-600">${esc(i.description)}</p>
+            </div>`).join('')}
+          </div>
+        </div>
+      </section>`;
+      
+    case 'cta':
+      return `<section class="py-20 px-6 text-white bg-grad">
+        <div class="max-w-4xl mx-auto text-center">
+          <h2 class="text-3xl md:text-4xl font-bold mb-4">${esc(c.title)}</h2>
+          <p class="text-xl opacity-90 mb-8">${esc(c.description)}</p>
+          ${c.buttonText ? `<a href="${esc(c.buttonLink||'#')}" class="inline-block px-8 py-4 bg-white text-gray-900 rounded-full font-semibold">${esc(c.buttonText)}</a>` : ''}
+        </div>
+      </section>`;
+      
+    case 'testimonials':
+      return `<section class="py-20 px-6">
+        <div class="max-w-6xl mx-auto">
+          ${c.title ? `<h2 class="text-3xl font-bold text-center mb-12">${esc(c.title)}</h2>` : ''}
+          <div class="grid md:grid-cols-3 gap-8">
+            ${(c.items||[]).map(i => `<div class="bg-white p-8 rounded-2xl shadow-sm border">
+              <div class="flex gap-1 mb-4">${'<i data-lucide="star" class="w-5 h-5 fill-yellow-400 text-yellow-400"></i>'.repeat(5)}</div>
+              <p class="text-gray-700 mb-6 italic">"${esc(i.quote)}"</p>
+              <div class="flex items-center gap-4">
+                ${i.avatar ? `<img src="${esc(i.avatar)}" class="w-12 h-12 rounded-full object-cover">` : ''}
+                <div><p class="font-semibold">${esc(i.name)}</p><p class="text-sm text-gray-500">${esc(i.role)}</p></div>
+              </div>
+            </div>`).join('')}
+          </div>
+        </div>
+      </section>`;
+      
+    case 'contact':
+      return `<section id="contact" class="py-20 px-6 bg-gray-900 text-white">
+        <div class="max-w-6xl mx-auto text-center">
+          <h2 class="text-3xl font-bold mb-12">${esc(c.title||'Contact')}</h2>
+          <div class="grid md:grid-cols-3 gap-8">
+            ${c.email ? `<div><div class="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-4"><i data-lucide="mail" class="w-6 h-6"></i></div><p>${esc(c.email)}</p></div>` : ''}
+            ${c.phone ? `<div><div class="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-4"><i data-lucide="phone" class="w-6 h-6"></i></div><p>${esc(c.phone)}</p></div>` : ''}
+            ${c.address ? `<div><div class="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center mx-auto mb-4"><i data-lucide="map-pin" class="w-6 h-6"></i></div><p>${esc(c.address)}</p></div>` : ''}
+          </div>
+        </div>
+      </section>`;
+      
+    case 'footer':
+      return `<footer class="py-12 px-6 bg-gray-900 text-white">
+        <div class="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+          <div class="font-bold">${esc(c.logo||'')}</div>
+          <div class="flex gap-6">${(c.links||[]).map(l => `<a href="${esc(l.url||'#')}" class="text-gray-400 hover:text-white">${esc(l.label)}</a>`).join('')}</div>
+        </div>
+        <div class="mt-8 text-center text-gray-500">${esc(c.copyright||'')}</div>
+      </footer>`;
+      
+    case 'stats':
+      return `<section class="py-16 px-6 text-white bg-grad">
+        <div class="max-w-6xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
+          ${(c.items||[]).map(i => `<div><div class="text-4xl font-bold mb-2">${esc(i.value)}</div><div class="opacity-80">${esc(i.label)}</div></div>`).join('')}
+        </div>
+      </section>`;
+      
+    case 'gallery':
+      return `<section class="py-20 px-6">
+        <div class="max-w-6xl mx-auto">
+          ${c.title ? `<h2 class="text-3xl font-bold text-center mb-12">${esc(c.title)}</h2>` : ''}
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            ${(c.images||[]).map((img,i) => `<div class="aspect-square rounded-xl overflow-hidden"><img src="${esc(img.src||img)}" alt="Gallery ${i+1}" class="w-full h-full object-cover hover:scale-110 transition duration-500"></div>`).join('')}
+          </div>
+        </div>
+      </section>`;
+      
+    default: return '';
+  }
+}
+
+function generateErrorPage(title, msg) {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${title}</title><script src="https://cdn.tailwindcss.com"></script></head><body class="min-h-screen flex items-center justify-center bg-gray-50"><div class="text-center px-6"><h1 class="text-4xl font-bold mb-4">${title}</h1><p class="text-gray-600 mb-8">${msg}</p><a href="https://cybev.io" class="px-6 py-3 bg-purple-600 text-white rounded-lg font-semibold">Go to CYBEV</a></div></body></html>`;
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
 
 // ==========================================
 // START SERVER
@@ -1104,34 +511,21 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v6.4.2           ║
+║         CYBEV API Server v6.5.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
 ║  🔌 Socket.IO: Enabled                    ║
-║  🤖 AI Blog: Enabled                      ║
-║  📤 Share to Timeline: Enabled            ║
+║  🌐 Wildcard Subdomains: ENABLED          ║
 ║  🎬 Mux Streaming: ${MUX_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  📼 Mux Recording: ${MUX_WEBHOOK_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
-║  📱 Mobile App API: Enabled               ║
 ║  🔐 Google OAuth: ${GOOGLE_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  🔐 Facebook OAuth: ${FACEBOOK_OAUTH_CONFIGURED ? 'Enabled' : 'Disabled'}            ║
 ║  📧 Email (Brevo): ${BREVO_CONFIGURED ? 'Enabled' : 'Disabled'}              ║
 ║  💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.length + ' providers' : 'Disabled'}             ║
 ║  🌐 Domain API: ${DOMAIN_API_CONFIGURED ? 'Enabled' : 'Disabled'}               ║
-║  📊 Admin Dashboard: Enabled              ║
-║  👥 User Management: Enabled              ║
-║  🔍 SEO & Social: Enabled                 ║
-║  📅 Events System: Enabled                ║
-║  💬 Group Chat: Enabled                   ║
-║  🛡️ Content Moderation: Enabled           ║
-║  📬 Advanced Notifications: Enabled       ║
-║  📈 Enhanced Analytics: Enabled           ║
-║  🌍 Internationalization: Enabled         ║
-║  #️⃣ Hashtags & Search: Enabled            ║
-║  🌐 Website Builder: Enabled              ║
-║  🖼️ Profile Cover Upload: Enabled         ║
-║  🌙 Dark Mode: Enabled                    ║
+║  📊 Website Builder: Enabled              ║
+║  🤖 AI Site Generation: Enabled           ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
