@@ -1,7 +1,7 @@
 {
   "name": "cybev-backend",
-  "version": "6.2.0",
-  "description": "CYBEV Backend API - Complete Social Platform with Website Builder, OAuth, Monetization, Mobile, Admin, SEO, Events, Moderation, Notifications, Analytics, i18n, Hashtags & Search",
+  "version": "6.8.0",
+  "description": "CYBEV Backend API - Complete Platform with Meet, Social Tools, Campaigns, AI Generation",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -40,23 +40,12 @@
   },
   "keywords": [
     "cybev",
-    "blogging",
-    "social",
-    "streaming",
-    "oauth",
-    "monetization",
-    "payments",
-    "seo",
-    "events",
-    "groups",
-    "moderation",
-    "notifications",
-    "analytics",
-    "i18n",
-    "hashtags",
-    "search",
-    "website-builder",
-    "api"
+    "meet",
+    "social-tools",
+    "campaigns",
+    "ai-generation",
+    "video-conferencing",
+    "facebook-automation"
   ],
   "author": "CYBEV",
   "license": "MIT"
