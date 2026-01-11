@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.6.0 - Forms Builder Feature
-// NEW: Google Forms-like feature for campaigns
+// VERSION: 6.7.0 - Fixed User Routes & Vlogs
+// FIXES: /api/users/username/:username endpoint
 // ============================================
 
 const express = require('express');
@@ -214,7 +214,200 @@ console.log(`📧 Email: ${BREVO_CONFIGURED ? 'Brevo' : 'Console'}`);
 console.log(`💰 Payments: ${configuredPayments.length > 0 ? configuredPayments.join(', ') : 'None'}`);
 
 // ==========================================
-// ALL API ROUTES
+// INLINE USER ROUTES FIX - /api/users/username/:username
+// This adds the missing endpoint before loading file routes
+// ==========================================
+
+const jwt = require('jsonwebtoken');
+
+// Auth middleware for inline routes
+const inlineAuth = (req, res, next) => {
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!token) return res.status(401).json({ ok: false, error: 'No token' });
+  try {
+    req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+    next();
+  } catch { return res.status(401).json({ ok: false, error: 'Invalid token' }); }
+};
+
+// GET /api/users/me - Current authenticated user
+app.get('/api/users/me', inlineAuth, async (req, res) => {
+  try {
+    const User = mongoose.models.User || require('./models/user.model');
+    const user = await User.findById(req.user.id).select('-password -__v');
+    
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    // Get counts
+    const Post = mongoose.models.Post;
+    let postsCount = 0;
+    if (Post) {
+      postsCount = await Post.countDocuments({ author: user._id });
+    }
+
+    const Follow = mongoose.models.Follow;
+    let followersCount = user.followersCount || user.followers?.length || 0;
+    let followingCount = user.followingCount || user.following?.length || 0;
+    
+    if (Follow) {
+      [followersCount, followingCount] = await Promise.all([
+        Follow.countDocuments({ following: user._id, status: 'active' }),
+        Follow.countDocuments({ follower: user._id, status: 'active' })
+      ]);
+    }
+
+    res.json({
+      ok: true,
+      user: {
+        ...user.toObject(),
+        postsCount,
+        followersCount,
+        followingCount
+      }
+    });
+  } catch (err) {
+    console.error('Error in /api/users/me:', err);
+    res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
+// GET /api/users/suggested - Suggested users to follow
+app.get('/api/users/suggested', inlineAuth, async (req, res) => {
+  try {
+    const User = mongoose.models.User || require('./models/user.model');
+    const limit = parseInt(req.query.limit) || 5;
+    const currentUserId = req.user?.id;
+
+    let followingIds = [];
+    if (currentUserId) {
+      const currentUser = await User.findById(currentUserId).select('following');
+      followingIds = currentUser?.following?.map(id => id.toString()) || [];
+    }
+
+    const query = {
+      _id: { $nin: [...followingIds, currentUserId].filter(Boolean) },
+      status: { $ne: 'deleted' }
+    };
+
+    const users = await User.find(query)
+      .select('username name avatar bio isVerified followers followersCount')
+      .sort({ followersCount: -1, createdAt: -1 })
+      .limit(limit);
+
+    const formattedUsers = users.map(user => ({
+      _id: user._id,
+      username: user.username,
+      name: user.name,
+      avatar: user.avatar,
+      bio: user.bio,
+      isVerified: user.isVerified || false,
+      followers: user.followersCount || user.followers?.length || 0
+    }));
+
+    res.json({ ok: true, users: formattedUsers });
+  } catch (err) {
+    console.error('Error in /api/users/suggested:', err);
+    res.status(500).json({ ok: false, error: 'Server error', users: [] });
+  }
+});
+
+// GET /api/users/username/:username - Get user by username (THE FIX!)
+app.get('/api/users/username/:username', async (req, res) => {
+  try {
+    const User = mongoose.models.User || require('./models/user.model');
+    const { username } = req.params;
+
+    console.log(`👤 Looking up user: ${username}`);
+
+    const user = await User.findOne({ 
+      username: { $regex: new RegExp(`^${username}$`, 'i') }
+    }).select('-password -__v');
+
+    if (!user) {
+      console.log(`❌ User not found: ${username}`);
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    // Get post count
+    const Post = mongoose.models.Post;
+    let postsCount = 0;
+    if (Post) {
+      postsCount = await Post.countDocuments({ author: user._id });
+    }
+
+    // Get follow counts
+    const Follow = mongoose.models.Follow;
+    let followersCount = user.followersCount || user.followers?.length || 0;
+    let followingCount = user.followingCount || user.following?.length || 0;
+    
+    if (Follow) {
+      [followersCount, followingCount] = await Promise.all([
+        Follow.countDocuments({ following: user._id, status: 'active' }),
+        Follow.countDocuments({ follower: user._id, status: 'active' })
+      ]);
+    }
+
+    console.log(`✅ Found user: ${username}`);
+    res.json({
+      ok: true,
+      user: {
+        ...user.toObject(),
+        postsCount,
+        followersCount,
+        followingCount
+      }
+    });
+  } catch (err) {
+    console.error('Error in /api/users/username/:username:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
+// INLINE VLOGS FIX - /api/vlogs/my
+// ==========================================
+
+// GET /api/vlogs/my - Get current user's vlogs
+app.get('/api/vlogs/my', inlineAuth, async (req, res) => {
+  try {
+    // Get or create Vlog model
+    let Vlog;
+    if (mongoose.models.Vlog) {
+      Vlog = mongoose.models.Vlog;
+    } else {
+      const vlogSchema = new mongoose.Schema({
+        title: { type: String, required: true },
+        description: String,
+        videoUrl: String,
+        thumbnail: String,
+        duration: String,
+        author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+        views: { type: Number, default: 0 },
+        likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+        tags: [String],
+        status: { type: String, enum: ['draft', 'published', 'unlisted'], default: 'published' },
+        createdAt: { type: Date, default: Date.now },
+        updatedAt: { type: Date, default: Date.now }
+      });
+      Vlog = mongoose.model('Vlog', vlogSchema);
+    }
+
+    const vlogs = await Vlog.find({ author: req.user.id })
+      .sort({ createdAt: -1 })
+      .populate('author', 'name username avatar')
+      .lean();
+
+    res.json({ ok: true, vlogs: vlogs || [], count: vlogs.length });
+  } catch (err) {
+    console.error('Error in /api/vlogs/my:', err);
+    res.status(500).json({ ok: false, error: err.message, vlogs: [] });
+  }
+});
+
+// ==========================================
+// ALL API ROUTES (File-based)
 // ==========================================
 
 const routes = [
@@ -307,10 +500,11 @@ routes.forEach(([name, path, file]) => {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: '6.6.0',
+    version: '6.7.0',
     subdomain: req.subdomain || null,
     wildcardSubdomains: 'enabled',
     formsBuilder: 'enabled',
+    userRouteFix: 'enabled',
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
   });
@@ -318,7 +512,7 @@ app.get('/api/health', (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v6.6.0',
+    message: 'CYBEV API Server v6.7.0',
     wildcardSubdomains: 'enabled',
     formsBuilder: 'enabled',
     subdomain: req.subdomain || null
@@ -535,7 +729,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v6.6.0           ║
+║         CYBEV API Server v6.7.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -551,6 +745,7 @@ server.listen(PORT, () => {
 ║  📊 Website Builder: Enabled              ║
 ║  🤖 AI Site Generation: Enabled           ║
 ║  📝 Forms Builder: Enabled                ║
+║  👤 User Route Fix: ENABLED               ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
