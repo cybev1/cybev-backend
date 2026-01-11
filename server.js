@@ -283,7 +283,11 @@ const routes = [
   ['creator-analytics', '/api/creator-analytics', './routes/creator-analytics.routes'],
   ['group', '/api/groups', './routes/group.routes'],
   ['marketplace', '/api/marketplace', './routes/marketplace.routes'],
-  ['church', '/api/church', './routes/church.routes']  // Online Church Management System
+  ['church', '/api/church', './routes/church.routes'],  // Online Church Management System
+  ['prayer', '/api/church/prayers', './routes/prayer.routes'],  // Prayer Wall
+  ['giving', '/api/church/giving', './routes/giving.routes'],  // Online Giving
+  ['cell-reports', '/api/church/cell-reports', './routes/cell-reports.routes'],  // Cell Reports
+  ['whatsapp', '/api/church/whatsapp', './routes/whatsapp.routes']  // WhatsApp Integration
 ];
 
 routes.forEach(([name, path, file]) => {
