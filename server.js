@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.5.0 - Wildcard Subdomain Support
-// NEW: Subdomain middleware + Site renderer
+// VERSION: 6.6.0 - Forms Builder Feature
+// NEW: Google Forms-like feature for campaigns
 // ============================================
 
 const express = require('express');
@@ -287,7 +287,8 @@ const routes = [
   ['prayer', '/api/church/prayers', './routes/prayer.routes'],  // Prayer Wall
   ['giving', '/api/church/giving', './routes/giving.routes'],  // Online Giving
   ['cell-reports', '/api/church/cell-reports', './routes/cell-reports.routes'],  // Cell Reports
-  ['whatsapp', '/api/church/whatsapp', './routes/whatsapp.routes']  // WhatsApp Integration
+  ['whatsapp', '/api/church/whatsapp', './routes/whatsapp.routes'],  // WhatsApp Integration
+  ['forms', '/api/forms', './routes/forms.routes']  // Google Forms-like Feature
 ];
 
 routes.forEach(([name, path, file]) => {
@@ -306,9 +307,10 @@ routes.forEach(([name, path, file]) => {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: '6.5.0',
+    version: '6.6.0',
     subdomain: req.subdomain || null,
     wildcardSubdomains: 'enabled',
+    formsBuilder: 'enabled',
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString()
   });
@@ -316,8 +318,9 @@ app.get('/api/health', (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API Server v6.5.0',
+    message: 'CYBEV API Server v6.6.0',
     wildcardSubdomains: 'enabled',
+    formsBuilder: 'enabled',
     subdomain: req.subdomain || null
   });
 });
@@ -532,7 +535,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║         CYBEV API Server v6.5.0           ║
+║         CYBEV API Server v6.6.0           ║
 ╠═══════════════════════════════════════════╣
 ║  🚀 Server running on port ${PORT}           ║
 ║  📦 MongoDB: ${MONGODB_URI ? 'Configured' : 'Not configured'}            ║
@@ -547,6 +550,7 @@ server.listen(PORT, () => {
 ║  🌐 Domain API: ${DOMAIN_API_CONFIGURED ? 'Enabled' : 'Disabled'}               ║
 ║  📊 Website Builder: Enabled              ║
 ║  🤖 AI Site Generation: Enabled           ║
+║  📝 Forms Builder: Enabled                ║
 ║  📅 ${new Date().toISOString()}  ║
 ╚═══════════════════════════════════════════╝
   `);
