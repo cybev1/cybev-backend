@@ -1,68 +1,51 @@
-// ============================================
-// FILE: campaigns.routes.js
-// PATH: cybev-backend/routes/campaigns.routes.js
-// PURPOSE: AI Campaign Suite - Email, SMS, WhatsApp Marketing
-// VERSION: 1.0.0
-// GITHUB: https://github.com/cybev1/cybev-backend
-// ============================================
+/**
+ * Campaigns Routes - Email/SMS/WhatsApp/Push Marketing
+ * CYBEV Studio v2.0
+ * GitHub: https://github.com/cybev1/cybev-backend/routes/campaigns.routes.js
+ */
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
-const jwt = require('jsonwebtoken');
 
-const auth = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ ok: false, error: 'No token' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
-    next();
-  } catch { return res.status(401).json({ ok: false, error: 'Invalid token' }); }
-};
+// ============================================
+// SCHEMAS
+// ============================================
 
-// Campaign Schema
 const campaignSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
-  type: { type: String, enum: ['email', 'sms', 'whatsapp', 'push'], default: 'email' },
-  status: { type: String, enum: ['draft', 'scheduled', 'sending', 'active', 'paused', 'completed', 'failed'], default: 'draft' },
-  content: {
-    subject: String,
-    preheader: String,
-    body: String,
-    template: String,
-    ctaText: String,
-    ctaUrl: String,
-    media: [String],
-    aiGenerated: Boolean
-  },
-  audience: {
-    type: { type: String, enum: ['all', 'list', 'segment', 'form'], default: 'all' },
-    listId: mongoose.Schema.Types.ObjectId,
-    estimatedCount: Number
-  },
-  schedule: {
-    sendAt: Date,
-    timezone: { type: String, default: 'UTC' },
-    aiOptimized: Boolean
-  },
+  type: { type: String, enum: ['email', 'sms', 'whatsapp', 'push'], required: true },
+  status: { type: String, enum: ['draft', 'scheduled', 'sending', 'sent', 'paused', 'failed'], default: 'draft' },
+  subject: String,
+  content: { type: String, required: true },
+  htmlContent: String,
+  templateId: String,
+  audienceType: { type: String, enum: ['all', 'list', 'segment'], default: 'all' },
+  contactListId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
+  scheduledAt: Date,
+  sentAt: Date,
   stats: {
+    total: { type: Number, default: 0 },
     sent: { type: Number, default: 0 },
     delivered: { type: Number, default: 0 },
     opened: { type: Number, default: 0 },
     clicked: { type: Number, default: 0 },
     bounced: { type: Number, default: 0 },
-    unsubscribed: { type: Number, default: 0 },
-    revenue: { type: Number, default: 0 }
+    unsubscribed: { type: Number, default: 0 }
+  },
+  settings: {
+    trackOpens: { type: Boolean, default: true },
+    trackClicks: { type: Boolean, default: true },
+    replyTo: String,
+    fromName: String
   },
   createdAt: { type: Date, default: Date.now },
-  sentAt: Date,
-  completedAt: Date
+  updatedAt: { type: Date, default: Date.now }
 });
 
-// Contact List Schema
 const contactListSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
   description: String,
   contactCount: { type: Number, default: 0 },
@@ -70,250 +53,311 @@ const contactListSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now }
 });
 
-// Contact Schema
 const contactSchema = new mongoose.Schema({
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  listId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
   email: String,
   phone: String,
-  name: String,
   firstName: String,
   lastName: String,
-  lists: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' }],
+  fullName: String,
+  company: String,
   tags: [String],
-  customFields: mongoose.Schema.Types.Mixed,
+  customFields: { type: Map, of: String },
   status: { type: String, enum: ['active', 'unsubscribed', 'bounced'], default: 'active' },
-  engagement: {
-    lastOpened: Date,
-    lastClicked: Date,
-    totalOpens: { type: Number, default: 0 },
-    totalClicks: { type: Number, default: 0 }
-  },
+  source: String,
   createdAt: { type: Date, default: Date.now }
 });
-contactSchema.index({ user: 1, email: 1 }, { unique: true, sparse: true });
 
 const Campaign = mongoose.models.Campaign || mongoose.model('Campaign', campaignSchema);
 const ContactList = mongoose.models.ContactList || mongoose.model('ContactList', contactListSchema);
 const Contact = mongoose.models.Contact || mongoose.model('Contact', contactSchema);
 
-// GET /api/campaigns - Get campaigns
-router.get('/', auth, async (req, res) => {
+// ============================================
+// CAMPAIGN ROUTES
+// ============================================
+
+// Get all campaigns
+router.get('/', async (req, res) => {
   try {
-    const { status, type, limit = 20, skip = 0 } = req.query;
-    const query = { user: req.user.id };
-    if (status && status !== 'all') query.status = status;
-    if (type && type !== 'all') query.type = type;
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { status, type, page = 1, limit = 20 } = req.query;
 
-    const campaigns = await Campaign.find(query)
-      .sort({ createdAt: -1 })
-      .skip(parseInt(skip))
-      .limit(parseInt(limit));
+    const query = { userId };
+    if (status) query.status = status;
+    if (type) query.type = type;
+
     const total = await Campaign.countDocuments(query);
+    const campaigns = await Campaign.find(query)
+      .populate('contactListId', 'name contactCount')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
 
-    res.json({ ok: true, campaigns, total });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.json({ 
+      campaigns,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/campaigns/stats - Overall stats
-router.get('/stats', auth, async (req, res) => {
+// Get campaign stats summary
+router.get('/stats', async (req, res) => {
   try {
-    const campaigns = await Campaign.find({ user: req.user.id });
-    const contacts = await Contact.countDocuments({ user: req.user.id });
-    const lists = await ContactList.countDocuments({ user: req.user.id });
+    const userId = req.user?._id || req.headers['x-user-id'];
 
-    const totals = campaigns.reduce((acc, c) => ({
-      sent: acc.sent + (c.stats?.sent || 0),
-      opened: acc.opened + (c.stats?.opened || 0),
-      clicked: acc.clicked + (c.stats?.clicked || 0),
-      revenue: acc.revenue + (c.stats?.revenue || 0)
-    }), { sent: 0, opened: 0, clicked: 0, revenue: 0 });
+    const stats = await Campaign.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+      {
+        $group: {
+          _id: null,
+          totalCampaigns: { $sum: 1 },
+          totalSent: { $sum: '$stats.sent' },
+          totalDelivered: { $sum: '$stats.delivered' },
+          totalOpened: { $sum: '$stats.opened' },
+          totalClicked: { $sum: '$stats.clicked' }
+        }
+      }
+    ]);
+
+    const byType = await Campaign.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: '$type', count: { $sum: 1 } } }
+    ]);
+
+    const byStatus = await Campaign.aggregate([
+      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
+      { $group: { _id: '$status', count: { $sum: 1 } } }
+    ]);
 
     res.json({
-      ok: true,
-      stats: {
-        totalSent: totals.sent,
-        avgOpenRate: totals.sent > 0 ? Math.round((totals.opened / totals.sent) * 100) : 0,
-        avgClickRate: totals.opened > 0 ? Math.round((totals.clicked / totals.opened) * 100) : 0,
-        totalRevenue: totals.revenue,
-        totalContacts: contacts,
-        totalLists: lists
-      }
+      summary: stats[0] || { totalCampaigns: 0, totalSent: 0, totalDelivered: 0, totalOpened: 0, totalClicked: 0 },
+      byType: byType.reduce((acc, t) => ({ ...acc, [t._id]: t.count }), {}),
+      byStatus: byStatus.reduce((acc, s) => ({ ...acc, [s._id]: s.count }), {})
     });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// POST /api/campaigns - Create campaign
-router.post('/', auth, async (req, res) => {
+// Create campaign
+router.post('/', async (req, res) => {
   try {
-    const { name, type, content, audience, schedule } = req.body;
-    
-    let estimatedCount = 0;
-    if (audience?.type === 'all') {
-      estimatedCount = await Contact.countDocuments({ user: req.user.id, status: 'active' });
-    } else if (audience?.listId) {
-      estimatedCount = await Contact.countDocuments({ user: req.user.id, lists: audience.listId, status: 'active' });
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const campaignData = { ...req.body, userId };
+
+    const campaign = new Campaign(campaignData);
+    await campaign.save();
+
+    res.json({ campaign });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get single campaign
+router.get('/:id', async (req, res) => {
+  try {
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { id } = req.params;
+
+    const campaign = await Campaign.findOne({ _id: id, userId })
+      .populate('contactListId');
+
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const campaign = new Campaign({
-      user: req.user.id,
-      name,
-      type: type || 'email',
-      content,
-      audience: { ...audience, estimatedCount },
-      schedule,
-      status: schedule?.sendAt ? 'scheduled' : 'draft'
-    });
-
-    await campaign.save();
-    res.json({ ok: true, campaign });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.json({ campaign });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// GET /api/campaigns/:id - Get campaign
-router.get('/:id', auth, async (req, res) => {
+// Update campaign
+router.put('/:id', async (req, res) => {
   try {
-    const campaign = await Campaign.findOne({ _id: req.params.id, user: req.user.id });
-    if (!campaign) return res.status(404).json({ ok: false, error: 'Campaign not found' });
-    res.json({ ok: true, campaign });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { id } = req.params;
 
-// PUT /api/campaigns/:id - Update campaign
-router.put('/:id', auth, async (req, res) => {
-  try {
-    const campaign = await Campaign.findOne({ _id: req.params.id, user: req.user.id });
-    if (!campaign) return res.status(404).json({ ok: false, error: 'Campaign not found' });
-    if (['sending', 'completed'].includes(campaign.status)) {
-      return res.status(400).json({ ok: false, error: 'Cannot edit campaign in progress' });
+    const campaign = await Campaign.findOneAndUpdate(
+      { _id: id, userId },
+      { ...req.body, updatedAt: new Date() },
+      { new: true }
+    );
+
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    const { name, content, audience, schedule } = req.body;
-    if (name) campaign.name = name;
-    if (content) campaign.content = { ...campaign.content, ...content };
-    if (audience) campaign.audience = { ...campaign.audience, ...audience };
-    if (schedule) campaign.schedule = { ...campaign.schedule, ...schedule };
+    res.json({ campaign });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete campaign
+router.delete('/:id', async (req, res) => {
+  try {
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { id } = req.params;
+
+    await Campaign.deleteOne({ _id: id, userId });
+
+    res.json({ message: 'Campaign deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Send campaign
+router.post('/:id/send', async (req, res) => {
+  try {
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { id } = req.params;
+    const { scheduledAt } = req.body;
+
+    const campaign = await Campaign.findOne({ _id: id, userId });
+
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    if (scheduledAt) {
+      campaign.status = 'scheduled';
+      campaign.scheduledAt = new Date(scheduledAt);
+    } else {
+      campaign.status = 'sending';
+      // TODO: Trigger actual sending via queue/worker
+    }
 
     await campaign.save();
-    res.json({ ok: true, campaign });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+
+    res.json({ campaign, message: scheduledAt ? 'Campaign scheduled' : 'Campaign sending started' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// DELETE /api/campaigns/:id - Delete campaign
-router.delete('/:id', auth, async (req, res) => {
+// ============================================
+// CONTACT LIST ROUTES
+// ============================================
+
+// Get all contact lists
+router.get('/contacts/lists', async (req, res) => {
   try {
-    await Campaign.findOneAndDelete({ _id: req.params.id, user: req.user.id });
-    res.json({ ok: true, message: 'Campaign deleted' });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    const userId = req.user?._id || req.headers['x-user-id'];
+
+    const lists = await ContactList.find({ userId }).sort({ createdAt: -1 });
+
+    res.json({ lists });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-// POST /api/campaigns/:id/send - Send campaign
-router.post('/:id/send', auth, async (req, res) => {
+// Create contact list
+router.post('/contacts/lists', async (req, res) => {
   try {
-    const campaign = await Campaign.findOne({ _id: req.params.id, user: req.user.id });
-    if (!campaign) return res.status(404).json({ ok: false, error: 'Campaign not found' });
-
-    campaign.status = 'sending';
-    campaign.sentAt = new Date();
-    await campaign.save();
-
-    // In production, queue actual sending job
-    res.json({ ok: true, message: 'Campaign sending started', campaign });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// Contact routes
-router.get('/contacts/lists', auth, async (req, res) => {
-  try {
-    const lists = await ContactList.find({ user: req.user.id }).sort({ createdAt: -1 });
-    res.json({ ok: true, lists });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-router.post('/contacts/lists', auth, async (req, res) => {
-  try {
+    const userId = req.user?._id || req.headers['x-user-id'];
     const { name, description, tags } = req.body;
-    const list = new ContactList({ user: req.user.id, name, description, tags });
+
+    const list = new ContactList({ userId, name, description, tags });
     await list.save();
-    res.json({ ok: true, list });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+
+    res.json({ list });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-router.get('/contacts', auth, async (req, res) => {
+// ============================================
+// CONTACT ROUTES
+// ============================================
+
+// Get contacts
+router.get('/contacts', async (req, res) => {
   try {
-    const { list, status, search, limit = 50, skip = 0 } = req.query;
-    const query = { user: req.user.id };
-    if (list) query.lists = list;
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { listId, status, search, page = 1, limit = 50 } = req.query;
+
+    const query = { userId };
+    if (listId) query.listId = listId;
     if (status) query.status = status;
     if (search) {
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { email: { $regex: search, $options: 'i' } },
+        { fullName: { $regex: search, $options: 'i' } },
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } }
       ];
     }
 
-    const contacts = await Contact.find(query).sort({ createdAt: -1 }).skip(parseInt(skip)).limit(parseInt(limit));
     const total = await Contact.countDocuments(query);
-    res.json({ ok: true, contacts, total });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    const contacts = await Contact.find(query)
+      .populate('listId', 'name')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(parseInt(limit));
+
+    res.json({
+      contacts,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
-router.post('/contacts', auth, async (req, res) => {
+// Add contact
+router.post('/contacts', async (req, res) => {
   try {
-    const { email, phone, name, firstName, lastName, lists, tags } = req.body;
-    const contact = await Contact.findOneAndUpdate(
-      { user: req.user.id, email },
-      { phone, name, firstName, lastName, lists, tags },
-      { upsert: true, new: true }
-    );
-    res.json({ ok: true, contact });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const contactData = { ...req.body, userId };
 
-router.post('/contacts/import', auth, async (req, res) => {
-  try {
-    const { contacts, listId } = req.body;
-    let imported = 0;
-
-    for (const c of contacts) {
-      try {
-        await Contact.findOneAndUpdate(
-          { user: req.user.id, email: c.email },
-          { ...c, lists: listId ? [listId] : [] },
-          { upsert: true }
-        );
-        imported++;
-      } catch {}
+    if (contactData.firstName && contactData.lastName) {
+      contactData.fullName = `${contactData.firstName} ${contactData.lastName}`;
     }
 
+    const contact = new Contact(contactData);
+    await contact.save();
+
+    // Update list count
+    if (contactData.listId) {
+      await ContactList.findByIdAndUpdate(contactData.listId, { $inc: { contactCount: 1 } });
+    }
+
+    res.json({ contact });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Import contacts
+router.post('/contacts/import', async (req, res) => {
+  try {
+    const userId = req.user?._id || req.headers['x-user-id'];
+    const { listId, contacts } = req.body;
+
+    const contactDocs = contacts.map(c => ({
+      ...c,
+      userId,
+      listId,
+      fullName: c.firstName && c.lastName ? `${c.firstName} ${c.lastName}` : c.fullName
+    }));
+
+    const result = await Contact.insertMany(contactDocs, { ordered: false });
+
+    // Update list count
     if (listId) {
-      await ContactList.findByIdAndUpdate(listId, { $inc: { contactCount: imported } });
+      await ContactList.findByIdAndUpdate(listId, { $inc: { contactCount: result.length } });
     }
 
-    res.json({ ok: true, imported });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
+    res.json({ imported: result.length, message: `${result.length} contacts imported` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 });
 
