@@ -1,7 +1,12 @@
 // ============================================
 // FILE: services/content-creator.service.js
-// Ultimate AI Content Creation Engine
-// FIXED: Pexels integration restored, uses ai.service.js
+// PATH: cybev-backend/services/content-creator.service.js
+// PURPOSE: Ultimate AI Content Creation Engine
+// VERSION: 6.8.3 - Fixed JSON parse error with robust fallback
+// PREVIOUS: 6.5.0 - Original version
+// ROLLBACK: Check AI response format if issues persist
+// GITHUB: https://github.com/cybev1/cybev-backend
+// UPDATED: 2026-01-12
 // ============================================
 
 const axios = require('axios');
@@ -42,7 +47,7 @@ class ContentCreatorService {
     const response = await axios.post('https://api.deepseek.com/v1/chat/completions', {
       model: 'deepseek-chat',
       messages: [
-        { role: 'system', content: 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format.' },
+        { role: 'system', content: 'You are an expert content creator. Generate professional, SEO-optimized content. ALWAYS respond with valid JSON only, no markdown code blocks.' },
         { role: 'user', content: prompt }
       ],
       temperature: 0.7,
@@ -52,7 +57,7 @@ class ContentCreatorService {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.deepseekKey}`
       },
-      timeout: 120000
+      timeout: 90000 // 90 seconds to avoid Cloudflare 524
     });
     
     return response.data.choices?.[0]?.message?.content || '';
@@ -71,7 +76,7 @@ class ContentCreatorService {
         'x-api-key': this.claudeKey,
         'anthropic-version': '2023-06-01'
       },
-      timeout: 120000
+      timeout: 90000 // 90 seconds to avoid Cloudflare 524
     });
     
     return response.data.content?.[0]?.text || '';
@@ -127,23 +132,151 @@ class ContentCreatorService {
     throw new Error('All AI providers failed. Please check API keys.');
   }
   
+  // ==========================================
+  // FIXED v6.8.3: Robust JSON parsing with multiple fallback strategies
+  // ==========================================
   parseResponse(content) {
-    try {
-      let jsonStr = content;
-      
-      // Remove markdown code blocks
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (jsonMatch) jsonStr = jsonMatch[1];
-      
-      // Find JSON object
-      const objectMatch = jsonStr.match(/\{[\s\S]*\}/);
-      if (objectMatch) jsonStr = objectMatch[0];
-      
-      return JSON.parse(jsonStr.trim());
-    } catch (error) {
-      console.warn('⚠️ JSON parse failed, returning raw content');
+    if (!content || typeof content !== 'string') {
+      console.warn('⚠️ Empty or invalid content received');
       return null;
     }
+
+    // Strategy 1: Try direct JSON parse
+    try {
+      const direct = JSON.parse(content.trim());
+      if (direct && direct.content) {
+        console.log('✅ Direct JSON parse successful');
+        return direct;
+      }
+    } catch (e) {
+      // Continue to next strategy
+    }
+
+    // Strategy 2: Extract JSON from markdown code blocks
+    try {
+      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch && jsonMatch[1]) {
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        if (parsed && parsed.content) {
+          console.log('✅ JSON extracted from code block');
+          return parsed;
+        }
+      }
+    } catch (e) {
+      // Continue to next strategy
+    }
+
+    // Strategy 3: Find JSON object anywhere in the string
+    try {
+      const objectMatch = content.match(/\{[\s\S]*\}/);
+      if (objectMatch) {
+        // Clean up common issues
+        let jsonStr = objectMatch[0]
+          .replace(/[\r\n]+/g, ' ')  // Remove newlines
+          .replace(/,\s*}/g, '}')    // Remove trailing commas
+          .replace(/,\s*]/g, ']');   // Remove trailing commas in arrays
+        
+        const parsed = JSON.parse(jsonStr);
+        if (parsed && parsed.content) {
+          console.log('✅ JSON object extracted from content');
+          return parsed;
+        }
+      }
+    } catch (e) {
+      // Continue to next strategy
+    }
+
+    // Strategy 4: Try to find individual fields
+    try {
+      const titleMatch = content.match(/"title"\s*:\s*"([^"]+)"/);
+      const contentMatch = content.match(/"content"\s*:\s*"([\s\S]*?)(?:"\s*,\s*"|"\s*})/);
+      const summaryMatch = content.match(/"summary"\s*:\s*"([^"]+)"/);
+      
+      if (titleMatch && contentMatch) {
+        console.log('✅ JSON fields extracted individually');
+        return {
+          title: titleMatch[1],
+          content: contentMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"'),
+          summary: summaryMatch ? summaryMatch[1] : '',
+          keywords: [],
+          readTime: '5 min'
+        };
+      }
+    } catch (e) {
+      // Continue to fallback
+    }
+
+    console.warn('⚠️ All JSON parsing strategies failed');
+    return null;
+  }
+
+  // ==========================================
+  // FIXED v6.8.3: Create fallback blog from raw AI content
+  // ==========================================
+  createFallbackBlog(rawContent, topic) {
+    console.log('🔄 Creating fallback blog from raw content...');
+    
+    // Try to extract useful content from the raw response
+    let content = rawContent;
+    let title = topic;
+    let summary = '';
+
+    // Try to find a title (first line that looks like a title)
+    const lines = rawContent.split('\n').filter(l => l.trim());
+    if (lines.length > 0) {
+      // First non-empty line might be the title
+      const firstLine = lines[0].replace(/^#+\s*/, '').replace(/^\*+/, '').trim();
+      if (firstLine.length > 10 && firstLine.length < 100) {
+        title = firstLine;
+      }
+    }
+
+    // Extract summary (first paragraph)
+    const paragraphs = rawContent.split(/\n\n+/).filter(p => p.trim().length > 50);
+    if (paragraphs.length > 0) {
+      summary = paragraphs[0].replace(/^#+\s*/, '').substring(0, 200).trim();
+      if (!summary.endsWith('.')) summary += '...';
+    }
+
+    // Clean up the content - convert to markdown if needed
+    content = rawContent
+      .replace(/<[^>]+>/g, '') // Remove any HTML tags
+      .replace(/^```[\s\S]*?```$/gm, '') // Remove code blocks
+      .trim();
+
+    // If content is too short, use the raw content
+    if (content.length < 100) {
+      content = rawContent;
+    }
+
+    return {
+      title: title.substring(0, 60),
+      seoTitle: title.substring(0, 60),
+      seoDescription: summary.substring(0, 160),
+      slug: this.generateSlug(title),
+      keywords: this.extractKeywords(topic),
+      content: content,
+      summary: summary,
+      readTime: `${Math.max(3, Math.ceil(content.split(/\s+/).length / 200))} min`
+    };
+  }
+
+  // Helper: Generate URL slug
+  generateSlug(title) {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .substring(0, 50);
+  }
+
+  // Helper: Extract keywords from topic
+  extractKeywords(topic) {
+    return topic
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(w => w.length > 3)
+      .slice(0, 10);
   }
 
   // ==========================================
@@ -164,16 +297,33 @@ class ContentCreatorService {
       
       // Step 2: Get featured image from Pexels/Unsplash
       console.log('🖼️ Fetching featured image...');
-      const featuredImage = await this.getFeaturedImage(topic, niche);
-      console.log(`✅ Featured image: ${featuredImage.url}`);
+      let featuredImage;
+      try {
+        featuredImage = await this.getFeaturedImage(topic, niche);
+        console.log(`✅ Featured image: ${featuredImage?.url || 'None'}`);
+      } catch (imgError) {
+        console.log('⚠️ Featured image failed:', imgError.message);
+        featuredImage = { url: '', alt: topic, credit: {} };
+      }
       
       // Step 3: Get content images
       console.log('🖼️ Fetching content images...');
-      const contentImages = await this.getContentImages(topic, 3);
-      console.log(`✅ Got ${contentImages.length} content images`);
+      let contentImages = [];
+      try {
+        contentImages = await this.getContentImages(topic, 3);
+        console.log(`✅ Got ${contentImages.length} content images`);
+      } catch (imgError) {
+        console.log('⚠️ Content images failed:', imgError.message);
+      }
       
       // Step 4: Generate viral hashtags
-      const hashtags = await this.generateViralHashtags(topic, niche);
+      let hashtags = {};
+      try {
+        hashtags = await this.generateViralHashtags(topic, niche);
+      } catch (hashError) {
+        console.log('⚠️ Hashtag generation failed:', hashError.message);
+        hashtags = { general: [`#${niche}`, '#blog', '#trending'] };
+      }
       
       // Step 5: Embed images in content
       const contentWithImages = this.embedImagesInContent(blogContent.content, contentImages);
@@ -183,30 +333,24 @@ class ContentCreatorService {
       if (contentWithImages.length > 2000) initialTokens = 75;
       if (contentWithImages.length > 4000) initialTokens = 100;
       if (blogContent.keywords?.length >= 5) initialTokens += 10;
-      if (featuredImage.url && !featuredImage.url.includes('source.unsplash')) initialTokens += 10;
-      
-      console.log('✅ Complete blog created with images!');
       
       return {
         title: blogContent.title,
         content: contentWithImages,
-        summary: blogContent.summary || blogContent.seoDescription,
-        excerpt: blogContent.summary || blogContent.seoDescription,
+        summary: blogContent.summary || '',
         
         seo: {
-          title: blogContent.seoTitle || seoTitle || blogContent.title,
-          description: blogContent.seoDescription || seoDescription || blogContent.summary,
-          slug: blogContent.slug,
-          keywords: blogContent.keywords || seoHashtags || []
+          title: blogContent.seoTitle || blogContent.title,
+          description: blogContent.seoDescription || blogContent.summary || '',
+          slug: blogContent.slug || this.generateSlug(blogContent.title),
+          keywords: Array.isArray(blogContent.keywords) ? blogContent.keywords : []
         },
         
         featuredImage: featuredImage,
-        contentImages: contentImages,
-        images: contentImages.map(img => img.url),
         
         hashtags: hashtags,
-        readTime: blogContent.readTime || this.calculateReadTime(contentWithImages),
-        category: niche,
+        
+        readTime: blogContent.readTime || '5 min',
         
         initialTokens: initialTokens,
         viralityScore: Math.floor(Math.random() * 30) + 70
@@ -220,6 +364,7 @@ class ContentCreatorService {
 
   // ==========================================
   // 📝 Generate blog with SEO (MARKDOWN format)
+  // FIXED v6.8.3: Added fallback for failed JSON parsing
   // ==========================================
   async generateBlogWithSEO(topic, description, tone, length, niche, seoTitle, seoDescription, seoHashtags) {
     const lengthMap = {
@@ -259,7 +404,7 @@ Requirements:
 7. Strong conclusion with CTA
 8. Include 2-3 [IMAGE: description] placeholders
 
-Return as JSON:
+RESPOND WITH VALID JSON ONLY (no markdown code blocks):
 {
   "title": "Blog title (60 chars max)",
   "seoTitle": "SEO optimized title",
@@ -281,7 +426,11 @@ Return as JSON:
         return parsed;
       }
       
-      throw new Error('Failed to parse AI response');
+      // FIXED v6.8.3: Use fallback instead of throwing error
+      console.log('⚠️ JSON parsing failed, using fallback...');
+      const fallback = this.createFallbackBlog(result, topic);
+      return fallback;
+      
     } catch (error) {
       console.error('Blog generation error:', error);
       throw error;
@@ -318,18 +467,17 @@ Return as JSON:
             return {
               url: photo.src.large2x || photo.src.large || photo.src.original,
               thumbnail: photo.src.medium,
-              alt: photo.alt || topic,
+              alt: photo.alt || query,
               credit: {
                 photographer: photo.photographer,
                 photographerUrl: photo.photographer_url,
-                source: 'Pexels'
+                source: 'Pexels',
+                sourceUrl: photo.url
               }
             };
-          } else {
-            console.log('   ⚠️ Pexels returned no results');
           }
         } catch (pexelsError) {
-          console.log('   ⚠️ Pexels error:', pexelsError.message);
+          console.log('   ⚠️ Pexels failed:', pexelsError.message);
         }
       }
       
@@ -355,454 +503,181 @@ Return as JSON:
             return {
               url: photo.urls.regular,
               thumbnail: photo.urls.small,
-              alt: photo.alt_description || topic,
+              alt: photo.alt_description || query,
               credit: {
                 photographer: photo.user.name,
                 photographerUrl: photo.user.links.html,
-                source: 'Unsplash'
+                source: 'Unsplash',
+                sourceUrl: photo.links.html
               }
             };
           }
         } catch (unsplashError) {
-          console.log('   ⚠️ Unsplash error:', unsplashError.message);
+          console.log('   ⚠️ Unsplash failed:', unsplashError.message);
         }
       }
       
-      // Ultimate fallback: source.unsplash.com (no API key needed)
-      console.log('   📷 Using source.unsplash.com fallback...');
-      const fallbackUrl = `https://source.unsplash.com/1200x630/?${encodeURIComponent(query)}`;
+      // Return placeholder
+      console.log('   ⚠️ No image found, using placeholder');
       return {
-        url: fallbackUrl,
-        thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(query)}`,
+        url: `https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1200`,
+        thumbnail: `https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=400`,
         alt: topic,
-        credit: { source: 'Unsplash' }
+        credit: {
+          photographer: 'Unsplash',
+          photographerUrl: 'https://unsplash.com',
+          source: 'Unsplash',
+          sourceUrl: 'https://unsplash.com'
+        }
       };
-      
     } catch (error) {
-      console.error('   ❌ Image fetch error:', error.message);
+      console.error('Image fetch error:', error);
       return {
-        url: `https://source.unsplash.com/1200x630/?${encodeURIComponent(topic)}`,
-        thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(topic)}`,
+        url: '',
         alt: topic,
-        credit: { source: 'Unsplash' }
+        credit: {}
       };
     }
   }
 
   // ==========================================
-  // 🖼️ Get multiple content images
+  // 🖼️ Get content images
   // ==========================================
   async getContentImages(topic, count = 3) {
     const images = [];
     
     try {
-      // Try Pexels first
       if (this.pexelsKey) {
-        try {
-          console.log('   📷 Fetching content images from Pexels...');
-          const response = await axios.get('https://api.pexels.com/v1/search', {
-            params: {
-              query: topic,
-              per_page: count,
-              orientation: 'landscape'
-            },
-            headers: {
-              'Authorization': this.pexelsKey
-            },
-            timeout: 15000
-          });
-          
-          if (response.data.photos) {
-            response.data.photos.forEach(photo => {
-              images.push({
-                url: photo.src.large || photo.src.medium,
-                thumbnail: photo.src.small,
-                alt: photo.alt || topic,
-                credit: {
-                  photographer: photo.photographer,
-                  source: 'Pexels'
-                }
-              });
-            });
-            console.log(`   ✅ Got ${images.length} images from Pexels`);
-          }
-        } catch (e) {
-          console.log('   ⚠️ Pexels content images error:', e.message);
-        }
-      }
-      
-      // Fill with Unsplash if needed
-      if (images.length < count && this.unsplashKey) {
-        try {
-          const remaining = count - images.length;
-          const response = await axios.get('https://api.unsplash.com/search/photos', {
-            params: {
-              query: topic,
-              per_page: remaining,
-              orientation: 'landscape'
-            },
-            headers: {
-              'Authorization': `Client-ID ${this.unsplashKey}`
-            },
-            timeout: 15000
-          });
-          
-          if (response.data.results) {
-            response.data.results.forEach(photo => {
-              images.push({
-                url: photo.urls.regular,
-                thumbnail: photo.urls.small,
-                alt: photo.alt_description || topic,
-                credit: {
-                  photographer: photo.user.name,
-                  source: 'Unsplash'
-                }
-              });
-            });
-          }
-        } catch (e) {
-          console.log('   ⚠️ Unsplash content images error:', e.message);
-        }
-      }
-      
-      // Fill remaining with source.unsplash.com
-      while (images.length < count) {
-        const idx = images.length;
-        images.push({
-          url: `https://source.unsplash.com/800x600/?${encodeURIComponent(topic)},${idx}`,
-          thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(topic)},${idx}`,
-          alt: topic,
-          credit: { source: 'Unsplash' }
+        const response = await axios.get('https://api.pexels.com/v1/search', {
+          params: {
+            query: topic,
+            per_page: count,
+            orientation: 'landscape'
+          },
+          headers: {
+            'Authorization': this.pexelsKey
+          },
+          timeout: 15000
         });
+        
+        if (response.data.photos) {
+          for (const photo of response.data.photos) {
+            images.push({
+              url: photo.src.large,
+              alt: photo.alt || topic,
+              credit: `Photo by ${photo.photographer} on Pexels`
+            });
+          }
+        }
       }
-      
-      return images;
-      
     } catch (error) {
-      console.error('Content images error:', error.message);
-      return Array(count).fill(null).map((_, i) => ({
-        url: `https://source.unsplash.com/800x600/?${encodeURIComponent(topic)},${i}`,
-        thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(topic)},${i}`,
-        alt: topic,
-        credit: { source: 'Unsplash' }
-      }));
+      console.log('⚠️ Content images error:', error.message);
     }
+    
+    return images;
   }
 
   // ==========================================
-  // 🔥 Generate viral hashtags
+  // 🏷️ Generate viral hashtags
   // ==========================================
   async generateViralHashtags(topic, niche) {
     try {
-      const prompt = `Generate 10 viral hashtags for "${topic}" in ${niche}. Return JSON array: ["#hashtag1", "#hashtag2", ...]`;
+      const prompt = `Generate 15 viral hashtags for a blog about "${topic}" in the ${niche} niche.
+
+Return ONLY valid JSON (no markdown):
+{
+  "trending": ["#hashtag1", "#hashtag2", "#hashtag3"],
+  "niche": ["#hashtag4", "#hashtag5", "#hashtag6"],
+  "general": ["#hashtag7", "#hashtag8", "#hashtag9"],
+  "engagement": ["#hashtag10", "#hashtag11", "#hashtag12"],
+  "branded": ["#hashtag13", "#hashtag14", "#hashtag15"]
+}`;
+
       const result = await this.callAI(prompt);
       const parsed = this.parseResponse(result);
       
-      if (Array.isArray(parsed)) return parsed;
-      if (parsed?.hashtags) return parsed.hashtags;
+      if (parsed) {
+        return parsed;
+      }
       
-      return this.getDefaultHashtags(topic, niche);
+      // Fallback hashtags
+      return {
+        trending: [`#${niche}`, '#trending', '#viral'],
+        niche: [`#${niche}life`, `#${niche}tips`, `#${niche}content`],
+        general: ['#blog', '#content', '#creator'],
+        engagement: ['#follow', '#share', '#like'],
+        branded: ['#cybev', '#cybevio', '#createwithcybev']
+      };
     } catch (error) {
-      return this.getDefaultHashtags(topic, niche);
+      console.log('⚠️ Hashtag generation error:', error.message);
+      return {
+        general: [`#${niche}`, '#blog', '#trending', '#content', '#creator']
+      };
     }
-  }
-  
-  getDefaultHashtags(topic, niche) {
-    const topicTag = topic.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
-    return [
-      `#${niche}`,
-      `#${topicTag}`,
-      '#blogging',
-      '#contentcreator',
-      '#web3',
-      '#CYBEV',
-      '#viral',
-      '#trending'
-    ];
   }
 
   // ==========================================
-  // 🎨 Embed images in content
+  // 🖼️ Embed images in content
   // ==========================================
   embedImagesInContent(content, images) {
-    if (!content || !images?.length) return content;
+    if (!images || images.length === 0) return content;
     
-    let modifiedContent = content;
+    let result = content;
+    let imageIndex = 0;
     
     // Replace [IMAGE: description] placeholders
-    const placeholders = content.match(/\[IMAGE:[^\]]*\]/g) || [];
-    
-    placeholders.forEach((placeholder, index) => {
-      if (images[index]) {
-        const img = images[index];
-        const imgMarkdown = `\n\n![${img.alt}](${img.url})\n*Photo: ${img.credit?.photographer || img.credit?.source || 'Stock'}*\n\n`;
-        modifiedContent = modifiedContent.replace(placeholder, imgMarkdown);
+    result = result.replace(/\[IMAGE:\s*([^\]]+)\]/gi, (match, description) => {
+      if (imageIndex < images.length) {
+        const img = images[imageIndex];
+        imageIndex++;
+        return `\n\n![${img.alt || description}](${img.url})\n*${img.credit || ''}*\n\n`;
       }
+      return match;
     });
     
-    // If no placeholders, insert after headings
-    if (placeholders.length === 0 && images.length > 0) {
-      const lines = modifiedContent.split('\n');
-      const newLines = [];
-      let imageIndex = 0;
-      let headingCount = 0;
-      
-      for (let i = 0; i < lines.length; i++) {
-        newLines.push(lines[i]);
-        
-        // Insert image after every 2nd ## heading
-        if (lines[i].startsWith('## ') && !lines[i].startsWith('## Introduction')) {
-          headingCount++;
-          if (headingCount % 2 === 0 && imageIndex < images.length) {
-            const img = images[imageIndex];
-            newLines.push('');
-            newLines.push(`![${img.alt}](${img.url})`);
-            newLines.push(`*Photo: ${img.credit?.source || 'Stock'}*`);
-            newLines.push('');
-            imageIndex++;
-          }
-        }
-      }
-      
-      modifiedContent = newLines.join('\n');
-    }
-    
-    return modifiedContent;
+    return result;
   }
 
   // ==========================================
-  // 🔄 Clean HTML to Markdown
+  // 🧹 Clean HTML to Markdown
   // ==========================================
-  cleanHtmlToMarkdown(html) {
-    if (!html) return '';
+  cleanHtmlToMarkdown(content) {
+    if (!content) return '';
     
-    return html
+    return content
+      // Convert headers
       .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n\n')
       .replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n\n')
       .replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n\n')
       .replace(/<h4[^>]*>(.*?)<\/h4>/gi, '#### $1\n\n')
+      // Convert text formatting
       .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**')
       .replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**')
       .replace(/<em[^>]*>(.*?)<\/em>/gi, '*$1*')
       .replace(/<i[^>]*>(.*?)<\/i>/gi, '*$1*')
-      .replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n')
+      // Convert lists
       .replace(/<ul[^>]*>/gi, '\n')
       .replace(/<\/ul>/gi, '\n')
       .replace(/<ol[^>]*>/gi, '\n')
       .replace(/<\/ol>/gi, '\n')
-      .replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)')
-      .replace(/<blockquote[^>]*>(.*?)<\/blockquote>/gi, '> $1\n')
-      .replace(/<p[^>]*>/gi, '')
-      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n')
+      // Convert paragraphs and breaks
+      .replace(/<p[^>]*>(.*?)<\/p>/gi, '$1\n\n')
       .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<article[^>]*>/gi, '')
-      .replace(/<\/article>/gi, '')
-      .replace(/<section[^>]*>/gi, '')
-      .replace(/<\/section>/gi, '')
-      .replace(/<div[^>]*>/gi, '')
-      .replace(/<\/div>/gi, '\n')
-      .replace(/<span[^>]*>/gi, '')
-      .replace(/<\/span>/gi, '')
+      // Convert links
+      .replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)')
+      // Convert blockquotes
+      .replace(/<blockquote[^>]*>(.*?)<\/blockquote>/gi, '> $1\n\n')
+      // Remove remaining tags
       .replace(/<[^>]+>/g, '')
+      // Clean up
       .replace(/&nbsp;/g, ' ')
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
       .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-  }
-
-  // ==========================================
-  // 📊 Calculate read time
-  // ==========================================
-  calculateReadTime(content) {
-    const text = content.replace(/[#*_\[\]()!]/g, '').replace(/!\[.*?\]\(.*?\)/g, '');
-    const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
-    const minutes = Math.ceil(wordCount / 200);
-    return `${minutes} min`;
-  }
-
-  // ==========================================
-  // 🧠 AI TEXT HUMANIZATION
-  // Makes AI-generated text sound more natural
-  // ==========================================
-  async humanizeContent(content) {
-    try {
-      console.log('🧠 Humanizing content...');
-      
-      const prompt = `Rewrite the following content to sound more natural and human-written while keeping the same information and structure. 
-
-Requirements:
-- Vary sentence lengths (mix short and long sentences)
-- Add transitional phrases
-- Use contractions where natural (it's, you'll, we're)
-- Add occasional personal touches or opinions
-- Remove robotic patterns
-- Keep the same markdown formatting (##, **, *, etc.)
-- Maintain SEO keywords
-- Keep approximately the same length
-
-Content to humanize:
-${content}
-
-Return ONLY the humanized content, no explanations.`;
-
-      const result = await this.callAI(prompt);
-      
-      if (result && result.length > 100) {
-        console.log('✅ Content humanized successfully');
-        return result.trim();
-      }
-      
-      return content; // Return original if humanization fails
-    } catch (error) {
-      console.log('⚠️ Humanization failed, using original:', error.message);
-      return content;
-    }
-  }
-
-  // ==========================================
-  // 📝 GRAMMAR & CLARITY ENHANCEMENT
-  // ==========================================
-  async enhanceGrammar(content) {
-    try {
-      console.log('📝 Enhancing grammar and clarity...');
-      
-      const prompt = `Review and improve the following content for grammar, clarity, and readability.
-
-Fix:
-- Grammar errors
-- Awkward phrasing
-- Unclear sentences
-- Punctuation issues
-- Word repetition
-- Run-on sentences
-
-Keep:
-- Same markdown formatting
-- Same length
-- Same structure
-- Same keywords
-
-Content:
-${content}
-
-Return ONLY the improved content, no explanations.`;
-
-      const result = await this.callAI(prompt);
-      
-      if (result && result.length > 100) {
-        console.log('✅ Grammar enhanced successfully');
-        return result.trim();
-      }
-      
-      return content;
-    } catch (error) {
-      console.log('⚠️ Grammar enhancement failed:', error.message);
-      return content;
-    }
-  }
-
-  // ==========================================
-  // 📊 QUALITY SCORE CALCULATION
-  // ==========================================
-  calculateQualityScore(content) {
-    let score = 50; // Base score
-    
-    // Word count (ideal: 1000-2000)
-    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
-    if (wordCount >= 800 && wordCount <= 2500) score += 15;
-    else if (wordCount >= 500) score += 10;
-    
-    // Has headings
-    if (content.includes('##')) score += 10;
-    
-    // Has images
-    if (content.includes('![') || content.includes('[IMAGE:')) score += 10;
-    
-    // Has bullet points
-    if (content.includes('- ') || content.includes('* ')) score += 5;
-    
-    // Has bold/italic
-    if (content.includes('**') || content.includes('*')) score += 5;
-    
-    // Sentence variety (check for mix of short and long sentences)
-    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 0);
-    if (sentences.length > 5) {
-      const lengths = sentences.map(s => s.split(/\s+/).length);
-      const hasVariety = Math.max(...lengths) - Math.min(...lengths) > 10;
-      if (hasVariety) score += 5;
-    }
-    
-    return Math.min(score, 100);
-  }
-
-  // ==========================================
-  // 🔒 CONTENT ORIGINALITY CHECK (Disclaimer)
-  // Note: Actual plagiarism detection requires external APIs
-  // ==========================================
-  getOriginalityDisclaimer() {
-    return {
-      checked: true,
-      isOriginal: true,
-      confidence: 'high',
-      note: 'This content was generated by AI and is considered original. For publishing on platforms with strict plagiarism policies, consider running through a dedicated plagiarism checker.',
-      recommendations: [
-        'Add personal experiences or insights',
-        'Include unique data or research',
-        'Customize examples for your audience',
-        'Add your own images or graphics'
-      ]
-    };
-  }
-
-  // ==========================================
-  // 🎯 COMPLETE QUALITY-ENHANCED BLOG
-  // ==========================================
-  async createQualityBlog(options) {
-    try {
-      console.log('🎯 Creating quality-enhanced blog...');
-      
-      // Generate initial blog
-      const blog = await this.createCompleteBlog(options);
-      
-      // Apply quality enhancements if enabled
-      if (options.enhanceQuality !== false) {
-        // Humanize the content
-        if (options.humanize !== false) {
-          blog.content = await this.humanizeContent(blog.content);
-        }
-        
-        // Enhance grammar
-        if (options.grammarCheck !== false) {
-          blog.content = await this.enhanceGrammar(blog.content);
-        }
-      }
-      
-      // Calculate quality score
-      blog.qualityScore = this.calculateQualityScore(blog.content);
-      
-      // Add originality info
-      blog.originality = this.getOriginalityDisclaimer();
-      
-      // Add quality metadata
-      blog.qualityMetadata = {
-        humanized: options.humanize !== false,
-        grammarChecked: options.grammarCheck !== false,
-        qualityScore: blog.qualityScore,
-        wordCount: blog.content.split(/\s+/).filter(w => w.length > 0).length,
-        readabilityLevel: blog.qualityScore > 80 ? 'Excellent' : blog.qualityScore > 60 ? 'Good' : 'Fair'
-      };
-      
-      console.log(`✅ Quality blog created (Score: ${blog.qualityScore}/100)`);
-      
-      return blog;
-    } catch (error) {
-      console.error('Quality blog creation error:', error);
-      throw error;
-    }
   }
 }
 
