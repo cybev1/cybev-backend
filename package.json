@@ -1,6 +1,6 @@
 {
   "name": "cybev-backend",
-  "version": "6.8.0",
+  "version": "6.8.1",
   "description": "CYBEV Backend API - Complete Platform with Meet, Social Tools, Campaigns, AI Generation",
   "main": "server.js",
   "scripts": {
@@ -24,7 +24,8 @@
     "@mux/mux-node": "^7.3.0",
     "fluent-ffmpeg": "^2.1.2",
     "web-push": "^3.6.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "crypto": "^1.0.1"
   },
   "optionalDependencies": {
     "@getbrevo/brevo": "^1.0.1",
