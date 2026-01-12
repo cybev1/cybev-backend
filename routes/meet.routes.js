@@ -1,402 +1,189 @@
-/**
- * Meet Routes - Video Conferencing
- * CYBEV Studio v2.0
- * GitHub: https://github.com/cybev1/cybev-backend/routes/meet.routes.js
- * 
- * Providers:
- * - Jitsi Meet (FREE, default) - No API key needed, unlimited
- * - Daily.co (Premium) - API key required, more features
- */
+// ============================================
+// FILE: routes/meet.routes.js
+// Video Conferencing Routes (Jitsi FREE)
+// VERSION: 1.0.0 - NEW FEATURE
+// ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
-// ============================================
-// PROVIDER CONFIGURATION
-// ============================================
-const PROVIDERS = {
-  jitsi: {
-    name: 'Jitsi Meet',
-    domain: 'meet.jit.si',
-    free: true,
-    maxParticipants: 75,
-    maxDuration: null, // Unlimited
-    features: ['screen-share', 'chat', 'recording', 'breakout-rooms']
-  },
-  daily: {
-    name: 'Daily.co',
-    domain: process.env.DAILY_DOMAIN || 'cybev.daily.co',
-    apiKey: process.env.DAILY_API_KEY,
-    free: false,
-    maxParticipants: 100,
-    maxDuration: 60, // Minutes on free tier
-    features: ['screen-share', 'chat', 'recording', 'transcription', 'waiting-room']
+// Simple auth middleware
+const auth = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
   }
 };
 
-// ============================================
-// MEETING SCHEMA
-// ============================================
+// Meeting Schema (inline)
 const meetingSchema = new mongoose.Schema({
   roomId: { type: String, required: true, unique: true },
-  title: { type: String, required: true },
+  title: { type: String, default: 'Meeting' },
   description: String,
-  hostId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  provider: { type: String, enum: ['jitsi', 'daily'], default: 'jitsi' },
-  type: { type: String, enum: ['instant', 'scheduled'], default: 'instant' },
+  host: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   scheduledAt: Date,
-  duration: { type: Number, default: 60 }, // Minutes
-  participants: [{
-    odId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    email: String,
-    joinedAt: Date,
-    leftAt: Date
-  }],
+  duration: { type: Number, default: 60 },
+  status: { type: String, enum: ['scheduled', 'active', 'ended'], default: 'scheduled' },
+  provider: { type: String, default: 'jitsi' },
   settings: {
     waitingRoom: { type: Boolean, default: false },
     muteOnEntry: { type: Boolean, default: true },
-    allowScreenShare: { type: Boolean, default: true },
-    allowChat: { type: Boolean, default: true },
     allowRecording: { type: Boolean, default: false },
-    password: String
-  },
-  status: { type: String, enum: ['pending', 'active', 'ended'], default: 'pending' },
-  startedAt: Date,
-  endedAt: Date,
-  dailyRoomUrl: String, // For Daily.co rooms
-  createdAt: { type: Date, default: Date.now }
-});
+  }
+}, { timestamps: true });
 
 const Meeting = mongoose.models.Meeting || mongoose.model('Meeting', meetingSchema);
 
-// ============================================
-// HELPER FUNCTIONS
-// ============================================
-function generateRoomId() {
-  const chars = 'abcdefghijklmnopqrstuvwxyz';
-  let result = '';
-  for (let i = 0; i < 3; i++) {
-    if (i > 0) result += '-';
-    for (let j = 0; j < 4; j++) {
-      result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-  }
-  return result; // Format: xxxx-xxxx-xxxx
-}
-
-async function createDailyRoom(title, settings = {}) {
-  if (!PROVIDERS.daily.apiKey) {
-    throw new Error('Daily.co API key not configured');
-  }
-
-  const response = await fetch('https://api.daily.co/v1/rooms', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${PROVIDERS.daily.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      name: generateRoomId().replace(/-/g, ''),
-      properties: {
-        enable_screenshare: settings.allowScreenShare !== false,
-        enable_chat: settings.allowChat !== false,
-        enable_knocking: settings.waitingRoom || false,
-        start_audio_off: settings.muteOnEntry || false
-      }
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to create Daily.co room');
-  }
-
-  return response.json();
-}
-
-// ============================================
-// ROUTES
-// ============================================
-
-// Get available providers
-router.get('/providers', (req, res) => {
-  const providers = Object.entries(PROVIDERS).map(([key, value]) => ({
-    id: key,
-    name: value.name,
-    free: value.free,
-    maxParticipants: value.maxParticipants,
-    features: value.features,
-    available: key === 'jitsi' || !!value.apiKey
-  }));
-  
-  res.json({ providers });
-});
-
-// Get user's meetings
-router.get('/my', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    
-    const meetings = await Meeting.find({
-      $or: [
-        { hostId: userId },
-        { 'participants.userId': userId }
-      ]
-    })
-    .sort({ createdAt: -1 })
-    .limit(50)
-    .populate('hostId', 'name email avatar');
-
-    res.json({ meetings });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// Generate unique room ID
+const generateRoomId = () => {
+  return crypto.randomBytes(4).toString('hex') + '-' + 
+         crypto.randomBytes(2).toString('hex') + '-' + 
+         crypto.randomBytes(2).toString('hex');
+};
 
 // Create instant meeting
-router.post('/instant', async (req, res) => {
+router.post('/create', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { title, provider = 'jitsi', settings = {} } = req.body;
-
-    const roomId = generateRoomId();
-    let dailyRoomUrl = null;
-
-    // Create Daily.co room if selected
-    if (provider === 'daily' && PROVIDERS.daily.apiKey) {
-      try {
-        const dailyRoom = await createDailyRoom(title, settings);
-        dailyRoomUrl = dailyRoom.url;
-      } catch (error) {
-        // Fallback to Jitsi if Daily.co fails
-        console.error('Daily.co error, falling back to Jitsi:', error.message);
-      }
-    }
-
-    const meeting = new Meeting({
-      roomId,
-      title: title || 'Instant Meeting',
-      hostId: userId,
-      provider: dailyRoomUrl ? 'daily' : 'jitsi',
-      type: 'instant',
-      settings,
+    const { title = 'Instant Meeting' } = req.body;
+    
+    const meeting = await Meeting.create({
+      roomId: generateRoomId(),
+      title,
+      host: req.user.userId || req.user.id,
       status: 'active',
-      startedAt: new Date(),
-      dailyRoomUrl
+      provider: 'jitsi'
     });
 
-    await meeting.save();
-
-    // Generate meeting URL
-    const meetingUrl = dailyRoomUrl || `https://${PROVIDERS.jitsi.domain}/${roomId}`;
-
-    res.json({
+    res.json({ 
+      ok: true, 
       meeting,
-      roomId,
-      meetingUrl,
-      joinUrl: `/meet/${roomId}`,
-      provider: meeting.provider
+      joinUrl: `https://meet.jit.si/cybev-${meeting.roomId}`
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Create meeting error:', err);
+    res.status(500).json({ error: 'Failed to create meeting' });
   }
 });
 
-// Schedule a meeting
-router.post('/schedule', async (req, res) => {
+// Schedule meeting
+router.post('/schedule', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { 
-      title, 
-      description, 
-      scheduledAt, 
-      duration = 60,
-      provider = 'jitsi',
-      settings = {},
-      invitees = []
-    } = req.body;
+    const { title, description, scheduledAt, duration = 60 } = req.body;
 
-    const roomId = generateRoomId();
+    if (!scheduledAt) {
+      return res.status(400).json({ error: 'Scheduled time is required' });
+    }
 
-    const meeting = new Meeting({
-      roomId,
-      title,
+    const meeting = await Meeting.create({
+      roomId: generateRoomId(),
+      title: title || 'Scheduled Meeting',
       description,
-      hostId: userId,
-      provider,
-      type: 'scheduled',
+      host: req.user.userId || req.user.id,
       scheduledAt: new Date(scheduledAt),
       duration,
-      settings,
-      participants: invitees.map(email => ({ email }))
+      status: 'scheduled',
+      provider: 'jitsi'
     });
 
-    await meeting.save();
-
-    // TODO: Send email invitations to invitees
-
-    res.json({
-      meeting,
-      roomId,
-      joinUrl: `/meet/${roomId}`
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ ok: true, meeting });
+  } catch (err) {
+    console.error('Schedule meeting error:', err);
+    res.status(500).json({ error: 'Failed to schedule meeting' });
   }
 });
 
-// Join a meeting
-router.post('/join/:roomId', async (req, res) => {
+// Get my meetings
+router.get('/my-meetings', auth, async (req, res) => {
   try {
-    const { roomId } = req.params;
-    const userId = req.user?._id || req.headers['x-user-id'];
+    const meetings = await Meeting.find({
+      $or: [
+        { host: req.user.userId || req.user.id },
+        { participants: req.user.userId || req.user.id }
+      ]
+    }).sort({ createdAt: -1 }).limit(50);
 
-    const meeting = await Meeting.findOne({ roomId });
-    
-    if (!meeting) {
-      return res.status(404).json({ error: 'Meeting not found' });
-    }
-
-    // Add participant
-    meeting.participants.push({
-      odId: odlean,
-      joinedAt: new Date()
-    });
-
-    if (meeting.status === 'pending') {
-      meeting.status = 'active';
-      meeting.startedAt = new Date();
-    }
-
-    await meeting.save();
-
-    // Generate meeting URL based on provider
-    let meetingUrl;
-    if (meeting.provider === 'daily' && meeting.dailyRoomUrl) {
-      meetingUrl = meeting.dailyRoomUrl;
-    } else {
-      meetingUrl = `https://${PROVIDERS.jitsi.domain}/${roomId}`;
-    }
-
-    res.json({
-      meeting,
-      meetingUrl,
-      provider: meeting.provider
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ meetings });
+  } catch (err) {
+    console.error('Get meetings error:', err);
+    res.status(500).json({ error: 'Failed to fetch meetings' });
   }
 });
 
-// Get meeting details
+// Get meeting by room ID
 router.get('/:roomId', async (req, res) => {
   try {
-    const { roomId } = req.params;
-    
-    const meeting = await Meeting.findOne({ roomId })
-      .populate('hostId', 'name email avatar')
-      .populate('participants.userId', 'name email avatar');
+    const meeting = await Meeting.findOne({ roomId: req.params.roomId })
+      .populate('host', 'username name avatar');
 
     if (!meeting) {
       return res.status(404).json({ error: 'Meeting not found' });
     }
 
-    // Generate meeting URL
-    let meetingUrl;
-    if (meeting.provider === 'daily' && meeting.dailyRoomUrl) {
-      meetingUrl = meeting.dailyRoomUrl;
-    } else {
-      meetingUrl = `https://${PROVIDERS.jitsi.domain}/${roomId}`;
-    }
-
-    res.json({ meeting, meetingUrl });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ meeting });
+  } catch (err) {
+    console.error('Get meeting error:', err);
+    res.status(500).json({ error: 'Failed to fetch meeting' });
   }
 });
 
-// Leave meeting
-router.post('/:roomId/leave', async (req, res) => {
+// Join meeting
+router.post('/:roomId/join', auth, async (req, res) => {
   try {
-    const { roomId } = req.params;
-    const userId = req.user?._id || req.headers['x-user-id'];
+    const meeting = await Meeting.findOne({ roomId: req.params.roomId });
 
-    const meeting = await Meeting.findOne({ roomId });
-    
     if (!meeting) {
       return res.status(404).json({ error: 'Meeting not found' });
     }
 
-    // Update participant's leftAt time
-    const participant = meeting.participants.find(
-      p => p.userId?.toString() === userId?.toString()
-    );
-    
-    if (participant) {
-      participant.leftAt = new Date();
+    // Add participant if not already in list
+    const userId = req.user.userId || req.user.id;
+    if (!meeting.participants.includes(userId)) {
+      meeting.participants.push(userId);
       await meeting.save();
     }
 
-    res.json({ message: 'Left meeting successfully' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ 
+      ok: true, 
+      meeting,
+      joinUrl: `https://meet.jit.si/cybev-${meeting.roomId}`
+    });
+  } catch (err) {
+    console.error('Join meeting error:', err);
+    res.status(500).json({ error: 'Failed to join meeting' });
   }
 });
 
-// End meeting (host only)
-router.post('/:roomId/end', async (req, res) => {
+// End meeting
+router.post('/:roomId/end', auth, async (req, res) => {
   try {
-    const { roomId } = req.params;
-    const userId = req.user?._id || req.headers['x-user-id'];
+    const meeting = await Meeting.findOne({ roomId: req.params.roomId });
 
-    const meeting = await Meeting.findOne({ roomId });
-    
     if (!meeting) {
       return res.status(404).json({ error: 'Meeting not found' });
     }
 
-    if (meeting.hostId.toString() !== userId?.toString()) {
-      return res.status(403).json({ error: 'Only host can end the meeting' });
+    const userId = req.user.userId || req.user.id;
+    if (meeting.host.toString() !== userId) {
+      return res.status(403).json({ error: 'Only host can end meeting' });
     }
 
     meeting.status = 'ended';
-    meeting.endedAt = new Date();
     await meeting.save();
 
-    // Notify all participants via Socket.IO
-    const io = req.app.get('io');
-    if (io) {
-      io.to(roomId).emit('meeting-ended', { roomId });
-    }
-
-    res.json({ message: 'Meeting ended', meeting });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Delete meeting
-router.delete('/:roomId', async (req, res) => {
-  try {
-    const { roomId } = req.params;
-    const userId = req.user?._id || req.headers['x-user-id'];
-
-    const meeting = await Meeting.findOne({ roomId });
-    
-    if (!meeting) {
-      return res.status(404).json({ error: 'Meeting not found' });
-    }
-
-    if (meeting.hostId.toString() !== userId?.toString()) {
-      return res.status(403).json({ error: 'Only host can delete the meeting' });
-    }
-
-    await Meeting.deleteOne({ roomId });
-
-    res.json({ message: 'Meeting deleted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ ok: true, meeting });
+  } catch (err) {
+    console.error('End meeting error:', err);
+    res.status(500).json({ error: 'Failed to end meeting' });
   }
 });
 

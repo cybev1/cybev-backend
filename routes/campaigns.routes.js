@@ -1,363 +1,399 @@
-/**
- * Campaigns Routes - Email/SMS/WhatsApp/Push Marketing
- * CYBEV Studio v2.0
- * GitHub: https://github.com/cybev1/cybev-backend/routes/campaigns.routes.js
- */
+// ============================================
+// FILE: routes/campaigns.routes.js
+// Marketing Campaigns Routes
+// VERSION: 1.0.0 - NEW FEATURE
+// ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// ============================================
-// SCHEMAS
-// ============================================
+// Simple auth middleware
+const auth = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
+// Campaign Schema
 const campaignSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
   type: { type: String, enum: ['email', 'sms', 'whatsapp', 'push'], required: true },
-  status: { type: String, enum: ['draft', 'scheduled', 'sending', 'sent', 'paused', 'failed'], default: 'draft' },
   subject: String,
   content: { type: String, required: true },
-  htmlContent: String,
-  templateId: String,
-  audienceType: { type: String, enum: ['all', 'list', 'segment'], default: 'all' },
-  contactListId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
+  audience: { type: String, default: 'all' },
+  status: { type: String, enum: ['draft', 'scheduled', 'sending', 'sent', 'paused'], default: 'draft' },
   scheduledAt: Date,
   sentAt: Date,
+  recipientCount: { type: Number, default: 0 },
   stats: {
-    total: { type: Number, default: 0 },
     sent: { type: Number, default: 0 },
     delivered: { type: Number, default: 0 },
     opened: { type: Number, default: 0 },
     clicked: { type: Number, default: 0 },
     bounced: { type: Number, default: 0 },
-    unsubscribed: { type: Number, default: 0 }
-  },
-  settings: {
-    trackOpens: { type: Boolean, default: true },
-    trackClicks: { type: Boolean, default: true },
-    replyTo: String,
-    fromName: String
-  },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-});
-
-const contactListSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  name: { type: String, required: true },
-  description: String,
-  contactCount: { type: Number, default: 0 },
-  tags: [String],
-  createdAt: { type: Date, default: Date.now }
-});
-
-const contactSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  listId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
-  email: String,
-  phone: String,
-  firstName: String,
-  lastName: String,
-  fullName: String,
-  company: String,
-  tags: [String],
-  customFields: { type: Map, of: String },
-  status: { type: String, enum: ['active', 'unsubscribed', 'bounced'], default: 'active' },
-  source: String,
-  createdAt: { type: Date, default: Date.now }
-});
+    unsubscribed: { type: Number, default: 0 },
+  }
+}, { timestamps: true });
 
 const Campaign = mongoose.models.Campaign || mongoose.model('Campaign', campaignSchema);
-const ContactList = mongoose.models.ContactList || mongoose.model('ContactList', contactListSchema);
+
+// Contact Schema (for recipients)
+const contactSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  email: String,
+  phone: String,
+  name: String,
+  tags: [String],
+  subscribed: { type: Boolean, default: true },
+  source: String,
+}, { timestamps: true });
+
 const Contact = mongoose.models.Contact || mongoose.model('Contact', contactSchema);
 
-// ============================================
+// ==========================================
 // CAMPAIGN ROUTES
-// ============================================
+// ==========================================
 
 // Get all campaigns
-router.get('/', async (req, res) => {
+router.get('/', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { status, type, page = 1, limit = 20 } = req.query;
+    const campaigns = await Campaign.find({ 
+      user: req.user.userId || req.user.id 
+    }).sort({ createdAt: -1 });
 
-    const query = { userId };
-    if (status) query.status = status;
-    if (type) query.type = type;
-
-    const total = await Campaign.countDocuments(query);
-    const campaigns = await Campaign.find(query)
-      .populate('contactListId', 'name contactCount')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    res.json({ 
-      campaigns,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ campaigns });
+  } catch (err) {
+    console.error('Get campaigns error:', err);
+    res.status(500).json({ error: 'Failed to fetch campaigns' });
   }
 });
 
-// Get campaign stats summary
-router.get('/stats', async (req, res) => {
+// Get campaign stats
+router.get('/stats', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
+    const userId = req.user.userId || req.user.id;
 
-    const stats = await Campaign.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-      {
-        $group: {
-          _id: null,
-          totalCampaigns: { $sum: 1 },
-          totalSent: { $sum: '$stats.sent' },
-          totalDelivered: { $sum: '$stats.delivered' },
-          totalOpened: { $sum: '$stats.opened' },
-          totalClicked: { $sum: '$stats.clicked' }
-        }
-      }
-    ]);
+    const campaigns = await Campaign.find({ user: userId });
 
-    const byType = await Campaign.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-      { $group: { _id: '$type', count: { $sum: 1 } } }
-    ]);
+    const stats = {
+      total: campaigns.length,
+      sent: 0,
+      opened: 0,
+      clicked: 0
+    };
 
-    const byStatus = await Campaign.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
-
-    res.json({
-      summary: stats[0] || { totalCampaigns: 0, totalSent: 0, totalDelivered: 0, totalOpened: 0, totalClicked: 0 },
-      byType: byType.reduce((acc, t) => ({ ...acc, [t._id]: t.count }), {}),
-      byStatus: byStatus.reduce((acc, s) => ({ ...acc, [s._id]: s.count }), {})
+    campaigns.forEach(c => {
+      stats.sent += c.stats?.sent || 0;
+      stats.opened += c.stats?.opened || 0;
+      stats.clicked += c.stats?.clicked || 0;
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+
+    res.json({ stats });
+  } catch (err) {
+    console.error('Get stats error:', err);
+    res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 
 // Create campaign
-router.post('/', async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const campaignData = { ...req.body, userId };
+    const { name, type, subject, content, audience = 'all' } = req.body;
 
-    const campaign = new Campaign(campaignData);
-    await campaign.save();
+    if (!name || !type || !content) {
+      return res.status(400).json({ error: 'Name, type, and content are required' });
+    }
 
-    res.json({ campaign });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    // Count recipients based on audience
+    let recipientCount = 0;
+    const userId = req.user.userId || req.user.id;
+
+    if (audience === 'all') {
+      recipientCount = await Contact.countDocuments({ user: userId, subscribed: true });
+    } else {
+      recipientCount = await Contact.countDocuments({ 
+        user: userId, 
+        subscribed: true,
+        tags: audience 
+      });
+    }
+
+    const campaign = await Campaign.create({
+      user: userId,
+      name,
+      type,
+      subject,
+      content,
+      audience,
+      status: 'draft',
+      recipientCount
+    });
+
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    console.error('Create campaign error:', err);
+    res.status(500).json({ error: 'Failed to create campaign' });
   }
 });
 
 // Get single campaign
-router.get('/:id', async (req, res) => {
+router.get('/:id', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-
-    const campaign = await Campaign.findOne({ _id: id, userId })
-      .populate('contactListId');
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      user: req.user.userId || req.user.id
+    });
 
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
     res.json({ campaign });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Get campaign error:', err);
+    res.status(500).json({ error: 'Failed to fetch campaign' });
   }
 });
 
 // Update campaign
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
+    const { name, subject, content, audience } = req.body;
 
     const campaign = await Campaign.findOneAndUpdate(
-      { _id: id, userId },
-      { ...req.body, updatedAt: new Date() },
+      {
+        _id: req.params.id,
+        user: req.user.userId || req.user.id,
+        status: 'draft' // Can only update drafts
+      },
+      { name, subject, content, audience },
       { new: true }
     );
 
     if (!campaign) {
-      return res.status(404).json({ error: 'Campaign not found' });
+      return res.status(404).json({ error: 'Campaign not found or cannot be edited' });
     }
 
-    res.json({ campaign });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Delete campaign
-router.delete('/:id', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-
-    await Campaign.deleteOne({ _id: id, userId });
-
-    res.json({ message: 'Campaign deleted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    console.error('Update campaign error:', err);
+    res.status(500).json({ error: 'Failed to update campaign' });
   }
 });
 
 // Send campaign
-router.post('/:id/send', async (req, res) => {
+router.post('/:id/send', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-    const { scheduledAt } = req.body;
-
-    const campaign = await Campaign.findOne({ _id: id, userId });
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      user: req.user.userId || req.user.id
+    });
 
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
 
-    if (scheduledAt) {
-      campaign.status = 'scheduled';
-      campaign.scheduledAt = new Date(scheduledAt);
-    } else {
-      campaign.status = 'sending';
-      // TODO: Trigger actual sending via queue/worker
+    if (campaign.status === 'sent') {
+      return res.status(400).json({ error: 'Campaign already sent' });
     }
 
+    // Update status to sending
+    campaign.status = 'sending';
+    campaign.sentAt = new Date();
     await campaign.save();
 
-    res.json({ campaign, message: scheduledAt ? 'Campaign scheduled' : 'Campaign sending started' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    // In production, this would trigger the actual sending process
+    // For now, we'll simulate it
+    
+    // Simulate async sending
+    setTimeout(async () => {
+      try {
+        campaign.status = 'sent';
+        campaign.stats.sent = campaign.recipientCount;
+        campaign.stats.delivered = Math.floor(campaign.recipientCount * 0.95);
+        await campaign.save();
+      } catch (err) {
+        console.error('Campaign send simulation error:', err);
+      }
+    }, 3000);
+
+    res.json({ ok: true, message: 'Campaign is being sent' });
+  } catch (err) {
+    console.error('Send campaign error:', err);
+    res.status(500).json({ error: 'Failed to send campaign' });
   }
 });
 
-// ============================================
-// CONTACT LIST ROUTES
-// ============================================
-
-// Get all contact lists
-router.get('/contacts/lists', async (req, res) => {
+// Schedule campaign
+router.post('/:id/schedule', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
+    const { scheduledAt } = req.body;
 
-    const lists = await ContactList.find({ userId }).sort({ createdAt: -1 });
-
-    res.json({ lists });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Create contact list
-router.post('/contacts/lists', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { name, description, tags } = req.body;
-
-    const list = new ContactList({ userId, name, description, tags });
-    await list.save();
-
-    res.json({ list });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// CONTACT ROUTES
-// ============================================
-
-// Get contacts
-router.get('/contacts', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { listId, status, search, page = 1, limit = 50 } = req.query;
-
-    const query = { userId };
-    if (listId) query.listId = listId;
-    if (status) query.status = status;
-    if (search) {
-      query.$or = [
-        { email: { $regex: search, $options: 'i' } },
-        { fullName: { $regex: search, $options: 'i' } },
-        { firstName: { $regex: search, $options: 'i' } },
-        { lastName: { $regex: search, $options: 'i' } }
-      ];
+    if (!scheduledAt) {
+      return res.status(400).json({ error: 'Scheduled time is required' });
     }
 
-    const total = await Contact.countDocuments(query);
-    const contacts = await Contact.find(query)
-      .populate('listId', 'name')
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+    const campaign = await Campaign.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        user: req.user.userId || req.user.id,
+        status: 'draft'
+      },
+      { 
+        status: 'scheduled',
+        scheduledAt: new Date(scheduledAt)
+      },
+      { new: true }
+    );
 
-    res.json({
-      contacts,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found or cannot be scheduled' });
+    }
+
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    console.error('Schedule campaign error:', err);
+    res.status(500).json({ error: 'Failed to schedule campaign' });
+  }
+});
+
+// Duplicate campaign
+router.post('/:id/duplicate', auth, async (req, res) => {
+  try {
+    const original = await Campaign.findOne({
+      _id: req.params.id,
+      user: req.user.userId || req.user.id
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+
+    if (!original) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    const campaign = await Campaign.create({
+      user: req.user.userId || req.user.id,
+      name: `${original.name} (Copy)`,
+      type: original.type,
+      subject: original.subject,
+      content: original.content,
+      audience: original.audience,
+      status: 'draft',
+      recipientCount: original.recipientCount
+    });
+
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    console.error('Duplicate campaign error:', err);
+    res.status(500).json({ error: 'Failed to duplicate campaign' });
+  }
+});
+
+// Delete campaign
+router.delete('/:id', auth, async (req, res) => {
+  try {
+    const campaign = await Campaign.findOneAndDelete({
+      _id: req.params.id,
+      user: req.user.userId || req.user.id
+    });
+
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete campaign error:', err);
+    res.status(500).json({ error: 'Failed to delete campaign' });
+  }
+});
+
+// ==========================================
+// CONTACT ROUTES
+// ==========================================
+
+// Get contacts
+router.get('/contacts', auth, async (req, res) => {
+  try {
+    const { page = 1, limit = 50 } = req.query;
+
+    const contacts = await Contact.find({ 
+      user: req.user.userId || req.user.id 
+    })
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(parseInt(limit));
+
+    const total = await Contact.countDocuments({ 
+      user: req.user.userId || req.user.id 
+    });
+
+    res.json({ contacts, total });
+  } catch (err) {
+    console.error('Get contacts error:', err);
+    res.status(500).json({ error: 'Failed to fetch contacts' });
   }
 });
 
 // Add contact
-router.post('/contacts', async (req, res) => {
+router.post('/contacts', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const contactData = { ...req.body, userId };
+    const { email, phone, name, tags } = req.body;
 
-    if (contactData.firstName && contactData.lastName) {
-      contactData.fullName = `${contactData.firstName} ${contactData.lastName}`;
+    if (!email && !phone) {
+      return res.status(400).json({ error: 'Email or phone is required' });
     }
 
-    const contact = new Contact(contactData);
-    await contact.save();
+    const contact = await Contact.create({
+      user: req.user.userId || req.user.id,
+      email,
+      phone,
+      name,
+      tags: tags || [],
+      source: 'manual'
+    });
 
-    // Update list count
-    if (contactData.listId) {
-      await ContactList.findByIdAndUpdate(contactData.listId, { $inc: { contactCount: 1 } });
-    }
-
-    res.json({ contact });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ ok: true, contact });
+  } catch (err) {
+    console.error('Add contact error:', err);
+    res.status(500).json({ error: 'Failed to add contact' });
   }
 });
 
-// Import contacts
-router.post('/contacts/import', async (req, res) => {
+// Import contacts (bulk)
+router.post('/contacts/import', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { listId, contacts } = req.body;
+    const { contacts } = req.body;
 
-    const contactDocs = contacts.map(c => ({
-      ...c,
-      userId,
-      listId,
-      fullName: c.firstName && c.lastName ? `${c.firstName} ${c.lastName}` : c.fullName
-    }));
-
-    const result = await Contact.insertMany(contactDocs, { ordered: false });
-
-    // Update list count
-    if (listId) {
-      await ContactList.findByIdAndUpdate(listId, { $inc: { contactCount: result.length } });
+    if (!contacts || !Array.isArray(contacts)) {
+      return res.status(400).json({ error: 'Contacts array is required' });
     }
 
-    res.json({ imported: result.length, message: `${result.length} contacts imported` });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    const userId = req.user.userId || req.user.id;
+    
+    const toInsert = contacts.map(c => ({
+      user: userId,
+      email: c.email,
+      phone: c.phone,
+      name: c.name,
+      tags: c.tags || [],
+      source: 'import'
+    }));
+
+    await Contact.insertMany(toInsert, { ordered: false });
+
+    res.json({ ok: true, imported: toInsert.length });
+  } catch (err) {
+    console.error('Import contacts error:', err);
+    res.status(500).json({ error: 'Failed to import contacts' });
   }
 });
 

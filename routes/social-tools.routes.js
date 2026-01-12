@@ -1,780 +1,330 @@
-/**
- * Social Tools Routes - Facebook Automation
- * CYBEV Studio v2.0
- * GitHub: https://github.com/cybev1/cybev-backend/routes/social-tools.routes.js
- * 
- * Features:
- * - Account management (with encrypted credentials)
- * - Data scraping (search, followers, friends, groups)
- * - Auto engagement (like, comment, follow, friend request)
- * - Messaging (individual and bulk)
- * - Audience management
- * - Analytics
- */
+// ============================================
+// FILE: routes/social-tools.routes.js
+// Social Media Automation Routes
+// VERSION: 1.0.0 - NEW FEATURE
+// ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
-// ============================================
-// ENCRYPTION CONFIGURATION
-// ============================================
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'cYb3v2026S3cur3K3y@Fb4ut0m4t10n!';
-const IV_LENGTH = 16;
+// Simple auth middleware
+const auth = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
-function encrypt(text) {
-  const iv = crypto.randomBytes(IV_LENGTH);
+// Encryption for credentials
+const ENCRYPTION_KEY = process.env.SOCIAL_ENCRYPTION_KEY || 'cYb3v2026S3cur3K3y@Fb4ut0m4t10n!';
+const ALGORITHM = 'aes-256-cbc';
+
+const encrypt = (text) => {
   const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
-  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
   let encrypted = cipher.update(text, 'utf8', 'hex');
   encrypted += cipher.final('hex');
   return iv.toString('hex') + ':' + encrypted;
-}
+};
 
-function decrypt(text) {
+const decrypt = (text) => {
   try {
+    const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
     const [ivHex, encrypted] = text.split(':');
     const iv = Buffer.from(ivHex, 'hex');
-    const key = crypto.scryptSync(ENCRYPTION_KEY, 'salt', 32);
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+    const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
     let decrypted = decipher.update(encrypted, 'hex', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
-  } catch {
+  } catch (err) {
     return null;
   }
-}
-
-// ============================================
-// SCHEMAS
-// ============================================
+};
 
 // Social Account Schema
 const socialAccountSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  platform: { type: String, enum: ['facebook', 'instagram', 'twitter', 'linkedin'], default: 'facebook' },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  platform: { type: String, enum: ['facebook', 'instagram', 'twitter'], required: true },
   email: { type: String, required: true },
-  encryptedPassword: String,
-  encryptedCookies: String,
-  encryptedToken: String,
-  profileName: String,
-  profileUrl: String,
-  profilePicture: String,
-  isActive: { type: Boolean, default: true },
-  isVerified: { type: Boolean, default: false },
+  passwordEncrypted: { type: String, required: true },
+  status: { type: String, enum: ['active', 'inactive', 'error'], default: 'active' },
   lastUsed: Date,
-  stats: {
-    friendsSent: { type: Number, default: 0 },
-    messagesSent: { type: Number, default: 0 },
-    postsLiked: { type: Number, default: 0 },
-    commentsPosted: { type: Number, default: 0 },
-    profilesScraped: { type: Number, default: 0 }
-  },
-  createdAt: { type: Date, default: Date.now }
-});
+  cookies: String,
+}, { timestamps: true });
 
-// Audience Schema
-const audienceSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'SocialAccount' },
-  platform: { type: String, default: 'facebook' },
+const SocialAccount = mongoose.models.SocialAccount || mongoose.model('SocialAccount', socialAccountSchema);
+
+// Social Job Schema
+const socialJobSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  account: { type: mongoose.Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
+  type: { type: String, required: true },
+  config: mongoose.Schema.Types.Mixed,
+  status: { type: String, enum: ['pending', 'running', 'completed', 'failed'], default: 'pending' },
+  progress: { type: Number, default: 0 },
+  result: mongoose.Schema.Types.Mixed,
+  error: String,
+}, { timestamps: true });
+
+const SocialJob = mongoose.models.SocialJob || mongoose.model('SocialJob', socialJobSchema);
+
+// Audience Data Schema
+const audienceDataSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  platform: String,
   profileId: String,
   name: String,
-  profileUrl: String,
-  profilePicture: String,
   email: String,
   phone: String,
   location: String,
-  bio: String,
-  occupation: String,
-  isFriend: { type: Boolean, default: false },
-  isFollower: { type: Boolean, default: false },
-  isFollowing: { type: Boolean, default: false },
-  mutualFriends: { type: Number, default: 0 },
+  source: String,
   tags: [String],
-  source: String, // 'search', 'followers', 'friends', 'group', etc.
-  sourceDetails: String,
-  lastInteraction: Date,
-  createdAt: { type: Date, default: Date.now }
-});
+}, { timestamps: true });
 
-// Automation Schema
-const automationSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
-  name: { type: String, required: true },
-  type: { 
-    type: String, 
-    enum: ['auto_like', 'auto_comment', 'auto_follow', 'auto_friend_request', 'auto_message'],
-    required: true 
-  },
-  trigger: {
-    type: { type: String, enum: ['audience', 'hashtag', 'new_follower', 'schedule'] },
-    value: String,
-    filters: {
-      location: String,
-      isFriend: Boolean,
-      isFollower: Boolean,
-      mutualFriendsMin: Number
-    }
-  },
-  action: {
-    templates: [String], // Comment/message templates
-    delay: { min: Number, max: Number } // Random delay in seconds
-  },
-  limits: {
-    perHour: { type: Number, default: 20 },
-    perDay: { type: Number, default: 100 }
-  },
-  stats: {
-    executed: { type: Number, default: 0 },
-    successful: { type: Number, default: 0 },
-    failed: { type: Number, default: 0 }
-  },
-  isActive: { type: Boolean, default: true },
-  lastRun: Date,
-  nextRun: Date,
-  createdAt: { type: Date, default: Date.now }
-});
+const AudienceData = mongoose.models.AudienceData || mongoose.model('AudienceData', audienceDataSchema);
 
-// Job Schema
-const socialJobSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
-  type: { type: String, required: true },
-  data: { type: Object, default: {} },
-  status: { type: String, enum: ['pending', 'processing', 'completed', 'failed', 'cancelled'], default: 'pending' },
-  result: Object,
-  error: String,
-  attempts: { type: Number, default: 0 },
-  progress: { type: Number, default: 0 },
-  createdAt: { type: Date, default: Date.now },
-  startedAt: Date,
-  completedAt: Date
-});
-
-// Activity Log Schema
-const activityLogSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'SocialAccount' },
-  action: { type: String, required: true },
-  target: String,
-  targetUrl: String,
-  status: { type: String, enum: ['success', 'failed'], default: 'success' },
-  error: String,
-  metadata: Object,
-  createdAt: { type: Date, default: Date.now, expires: 604800 } // Auto-delete after 7 days
-});
-
-// Rate Limit Schema
-const rateLimitSchema = new mongoose.Schema({
-  accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'SocialAccount', required: true },
-  action: { type: String, required: true },
-  hourlyCount: { type: Number, default: 0 },
-  dailyCount: { type: Number, default: 0 },
-  hourlyReset: Date,
-  dailyReset: Date
-});
-
-const SocialAccount = mongoose.models.SocialAccount || mongoose.model('SocialAccount', socialAccountSchema);
-const Audience = mongoose.models.Audience || mongoose.model('Audience', audienceSchema);
-const Automation = mongoose.models.Automation || mongoose.model('Automation', automationSchema);
-const SocialJob = mongoose.models.SocialJob || mongoose.model('SocialJob', socialJobSchema);
-const ActivityLog = mongoose.models.ActivityLog || mongoose.model('ActivityLog', activityLogSchema);
-const RateLimit = mongoose.models.RateLimit || mongoose.model('RateLimit', rateLimitSchema);
-
-// ============================================
-// RATE LIMITS
-// ============================================
-const RATE_LIMITS = {
-  like: { perHour: 30, perDay: 200 },
-  comment: { perHour: 20, perDay: 100 },
-  follow: { perHour: 20, perDay: 50 },
-  friend_request: { perHour: 15, perDay: 30 },
-  message: { perHour: 15, perDay: 50 }
-};
-
-// ============================================
+// ==========================================
 // ACCOUNT ROUTES
-// ============================================
+// ==========================================
 
-// Get all accounts for user
-router.get('/accounts', async (req, res) => {
+// Get all accounts
+router.get('/accounts', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    
-    const accounts = await SocialAccount.find({ userId })
-      .select('-encryptedPassword -encryptedCookies -encryptedToken')
-      .sort({ createdAt: -1 });
+    const accounts = await SocialAccount.find({ 
+      user: req.user.userId || req.user.id 
+    }).select('-passwordEncrypted -cookies');
 
     res.json({ accounts });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Get accounts error:', err);
+    res.status(500).json({ error: 'Failed to fetch accounts' });
   }
 });
 
-// Add new account
-router.post('/accounts', async (req, res) => {
+// Add account
+router.post('/accounts', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { email, password, cookies, platform = 'facebook' } = req.body;
+    const { platform, email, password } = req.body;
 
-    const account = new SocialAccount({
-      userId,
+    if (!platform || !email || !password) {
+      return res.status(400).json({ error: 'Platform, email, and password are required' });
+    }
+
+    // Check if account already exists
+    const existing = await SocialAccount.findOne({
+      user: req.user.userId || req.user.id,
+      platform,
+      email
+    });
+
+    if (existing) {
+      return res.status(400).json({ error: 'Account already exists' });
+    }
+
+    const account = await SocialAccount.create({
+      user: req.user.userId || req.user.id,
       platform,
       email,
-      encryptedPassword: password ? encrypt(password) : undefined,
-      encryptedCookies: cookies ? encrypt(JSON.stringify(cookies)) : undefined
+      passwordEncrypted: encrypt(password),
+      status: 'active'
     });
-
-    await account.save();
-
-    // Create a job to verify the account
-    const job = new SocialJob({
-      userId,
-      accountId: account._id,
-      type: 'verify_account',
-      data: {}
-    });
-    await job.save();
 
     res.json({ 
+      ok: true, 
       account: {
         _id: account._id,
-        email: account.email,
         platform: account.platform,
-        isActive: account.isActive
-      },
-      message: 'Account added. Verification in progress...'
+        email: account.email,
+        status: account.status,
+        createdAt: account.createdAt
+      }
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update account
-router.put('/accounts/:id', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-    const { cookies, isActive } = req.body;
-
-    const account = await SocialAccount.findOne({ _id: id, userId });
-    
-    if (!account) {
-      return res.status(404).json({ error: 'Account not found' });
-    }
-
-    if (cookies) {
-      account.encryptedCookies = encrypt(JSON.stringify(cookies));
-    }
-    if (typeof isActive === 'boolean') {
-      account.isActive = isActive;
-    }
-
-    await account.save();
-
-    res.json({ message: 'Account updated' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Add account error:', err);
+    res.status(500).json({ error: 'Failed to add account' });
   }
 });
 
 // Delete account
-router.delete('/accounts/:id', async (req, res) => {
+router.delete('/accounts/:id', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-
-    await SocialAccount.deleteOne({ _id: id, userId });
-    await Automation.deleteMany({ accountId: id });
-    await SocialJob.deleteMany({ accountId: id });
-
-    res.json({ message: 'Account deleted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// SCRAPING ROUTES
-// ============================================
-
-// Search people
-router.post('/scrape/search', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, query, filters = {}, maxResults = 50 } = req.body;
-
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: 'scrape_search',
-      data: { query, filters, maxResults }
+    const account = await SocialAccount.findOneAndDelete({
+      _id: req.params.id,
+      user: req.user.userId || req.user.id
     });
-    await job.save();
 
-    res.json({ 
-      jobId: job._id,
-      message: 'Search job created',
-      status: 'pending'
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Scrape followers/friends
-router.post('/scrape/:type', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { type } = req.params;
-    const { accountId, profileUrl, maxResults = 100 } = req.body;
-
-    const validTypes = ['followers', 'friends', 'suggestions', 'post_engagers', 'group_members'];
-    if (!validTypes.includes(type)) {
-      return res.status(400).json({ error: 'Invalid scrape type' });
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
     }
 
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: `scrape_${type}`,
-      data: { profileUrl, maxResults }
-    });
-    await job.save();
-
-    res.json({ 
-      jobId: job._id,
-      message: `${type} scrape job created`,
-      status: 'pending'
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete account error:', err);
+    res.status(500).json({ error: 'Failed to delete account' });
   }
 });
 
-// ============================================
-// ENGAGEMENT ROUTES
-// ============================================
+// ==========================================
+// JOB ROUTES
+// ==========================================
 
-// Like a post
-router.post('/engage/like', async (req, res) => {
+// Get all jobs
+router.get('/jobs', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, postUrl } = req.body;
+    const jobs = await SocialJob.find({ 
+      user: req.user.userId || req.user.id 
+    })
+    .sort({ createdAt: -1 })
+    .limit(50)
+    .populate('account', 'platform email');
 
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: 'auto_like',
-      data: { postUrl }
+    res.json({ jobs });
+  } catch (err) {
+    console.error('Get jobs error:', err);
+    res.status(500).json({ error: 'Failed to fetch jobs' });
+  }
+});
+
+// Create job
+router.post('/jobs', auth, async (req, res) => {
+  try {
+    const { accountId, type, config } = req.body;
+
+    if (!accountId || !type) {
+      return res.status(400).json({ error: 'Account and type are required' });
+    }
+
+    // Verify account belongs to user
+    const account = await SocialAccount.findOne({
+      _id: accountId,
+      user: req.user.userId || req.user.id
     });
-    await job.save();
 
-    res.json({ jobId: job._id, status: 'pending' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
 
-// Comment on a post
-router.post('/engage/comment', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, postUrl, comment } = req.body;
-
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: 'auto_comment',
-      data: { postUrl, comment }
-    });
-    await job.save();
-
-    res.json({ jobId: job._id, status: 'pending' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Send friend request
-router.post('/engage/friend-request', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, profileUrl } = req.body;
-
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: 'send_friend_request',
-      data: { profileUrl }
-    });
-    await job.save();
-
-    res.json({ jobId: job._id, status: 'pending' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Follow a profile
-router.post('/engage/follow', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, profileUrl } = req.body;
-
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: 'auto_follow',
-      data: { profileUrl }
-    });
-    await job.save();
-
-    res.json({ jobId: job._id, status: 'pending' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// MESSAGING ROUTES
-// ============================================
-
-// Send message
-router.post('/message/send', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, profileUrl, message } = req.body;
-
-    const job = new SocialJob({
-      userId,
-      accountId,
-      type: 'send_message',
-      data: { profileUrl, message }
-    });
-    await job.save();
-
-    res.json({ jobId: job._id, status: 'pending' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Bulk message
-router.post('/message/bulk', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, audienceIds, messageTemplate } = req.body;
-
-    const jobs = await Promise.all(
-      audienceIds.map(async (audienceId) => {
-        const audience = await Audience.findById(audienceId);
-        if (!audience) return null;
-
-        const job = new SocialJob({
-          userId,
-          accountId,
-          type: 'send_message',
-          data: { 
-            profileUrl: audience.profileUrl, 
-            message: messageTemplate.replace('{name}', audience.name || 'Friend')
-          }
-        });
-        await job.save();
-        return job._id;
-      })
-    );
-
-    res.json({ 
-      jobIds: jobs.filter(Boolean),
-      total: jobs.filter(Boolean).length,
-      status: 'pending'
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// AUTOMATION ROUTES
-// ============================================
-
-// Get automations
-router.get('/automations', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    
-    const automations = await Automation.find({ userId })
-      .populate('accountId', 'email profileName')
-      .sort({ createdAt: -1 });
-
-    res.json({ automations });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Create automation
-router.post('/automations', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { accountId, name, type, trigger, action, limits } = req.body;
-
-    const automation = new Automation({
-      userId,
-      accountId,
-      name,
+    const job = await SocialJob.create({
+      user: req.user.userId || req.user.id,
+      account: accountId,
       type,
-      trigger,
-      action,
-      limits
+      config: config || {},
+      status: 'pending'
     });
 
-    await automation.save();
+    // In production, this would trigger the automation worker
+    // For now, we'll just mark it as pending
 
-    res.json({ automation });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.json({ ok: true, job });
+  } catch (err) {
+    console.error('Create job error:', err);
+    res.status(500).json({ error: 'Failed to create job' });
   }
 });
 
-// Update automation
-router.put('/automations/:id', async (req, res) => {
+// ==========================================
+// STATS ROUTES
+// ==========================================
+
+router.get('/stats', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-    const updates = req.body;
+    const userId = req.user.userId || req.user.id;
 
-    const automation = await Automation.findOneAndUpdate(
-      { _id: id, userId },
-      updates,
-      { new: true }
-    );
+    const [completedJobs, audienceCount] = await Promise.all([
+      SocialJob.find({ user: userId, status: 'completed' }),
+      AudienceData.countDocuments({ user: userId })
+    ]);
 
-    if (!automation) {
-      return res.status(404).json({ error: 'Automation not found' });
-    }
+    // Aggregate stats from completed jobs
+    let friendRequests = 0;
+    let messagesSent = 0;
+    let postsLiked = 0;
 
-    res.json({ automation });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Delete automation
-router.delete('/automations/:id', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-
-    await Automation.deleteOne({ _id: id, userId });
-
-    res.json({ message: 'Automation deleted' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// AUDIENCE ROUTES
-// ============================================
-
-// Get audience
-router.get('/audience', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { page = 1, limit = 50, search, source, tags } = req.query;
-
-    const query = { userId };
-    
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { location: { $regex: search, $options: 'i' } }
-      ];
-    }
-    
-    if (source) query.source = source;
-    if (tags) query.tags = { $in: tags.split(',') };
-
-    const total = await Audience.countDocuments(query);
-    const audience = await Audience.find(query)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
-
-    res.json({ 
-      audience,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
+    completedJobs.forEach(job => {
+      if (job.result) {
+        friendRequests += job.result.friendRequestsSent || 0;
+        messagesSent += job.result.messagesSent || 0;
+        postsLiked += job.result.postsLiked || 0;
       }
     });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+
+    res.json({
+      stats: {
+        friendRequests,
+        messagesSent,
+        postsLiked,
+        audience: audienceCount
+      }
+    });
+  } catch (err) {
+    console.error('Get stats error:', err);
+    res.status(500).json({ error: 'Failed to fetch stats' });
   }
 });
 
-// Export audience to CSV
-router.get('/audience/export', async (req, res) => {
+// ==========================================
+// AUDIENCE ROUTES
+// ==========================================
+
+router.get('/audience', auth, async (req, res) => {
   try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    
-    const audience = await Audience.find({ userId });
-    
-    const csv = [
-      'Name,Profile URL,Email,Phone,Location,Source,Tags,Created At',
-      ...audience.map(a => 
-        `"${a.name || ''}","${a.profileUrl || ''}","${a.email || ''}","${a.phone || ''}","${a.location || ''}","${a.source || ''}","${(a.tags || []).join(';')}","${a.createdAt}"`
-      )
-    ].join('\n');
+    const { page = 1, limit = 50 } = req.query;
+
+    const audience = await AudienceData.find({ 
+      user: req.user.userId || req.user.id 
+    })
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(parseInt(limit));
+
+    const total = await AudienceData.countDocuments({ 
+      user: req.user.userId || req.user.id 
+    });
+
+    res.json({ audience, total, page: parseInt(page), limit: parseInt(limit) });
+  } catch (err) {
+    console.error('Get audience error:', err);
+    res.status(500).json({ error: 'Failed to fetch audience' });
+  }
+});
+
+// Export audience as CSV
+router.get('/audience/export', auth, async (req, res) => {
+  try {
+    const audience = await AudienceData.find({ 
+      user: req.user.userId || req.user.id 
+    });
+
+    // Create CSV
+    const headers = ['Name', 'Email', 'Phone', 'Platform', 'Location', 'Source', 'Created'];
+    const rows = audience.map(a => [
+      a.name || '',
+      a.email || '',
+      a.phone || '',
+      a.platform || '',
+      a.location || '',
+      a.source || '',
+      a.createdAt?.toISOString() || ''
+    ]);
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=audience.csv');
     res.send(csv);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// JOB ROUTES
-// ============================================
-
-// Get jobs
-router.get('/jobs', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { status, limit = 20 } = req.query;
-
-    const query = { userId };
-    if (status) query.status = status;
-
-    const jobs = await SocialJob.find(query)
-      .populate('accountId', 'email profileName')
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
-
-    res.json({ jobs });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get job status
-router.get('/jobs/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    
-    const job = await SocialJob.findById(id)
-      .populate('accountId', 'email profileName');
-
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found' });
-    }
-
-    res.json({ job });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Cancel job
-router.post('/jobs/:id/cancel', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { id } = req.params;
-
-    const job = await SocialJob.findOneAndUpdate(
-      { _id: id, userId, status: 'pending' },
-      { status: 'cancelled' },
-      { new: true }
-    );
-
-    if (!job) {
-      return res.status(404).json({ error: 'Job not found or already processing' });
-    }
-
-    res.json({ job });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ============================================
-// ANALYTICS ROUTES
-// ============================================
-
-// Get analytics
-router.get('/analytics', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { period = '7d' } = req.query;
-
-    // Calculate date range
-    const days = period === '30d' ? 30 : period === '24h' ? 1 : 7;
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - days);
-
-    // Get account stats
-    const accounts = await SocialAccount.find({ userId });
-    const totalStats = accounts.reduce((acc, a) => ({
-      friendsSent: acc.friendsSent + (a.stats?.friendsSent || 0),
-      messagesSent: acc.messagesSent + (a.stats?.messagesSent || 0),
-      postsLiked: acc.postsLiked + (a.stats?.postsLiked || 0),
-      commentsPosted: acc.commentsPosted + (a.stats?.commentsPosted || 0),
-      profilesScraped: acc.profilesScraped + (a.stats?.profilesScraped || 0)
-    }), { friendsSent: 0, messagesSent: 0, postsLiked: 0, commentsPosted: 0, profilesScraped: 0 });
-
-    // Get audience count
-    const audienceCount = await Audience.countDocuments({ userId });
-
-    // Get recent activity
-    const recentActivity = await ActivityLog.find({ userId, createdAt: { $gte: startDate } })
-      .sort({ createdAt: -1 })
-      .limit(50);
-
-    // Get job stats
-    const jobStats = await SocialJob.aggregate([
-      { $match: { userId: new mongoose.Types.ObjectId(userId), createdAt: { $gte: startDate } } },
-      { $group: { _id: '$status', count: { $sum: 1 } } }
-    ]);
-
-    res.json({
-      stats: totalStats,
-      audienceCount,
-      recentActivity,
-      jobStats: jobStats.reduce((acc, j) => ({ ...acc, [j._id]: j.count }), {}),
-      period
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get activity log
-router.get('/activity', async (req, res) => {
-  try {
-    const userId = req.user?._id || req.headers['x-user-id'];
-    const { limit = 50, accountId } = req.query;
-
-    const query = { userId };
-    if (accountId) query.accountId = accountId;
-
-    const activity = await ActivityLog.find(query)
-      .populate('accountId', 'email profileName')
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
-
-    res.json({ activity });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
+  } catch (err) {
+    console.error('Export audience error:', err);
+    res.status(500).json({ error: 'Failed to export audience' });
   }
 });
 
