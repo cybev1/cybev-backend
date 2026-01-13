@@ -319,11 +319,14 @@ router.put('/preferences', verifyToken, async (req, res) => {
 // PROFILE UPDATE ENDPOINTS
 // ==========================================
 
-// PUT /api/users/profile - Update profile
+// PUT /api/users/profile - Update profile (Enhanced for full profile)
 router.put('/profile', verifyToken, async (req, res) => {
   try {
     const User = getUser();
-    const { name, username, bio, socialLinks, location, website } = req.body;
+    const { 
+      name, username, bio, socialLinks, location, website,
+      avatar, coverImage, personalInfo, locationData
+    } = req.body;
     const userId = req.user.id;
 
     // Check if username is taken (if being changed)
@@ -342,12 +345,160 @@ router.put('/profile', verifyToken, async (req, res) => {
     }
 
     const updateData = {};
+    
+    // Basic fields
     if (name) updateData.name = name;
     if (username) updateData.username = username.toLowerCase();
     if (bio !== undefined) updateData.bio = bio;
     if (location !== undefined) updateData.location = location;
     if (website !== undefined) updateData.website = website;
+    if (avatar !== undefined) updateData.avatar = avatar;
+    if (coverImage !== undefined) updateData.coverImage = coverImage;
     if (socialLinks) updateData.socialLinks = socialLinks;
+    
+    // Personal Info (Facebook-like extended profile)
+    if (personalInfo) {
+      // Handle nested personalInfo fields
+      const personalInfoUpdate = {};
+      const allowedPersonalFields = [
+        'firstName', 'lastName', 'middleName', 'nickname',
+        'dateOfBirth', 'gender', 'pronouns',
+        'phone', 'alternateEmail',
+        'currentCity', 'currentCountry', 'hometown', 'hometownCountry',
+        'occupation', 'company', 'jobTitle', 'industry',
+        'education', 'school', 'graduationYear',
+        'relationshipStatus',
+        'interests', 'skills', 'languages',
+        'aboutMe', 'religion', 'politicalViews',
+        'favoriteQuote', 'favoriteMusic', 'favoriteMovies', 'favoriteBooks', 'favoriteSports',
+        'visibility'
+      ];
+      
+      for (const field of allowedPersonalFields) {
+        if (personalInfo[field] !== undefined) {
+          personalInfoUpdate[`personalInfo.${field}`] = personalInfo[field];
+        }
+      }
+      
+      Object.assign(updateData, personalInfoUpdate);
+    }
+    
+    // Location Data (for registration location tracking)
+    if (locationData) {
+      const locationDataUpdate = {};
+      const allowedLocationFields = [
+        'providedCountry', 'providedCity', 'providedLocation',
+        'detectedCountry', 'detectedCity', 'detectedRegion',
+        'detectedIP', 'detectedTimezone', 'detectedAt',
+        'locationType', 'locationMatches', 'coordinates'
+      ];
+      
+      for (const field of allowedLocationFields) {
+        if (locationData[field] !== undefined) {
+          locationDataUpdate[`locationData.${field}`] = locationData[field];
+        }
+      }
+      
+      Object.assign(updateData, locationDataUpdate);
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: updateData },
+      { new: true, select: '-password' }
+    );
+
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    res.json({
+      ok: true,
+      success: true,
+      message: 'Profile updated',
+      user
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to update profile' });
+  }
+});
+
+// PUT /api/users/update-profile - Alias for /profile
+router.put('/update-profile', verifyToken, async (req, res) => {
+  try {
+    const User = getUser();
+    const { 
+      name, username, bio, socialLinks, location, website,
+      avatar, coverImage, personalInfo, locationData
+    } = req.body;
+    const userId = req.user.id;
+
+    // Check if username is taken (if being changed)
+    if (username) {
+      const existingUser = await User.findOne({ 
+        username: username.toLowerCase(),
+        _id: { $ne: userId }
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: 'Username is already taken' 
+        });
+      }
+    }
+
+    const updateData = {};
+    
+    // Basic fields
+    if (name) updateData.name = name;
+    if (username) updateData.username = username.toLowerCase();
+    if (bio !== undefined) updateData.bio = bio;
+    if (location !== undefined) updateData.location = location;
+    if (website !== undefined) updateData.website = website;
+    if (avatar !== undefined) updateData.avatar = avatar;
+    if (coverImage !== undefined) updateData.coverImage = coverImage;
+    if (socialLinks) updateData.socialLinks = socialLinks;
+    
+    // Personal Info
+    if (personalInfo) {
+      const allowedPersonalFields = [
+        'firstName', 'lastName', 'middleName', 'nickname',
+        'dateOfBirth', 'gender', 'pronouns',
+        'phone', 'alternateEmail',
+        'currentCity', 'currentCountry', 'hometown', 'hometownCountry',
+        'occupation', 'company', 'jobTitle', 'industry',
+        'education', 'school', 'graduationYear',
+        'relationshipStatus',
+        'interests', 'skills', 'languages',
+        'aboutMe', 'religion', 'politicalViews',
+        'favoriteQuote', 'favoriteMusic', 'favoriteMovies', 'favoriteBooks', 'favoriteSports',
+        'visibility'
+      ];
+      
+      for (const field of allowedPersonalFields) {
+        if (personalInfo[field] !== undefined) {
+          updateData[`personalInfo.${field}`] = personalInfo[field];
+        }
+      }
+    }
+    
+    // Location Data
+    if (locationData) {
+      const allowedLocationFields = [
+        'providedCountry', 'providedCity', 'providedLocation',
+        'detectedCountry', 'detectedCity', 'detectedRegion',
+        'detectedIP', 'detectedTimezone', 'detectedAt',
+        'locationType', 'locationMatches', 'coordinates'
+      ];
+      
+      for (const field of allowedLocationFields) {
+        if (locationData[field] !== undefined) {
+          updateData[`locationData.${field}`] = locationData[field];
+        }
+      }
+    }
 
     const user = await User.findByIdAndUpdate(
       userId,

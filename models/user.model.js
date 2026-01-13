@@ -202,6 +202,79 @@ const userSchema = new mongoose.Schema({
   },
   
   // ==========================================
+  // ENHANCED: Personal Information (Facebook-like)
+  // ==========================================
+  personalInfo: {
+    // Basic Info
+    firstName: { type: String, default: '' },
+    lastName: { type: String, default: '' },
+    middleName: { type: String, default: '' },
+    nickname: { type: String, default: '' },
+    
+    // Birth & Gender
+    dateOfBirth: { type: Date },
+    gender: { 
+      type: String, 
+      enum: ['male', 'female', 'other', 'prefer_not_to_say', ''],
+      default: '' 
+    },
+    pronouns: { type: String, default: '' }, // he/him, she/her, they/them, etc.
+    
+    // Contact
+    phone: { type: String, default: '' },
+    alternateEmail: { type: String, default: '' },
+    
+    // Places
+    currentCity: { type: String, default: '' },
+    currentCountry: { type: String, default: '' },
+    hometown: { type: String, default: '' },
+    hometownCountry: { type: String, default: '' },
+    
+    // Work & Education
+    occupation: { type: String, default: '' },
+    company: { type: String, default: '' },
+    jobTitle: { type: String, default: '' },
+    industry: { type: String, default: '' },
+    education: { type: String, default: '' },
+    school: { type: String, default: '' },
+    graduationYear: { type: Number },
+    
+    // Relationship
+    relationshipStatus: {
+      type: String,
+      enum: ['single', 'in_relationship', 'engaged', 'married', 'complicated', 'open', 'widowed', 'separated', 'divorced', 'prefer_not_to_say', ''],
+      default: ''
+    },
+    
+    // Interests & About
+    interests: [{ type: String }],
+    skills: [{ type: String }],
+    languages: [{ type: String }],
+    aboutMe: { type: String, maxlength: 2000, default: '' },
+    
+    // Religious & Political (optional)
+    religion: { type: String, default: '' },
+    politicalViews: { type: String, default: '' },
+    
+    // Favorites
+    favoriteQuote: { type: String, maxlength: 500, default: '' },
+    favoriteMusic: { type: String, default: '' },
+    favoriteMovies: { type: String, default: '' },
+    favoriteBooks: { type: String, default: '' },
+    favoriteSports: { type: String, default: '' },
+    
+    // Privacy settings for each field
+    visibility: {
+      dateOfBirth: { type: String, enum: ['public', 'friends', 'only_me'], default: 'friends' },
+      phone: { type: String, enum: ['public', 'friends', 'only_me'], default: 'only_me' },
+      email: { type: String, enum: ['public', 'friends', 'only_me'], default: 'friends' },
+      location: { type: String, enum: ['public', 'friends', 'only_me'], default: 'public' },
+      relationshipStatus: { type: String, enum: ['public', 'friends', 'only_me'], default: 'friends' },
+      workplace: { type: String, enum: ['public', 'friends', 'only_me'], default: 'public' }
+    }
+  },
+  
+  // ==========================================
   // Social Links
   // ==========================================
   socialLinks: {
@@ -211,7 +284,18 @@ const userSchema = new mongoose.Schema({
     website: String,
     instagram: String,
     youtube: String,
-    tiktok: String
+    tiktok: String,
+    facebook: String,
+    discord: String,
+    telegram: String,
+    whatsapp: String,
+    snapchat: String,
+    pinterest: String,
+    reddit: String,
+    medium: String,
+    substack: String,
+    twitch: String,
+    spotify: String
   },
   
   // ==========================================
