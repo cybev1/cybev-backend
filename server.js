@@ -2,11 +2,11 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.8.2 - Meet, Social Tools, Campaigns, AI, Forms
-// PREVIOUS: 6.8.1 - Added Meet, Social, Campaigns
-// ROLLBACK: If issues, revert to VERSION 6.5.0 or 6.8.1
+// VERSION: 6.8.3 - Added admin-analytics routes, fixed wallet ObjectId
+// PREVIOUS: 6.8.2 - Meet, Social Tools, Campaigns, AI, Forms
+// ROLLBACK: If issues, revert to VERSION 6.8.2
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-12
+// UPDATED: 2026-01-13
 // ============================================
 
 const express = require('express');
@@ -289,6 +289,7 @@ const routes = [
   
   // Admin
   ['admin', '/api/admin', './routes/admin.routes'],
+  ['admin-analytics', '/api/admin-analytics', './routes/admin-analytics.routes'],
   ['admin-charts', '/api/admin/charts', './routes/admin-charts.routes'],
   ['admin-summary', '/api/admin', './routes/admin-summary.routes'],
   ['admin-insight', '/api/admin', './routes/admin-insight.routes'],

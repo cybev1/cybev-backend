@@ -102,7 +102,7 @@ router.get('/', verifyToken, async (req, res) => {
     
     // Calculate stats
     const stats = await Transaction.aggregate([
-      { $match: { user: mongoose.Types.ObjectId(req.user.id), status: 'completed' } },
+      { $match: { user: new mongoose.Types.ObjectId(req.user.id), status: 'completed' } },
       {
         $group: {
           _id: '$type',
