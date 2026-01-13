@@ -240,6 +240,31 @@ const userSchema = new mongoose.Schema({
   },
   
   // ==========================================
+  // Ban Management (for Admin)
+  // ==========================================
+  isBanned: {
+    type: Boolean,
+    default: false
+  },
+  banReason: {
+    type: String,
+    default: null
+  },
+  banExpires: {
+    type: Date,
+    default: null
+  },
+  bannedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+  bannedAt: {
+    type: Date,
+    default: null
+  },
+  
+  // ==========================================
   // Email Verification
   // ==========================================
   isEmailVerified: {

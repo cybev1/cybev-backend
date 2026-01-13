@@ -207,7 +207,7 @@ router.get('/users/list', async (req, res) => {
 
     const [users, total] = await Promise.all([
       User.find(query)
-        .select('name email username avatar role isVerified createdAt lastActive tokenBalance walletBalance')
+        .select('name email username avatar role isVerified isBanned banReason banExpires createdAt lastActive tokenBalance walletBalance status')
         .sort(sortObj)
         .skip((page - 1) * limit)
         .limit(parseInt(limit))
@@ -215,9 +215,15 @@ router.get('/users/list', async (req, res) => {
       User.countDocuments(query)
     ]);
 
+    // Map status to isBanned for backwards compatibility
+    const mappedUsers = users.map(user => ({
+      ...user,
+      isBanned: user.isBanned || user.status === 'suspended'
+    }));
+
     res.json({
       ok: true,
-      users,
+      users: mappedUsers,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -484,8 +490,11 @@ router.post('/users/:userId/ban', async (req, res) => {
     }
 
     user.isBanned = true;
+    user.status = 'suspended';
     user.banReason = reason;
     user.banExpires = duration ? new Date(Date.now() + duration * 24 * 60 * 60 * 1000) : null;
+    user.bannedBy = req.user.id;
+    user.bannedAt = new Date();
     await user.save();
 
     res.json({ ok: true, message: 'User banned', user: { id: user._id, isBanned: true } });
@@ -501,7 +510,14 @@ router.post('/users/:userId/unban', async (req, res) => {
 
     const user = await User.findByIdAndUpdate(
       userId,
-      { isBanned: false, banReason: null, banExpires: null },
+      { 
+        isBanned: false, 
+        status: 'active',
+        banReason: null, 
+        banExpires: null,
+        bannedBy: null,
+        bannedAt: null
+      },
       { new: true }
     );
 
