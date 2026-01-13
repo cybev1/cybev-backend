@@ -191,7 +191,7 @@ router.get('/users/chart', async (req, res) => {
 
 router.get('/users/list', async (req, res) => {
   try {
-    const { page = 1, limit = 20, search, role, sort = 'createdAt', order = 'desc' } = req.query;
+    const { page = 1, limit = 20, search, role, status, sort = 'createdAt', order = 'desc' } = req.query;
 
     const query = {};
     if (search) {
@@ -202,12 +202,18 @@ router.get('/users/list', async (req, res) => {
       ];
     }
     if (role) query.role = role;
+    
+    // Status filter for email verification and ban status
+    if (status === 'banned') query.isBanned = true;
+    if (status === 'verified') query.isEmailVerified = true;
+    if (status === 'unverified') query.isEmailVerified = { $ne: true };
+    if (status === 'active') query.isBanned = { $ne: true };
 
     const sortObj = { [sort]: order === 'asc' ? 1 : -1 };
 
     const [users, total] = await Promise.all([
       User.find(query)
-        .select('name email username avatar role isVerified isBanned banReason banExpires createdAt lastActive tokenBalance walletBalance status')
+        .select('name email username avatar role isVerified isEmailVerified isBanned banReason banExpires createdAt lastActive lastLogin tokenBalance walletBalance status')
         .sort(sortObj)
         .skip((page - 1) * limit)
         .limit(parseInt(limit))
@@ -215,10 +221,18 @@ router.get('/users/list', async (req, res) => {
       User.countDocuments(query)
     ]);
 
+    // Get summary counts
+    const [totalUnverified, totalBanned, totalVerified] = await Promise.all([
+      User.countDocuments({ isEmailVerified: { $ne: true } }),
+      User.countDocuments({ isBanned: true }),
+      User.countDocuments({ isEmailVerified: true })
+    ]);
+
     // Map status to isBanned for backwards compatibility
     const mappedUsers = users.map(user => ({
       ...user,
-      isBanned: user.isBanned || user.status === 'suspended'
+      isBanned: user.isBanned || user.status === 'suspended',
+      isEmailVerified: user.isEmailVerified || false // Ensure this field exists
     }));
 
     res.json({
@@ -229,6 +243,11 @@ router.get('/users/list', async (req, res) => {
         limit: parseInt(limit),
         total,
         pages: Math.ceil(total / limit)
+      },
+      summary: {
+        totalUnverified,
+        totalBanned,
+        totalVerified
       }
     });
   } catch (error) {
@@ -576,6 +595,145 @@ router.post('/users/:userId/role', async (req, res) => {
   } catch (error) {
     console.error('Update role error:', error);
     res.status(500).json({ ok: false, error: 'Failed to update role' });
+  }
+});
+
+// ==========================================
+// SEND VERIFICATION REMINDER
+// ==========================================
+
+router.post('/users/:userId/send-verification-reminder', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const crypto = require('crypto');
+    const sendEmail = require('../utils/sendEmail');
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    if (user.isEmailVerified) {
+      return res.status(400).json({ ok: false, error: 'User email is already verified' });
+    }
+
+    // Generate new verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationTokenHash = crypto
+      .createHash('sha256')
+      .update(verificationToken)
+      .digest('hex');
+
+    user.emailVerificationToken = verificationTokenHash;
+    user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+    await user.save();
+
+    // Send reminder email
+    const verificationUrl = `${process.env.FRONTEND_URL || 'https://cybev.io'}/auth/verify-email?token=${verificationToken}`;
+    
+    await sendEmail({
+      to: user.email,
+      subject: '⚠️ Action Required: Verify Your CYBEV Email',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h1 style="color: #F59E0B;">Verify Your Email</h1>
+          <p>Hi ${user.name},</p>
+          <p>We noticed you haven't verified your email address yet. Please verify to unlock all CYBEV features:</p>
+          <ul>
+            <li>✅ Create and publish content</li>
+            <li>✅ Earn tokens and rewards</li>
+            <li>✅ Access premium features</li>
+            <li>✅ Connect with the community</li>
+          </ul>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${verificationUrl}" style="background: linear-gradient(to right, #8B5CF6, #EC4899); color: white; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold; display: inline-block;">
+              Verify My Email
+            </a>
+          </div>
+          <p>Or copy this link: <a href="${verificationUrl}">${verificationUrl}</a></p>
+          <p>This link expires in 24 hours.</p>
+          <hr style="margin: 30px 0; border: none; border-top: 1px solid #e5e7eb;">
+          <p style="color: #6b7280; font-size: 14px;">
+            If you didn't create a CYBEV account, please ignore this email.
+          </p>
+        </div>
+      `
+    });
+
+    console.log('📧 Verification reminder sent to:', user.email);
+
+    res.json({ ok: true, message: 'Verification reminder sent' });
+  } catch (error) {
+    console.error('Send verification reminder error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to send reminder' });
+  }
+});
+
+// Bulk send verification reminders
+router.post('/users/send-bulk-verification-reminders', async (req, res) => {
+  try {
+    const crypto = require('crypto');
+    const sendEmail = require('../utils/sendEmail');
+
+    // Find all unverified users
+    const unverifiedUsers = await User.find({ 
+      isEmailVerified: { $ne: true },
+      email: { $exists: true, $ne: '' }
+    }).select('name email').limit(100); // Limit to prevent overload
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const user of unverifiedUsers) {
+      try {
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        const verificationTokenHash = crypto
+          .createHash('sha256')
+          .update(verificationToken)
+          .digest('hex');
+
+        await User.findByIdAndUpdate(user._id, {
+          emailVerificationToken: verificationTokenHash,
+          emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000
+        });
+
+        const verificationUrl = `${process.env.FRONTEND_URL || 'https://cybev.io'}/auth/verify-email?token=${verificationToken}`;
+        
+        await sendEmail({
+          to: user.email,
+          subject: '⚠️ Complete Your CYBEV Registration',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h1 style="color: #F59E0B;">Complete Your Registration</h1>
+              <p>Hi ${user.name},</p>
+              <p>You're almost there! Verify your email to start using CYBEV.</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${verificationUrl}" style="background: linear-gradient(to right, #8B5CF6, #EC4899); color: white; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold; display: inline-block;">
+                  Verify Email
+                </a>
+              </div>
+              <p>This link expires in 24 hours.</p>
+            </div>
+          `
+        });
+
+        sent++;
+      } catch (err) {
+        console.error('Failed to send to:', user.email, err.message);
+        failed++;
+      }
+    }
+
+    res.json({ 
+      ok: true, 
+      message: `Sent ${sent} reminders, ${failed} failed`,
+      sent,
+      failed,
+      total: unverifiedUsers.length
+    });
+  } catch (error) {
+    console.error('Bulk reminder error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to send bulk reminders' });
   }
 });
 

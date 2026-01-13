@@ -23,6 +23,81 @@ const isNewIP = (user, currentIP) => {
   return !isTrusted;
 };
 
+// ========== NAME VALIDATION HELPER ==========
+const validateName = (name) => {
+  const errors = [];
+  
+  if (!name || typeof name !== 'string') {
+    return { valid: false, errors: ['Name is required'] };
+  }
+  
+  const trimmedName = name.trim();
+  
+  // Check minimum length (at least 2 characters)
+  if (trimmedName.length < 2) {
+    errors.push('Name must be at least 2 characters long');
+  }
+  
+  // Check maximum length
+  if (trimmedName.length > 50) {
+    errors.push('Name cannot exceed 50 characters');
+  }
+  
+  // Check for at least one letter
+  if (!/[a-zA-Z]/.test(trimmedName)) {
+    errors.push('Name must contain at least one letter');
+  }
+  
+  // Check for excessive numbers (more than 4 digits is suspicious)
+  const digitCount = (trimmedName.match(/\d/g) || []).length;
+  if (digitCount > 4) {
+    errors.push('Name contains too many numbers');
+  }
+  
+  // Check for repetitive characters (e.g., "aaaaaaa", "xxxxxxx")
+  if (/(.)\1{4,}/i.test(trimmedName)) {
+    errors.push('Name contains too many repeated characters');
+  }
+  
+  // Check for keyboard spam patterns (e.g., "asdfgh", "qwerty")
+  const keyboardPatterns = ['qwerty', 'asdfgh', 'zxcvbn', 'qazwsx', 'aaaaaa', 'bbbbbb', '123456', 'abcdef'];
+  const lowerName = trimmedName.toLowerCase();
+  for (const pattern of keyboardPatterns) {
+    if (lowerName.includes(pattern)) {
+      errors.push('Name appears to be invalid or spam');
+      break;
+    }
+  }
+  
+  // Check for common test/fake names
+  const fakeNames = ['test', 'user', 'admin', 'guest', 'demo', 'sample', 'fake', 'null', 'undefined', 'anonymous', 'n/a', 'na', 'none', 'xxx', 'yyy', 'zzz'];
+  if (fakeNames.includes(lowerName)) {
+    errors.push('Please enter your real name');
+  }
+  
+  // Check for only special characters
+  if (/^[^a-zA-Z0-9]+$/.test(trimmedName)) {
+    errors.push('Name must contain letters or numbers');
+  }
+  
+  // Check for excessive special characters (more than 3)
+  const specialCharCount = (trimmedName.match(/[^a-zA-Z0-9\s'-]/g) || []).length;
+  if (specialCharCount > 3) {
+    errors.push('Name contains too many special characters');
+  }
+  
+  // Check for single character (even with numbers)
+  if (trimmedName.replace(/[^a-zA-Z]/g, '').length < 2) {
+    errors.push('Name must have at least 2 letters');
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors,
+    sanitized: trimmedName.replace(/\s+/g, ' ').trim() // Clean up extra spaces
+  };
+};
+
 // ========== REGISTER ==========
 exports.register = async (req, res) => {
   try {
@@ -34,6 +109,44 @@ exports.register = async (req, res) => {
         success: false,
         ok: false,
         message: 'Email and password are required' 
+      });
+    }
+
+    // Validate name quality
+    const nameValidation = validateName(name || username || email.split('@')[0]);
+    if (!nameValidation.valid) {
+      return res.status(400).json({ 
+        success: false,
+        ok: false,
+        message: nameValidation.errors[0], // Return first error
+        errors: nameValidation.errors
+      });
+    }
+
+    // Validate username if provided
+    if (username) {
+      if (username.length < 3) {
+        return res.status(400).json({ 
+          success: false,
+          ok: false,
+          message: 'Username must be at least 3 characters long'
+        });
+      }
+      if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+        return res.status(400).json({ 
+          success: false,
+          ok: false,
+          message: 'Username can only contain letters, numbers, and underscores'
+        });
+      }
+    }
+
+    // Validate password strength
+    if (password.length < 6) {
+      return res.status(400).json({ 
+        success: false,
+        ok: false,
+        message: 'Password must be at least 6 characters long'
       });
     }
 
@@ -69,12 +182,13 @@ exports.register = async (req, res) => {
     // Get IP for security tracking
     const clientIP = getClientIP(req);
 
-    // Create user - pre-save hook will hash the password
+    // Create user with sanitized name
     const user = await User.create({
-      name: name || username || email.split('@')[0],
+      name: nameValidation.sanitized,
       email,
       username: username || email.split('@')[0],
-      password: password, // Pre-save hook will hash this
+      password: password,
+      isEmailVerified: false, // Explicitly set to false
       emailVerificationToken: verificationTokenHash,
       emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
       lastKnownIP: clientIP,
