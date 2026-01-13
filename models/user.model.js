@@ -62,6 +62,39 @@ const userSchema = new mongoose.Schema({
   },
   
   // ==========================================
+  // ENHANCED: Detailed Location Data
+  // ==========================================
+  locationData: {
+    // User-provided location (from registration form)
+    providedCountry: { type: String, default: '' },
+    providedCity: { type: String, default: '' },
+    providedLocation: { type: String, default: '' }, // Combined for display
+    
+    // Device-detected location (from IP geolocation)
+    detectedCountry: { type: String, default: '' },
+    detectedCity: { type: String, default: '' },
+    detectedRegion: { type: String, default: '' },
+    detectedIP: { type: String, default: '' },
+    detectedTimezone: { type: String, default: '' },
+    detectedAt: { type: Date },
+    
+    // Location verification status
+    locationType: {
+      type: String,
+      enum: ['verified', 'lived_place', 'unverified', 'mismatch'],
+      default: 'unverified'
+    },
+    // True if user-provided location matches detected location
+    locationMatches: { type: Boolean, default: null },
+    
+    // Coordinates (optional, if available)
+    coordinates: {
+      lat: { type: Number },
+      lng: { type: Number }
+    }
+  },
+  
+  // ==========================================
   // NEW: Website for Profile
   // ==========================================
   website: {

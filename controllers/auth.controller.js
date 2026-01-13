@@ -23,6 +23,59 @@ const isNewIP = (user, currentIP) => {
   return !isTrusted;
 };
 
+// ========== GEOLOCATION HELPER ==========
+const getGeoLocation = async (ip) => {
+  try {
+    // Skip for local IPs
+    if (ip === '127.0.0.1' || ip === 'localhost' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip === 'unknown') {
+      return null;
+    }
+    
+    // Use ip-api.com (free, no API key required, 45 requests/minute)
+    const fetch = require('node-fetch');
+    const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,countryCode,region,regionName,city,zip,lat,lon,timezone`);
+    const data = await response.json();
+    
+    if (data.status === 'success') {
+      return {
+        country: data.country,
+        countryCode: data.countryCode,
+        city: data.city,
+        region: data.regionName,
+        timezone: data.timezone,
+        coordinates: { lat: data.lat, lng: data.lon }
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error('Geolocation error:', error.message);
+    return null;
+  }
+};
+
+// ========== LOCATION MATCH HELPER ==========
+const checkLocationMatch = (provided, detected) => {
+  if (!provided || !detected) return null;
+  
+  const normalizeStr = (str) => str?.toLowerCase().trim().replace(/[^a-z0-9]/g, '') || '';
+  
+  const providedCountry = normalizeStr(provided.country);
+  const detectedCountry = normalizeStr(detected.country);
+  const providedCity = normalizeStr(provided.city);
+  const detectedCity = normalizeStr(detected.city);
+  
+  // Check if countries match
+  const countryMatch = providedCountry === detectedCountry || 
+                       providedCountry === normalizeStr(detected.countryCode);
+  
+  // Check if cities match (or are similar)
+  const cityMatch = providedCity === detectedCity ||
+                    providedCity.includes(detectedCity) ||
+                    detectedCity.includes(providedCity);
+  
+  return countryMatch && cityMatch;
+};
+
 // ========== NAME VALIDATION HELPER ==========
 const validateName = (name) => {
   const errors = [];
@@ -33,34 +86,25 @@ const validateName = (name) => {
   
   const trimmedName = name.trim();
   
-  // Check minimum length (at least 2 characters)
   if (trimmedName.length < 2) {
     errors.push('Name must be at least 2 characters long');
   }
-  
-  // Check maximum length
   if (trimmedName.length > 50) {
     errors.push('Name cannot exceed 50 characters');
   }
-  
-  // Check for at least one letter
   if (!/[a-zA-Z]/.test(trimmedName)) {
     errors.push('Name must contain at least one letter');
   }
   
-  // Check for excessive numbers (more than 4 digits is suspicious)
   const digitCount = (trimmedName.match(/\d/g) || []).length;
   if (digitCount > 4) {
     errors.push('Name contains too many numbers');
   }
-  
-  // Check for repetitive characters (e.g., "aaaaaaa", "xxxxxxx")
   if (/(.)\1{4,}/i.test(trimmedName)) {
     errors.push('Name contains too many repeated characters');
   }
   
-  // Check for keyboard spam patterns (e.g., "asdfgh", "qwerty")
-  const keyboardPatterns = ['qwerty', 'asdfgh', 'zxcvbn', 'qazwsx', 'aaaaaa', 'bbbbbb', '123456', 'abcdef'];
+  const keyboardPatterns = ['qwerty', 'asdfgh', 'zxcvbn', 'qazwsx', 'aaaaaa', '123456', 'abcdef'];
   const lowerName = trimmedName.toLowerCase();
   for (const pattern of keyboardPatterns) {
     if (lowerName.includes(pattern)) {
@@ -69,39 +113,31 @@ const validateName = (name) => {
     }
   }
   
-  // Check for common test/fake names
   const fakeNames = ['test', 'user', 'admin', 'guest', 'demo', 'sample', 'fake', 'null', 'undefined', 'anonymous', 'n/a', 'na', 'none', 'xxx', 'yyy', 'zzz'];
   if (fakeNames.includes(lowerName)) {
     errors.push('Please enter your real name');
   }
   
-  // Check for only special characters
   if (/^[^a-zA-Z0-9]+$/.test(trimmedName)) {
     errors.push('Name must contain letters or numbers');
   }
   
-  // Check for excessive special characters (more than 3)
-  const specialCharCount = (trimmedName.match(/[^a-zA-Z0-9\s'-]/g) || []).length;
-  if (specialCharCount > 3) {
-    errors.push('Name contains too many special characters');
-  }
-  
-  // Check for single character (even with numbers)
-  if (trimmedName.replace(/[^a-zA-Z]/g, '').length < 2) {
+  const letterCount = trimmedName.replace(/[^a-zA-Z]/g, '').length;
+  if (letterCount < 2) {
     errors.push('Name must have at least 2 letters');
   }
   
   return {
     valid: errors.length === 0,
     errors,
-    sanitized: trimmedName.replace(/\s+/g, ' ').trim() // Clean up extra spaces
+    sanitized: trimmedName.replace(/\s+/g, ' ').trim()
   };
 };
 
 // ========== REGISTER ==========
 exports.register = async (req, res) => {
   try {
-    const { name, email, username, password } = req.body;
+    const { name, email, username, password, country, city } = req.body;
 
     // Validation
     if (!email || !password) {
@@ -118,7 +154,7 @@ exports.register = async (req, res) => {
       return res.status(400).json({ 
         success: false,
         ok: false,
-        message: nameValidation.errors[0], // Return first error
+        message: nameValidation.errors[0],
         errors: nameValidation.errors
       });
     }
@@ -181,22 +217,58 @@ exports.register = async (req, res) => {
 
     // Get IP for security tracking
     const clientIP = getClientIP(req);
+    
+    // Detect location from IP
+    const detectedLocation = await getGeoLocation(clientIP);
+    
+    // Check if provided location matches detected location
+    const providedLocation = { country, city };
+    const locationMatches = checkLocationMatch(providedLocation, detectedLocation);
+    
+    // Determine location type
+    let locationType = 'unverified';
+    if (locationMatches === true) {
+      locationType = 'verified';
+    } else if (locationMatches === false && country && city) {
+      locationType = 'lived_place'; // User provided different location - mark as lived place
+    } else if (detectedLocation && !country && !city) {
+      locationType = 'unverified';
+    }
 
-    // Create user with sanitized name
+    // Build location data
+    const locationData = {
+      providedCountry: country || '',
+      providedCity: city || '',
+      providedLocation: country && city ? `${city}, ${country}` : (country || city || ''),
+      detectedCountry: detectedLocation?.country || '',
+      detectedCity: detectedLocation?.city || '',
+      detectedRegion: detectedLocation?.region || '',
+      detectedIP: clientIP,
+      detectedTimezone: detectedLocation?.timezone || '',
+      detectedAt: detectedLocation ? new Date() : null,
+      locationType,
+      locationMatches,
+      coordinates: detectedLocation?.coordinates || {}
+    };
+
+    // Create user with sanitized name and location
     const user = await User.create({
       name: nameValidation.sanitized,
       email,
       username: username || email.split('@')[0],
       password: password,
-      isEmailVerified: false, // Explicitly set to false
+      isEmailVerified: false,
+      location: locationData.providedLocation || `${detectedLocation?.city || ''}, ${detectedLocation?.country || ''}`.replace(/^, |, $/g, ''),
+      locationData,
       emailVerificationToken: verificationTokenHash,
-      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000,
       lastKnownIP: clientIP,
       trustedIPs: [{ ip: clientIP }],
       loginHistory: [{
         ip: clientIP,
         userAgent: req.headers['user-agent'],
-        timestamp: new Date()
+        timestamp: new Date(),
+        location: detectedLocation ? `${detectedLocation.city}, ${detectedLocation.country}` : ''
       }]
     });
 

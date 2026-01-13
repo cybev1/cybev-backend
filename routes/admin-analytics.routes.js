@@ -820,4 +820,217 @@ router.get('/system/health', async (req, res) => {
   }
 });
 
+// ==========================================
+// DATA QUALITY - NAME AUDITING
+// ==========================================
+
+// Name validation helper
+const validateNameQuality = (name) => {
+  const issues = [];
+  if (!name || typeof name !== 'string') return { score: 0, issues: ['Empty name'], severity: 'critical' };
+  
+  const trimmedName = name.trim();
+  let score = 100;
+  
+  if (trimmedName.length < 2) { issues.push('Too short'); score -= 30; }
+  if (/^\d+/.test(trimmedName)) { issues.push('Starts with numbers'); score -= 20; }
+  if (/^\d{10,}/.test(trimmedName.replace(/\s/g, ''))) { issues.push('Phone number'); score -= 40; }
+  if (!/[a-zA-Z]/.test(trimmedName)) { issues.push('No letters'); score -= 40; }
+  
+  const digitCount = (trimmedName.match(/\d/g) || []).length;
+  if (digitCount > 4) { issues.push(`${digitCount} digits`); score -= 15; }
+  if (/(.)\1{4,}/i.test(trimmedName)) { issues.push('Repeated chars'); score -= 25; }
+  
+  const fakeNames = ['test', 'user', 'admin', 'guest', 'demo', 'sample', 'fake', 'null', 'undefined', 'anonymous', 'n/a', 'none', 'xxx', 'yyy', 'zzz'];
+  if (fakeNames.includes(trimmedName.toLowerCase())) { issues.push('Fake name'); score -= 40; }
+  
+  const letterCount = (trimmedName.match(/[a-zA-Z]/g) || []).length;
+  if (letterCount < 2) { issues.push(`${letterCount} letter(s)`); score -= 25; }
+  
+  score = Math.max(0, score);
+  return { score, issues, severity: score >= 80 ? 'good' : score >= 50 ? 'warning' : 'critical' };
+};
+
+// Get users with low-quality names
+router.get('/data-quality/flagged-names', async (req, res) => {
+  try {
+    const { severity = 'all', page = 1, limit = 50 } = req.query;
+
+    // Fetch all users and analyze names
+    const allUsers = await User.find({})
+      .select('name email username avatar isEmailVerified createdAt nameQualityScore flaggedForReview')
+      .lean();
+
+    const analyzed = allUsers.map(user => {
+      const validation = validateNameQuality(user.name);
+      return { ...user, ...validation };
+    });
+
+    // Filter by severity
+    let filtered = analyzed;
+    if (severity === 'critical') filtered = analyzed.filter(u => u.severity === 'critical');
+    else if (severity === 'warning') filtered = analyzed.filter(u => u.severity === 'warning');
+    else if (severity === 'flagged') filtered = analyzed.filter(u => u.severity !== 'good');
+
+    // Sort by score (worst first)
+    filtered.sort((a, b) => a.score - b.score);
+
+    // Paginate
+    const startIndex = (page - 1) * limit;
+    const paginated = filtered.slice(startIndex, startIndex + parseInt(limit));
+
+    // Summary
+    const summary = {
+      total: allUsers.length,
+      critical: analyzed.filter(u => u.severity === 'critical').length,
+      warning: analyzed.filter(u => u.severity === 'warning').length,
+      good: analyzed.filter(u => u.severity === 'good').length
+    };
+
+    res.json({
+      ok: true,
+      users: paginated,
+      summary,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: filtered.length,
+        pages: Math.ceil(filtered.length / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Flagged names error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to fetch flagged names' });
+  }
+});
+
+// Update user name (admin override)
+router.post('/data-quality/update-name/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { name } = req.body;
+
+    if (!name || name.trim().length < 2) {
+      return res.status(400).json({ ok: false, error: 'Name must be at least 2 characters' });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { 
+        name: name.trim(),
+        nameQualityScore: 100,
+        nameQualityIssues: [],
+        flaggedForReview: false
+      },
+      { new: true }
+    ).select('name username email');
+
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    res.json({ ok: true, message: 'Name updated', user });
+  } catch (error) {
+    console.error('Update name error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to update name' });
+  }
+});
+
+// Request user to update their name (sends email)
+router.post('/data-quality/request-name-update/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const sendEmail = require('../utils/sendEmail');
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    await sendEmail({
+      to: user.email,
+      subject: '📝 Please Update Your CYBEV Profile Name',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h1 style="color: #8B5CF6;">Update Your Profile Name</h1>
+          <p>Hi there,</p>
+          <p>We noticed your profile name on CYBEV may need updating. To help build a great community, we ask that all users have a proper display name.</p>
+          <p><strong>Current name:</strong> ${user.name}</p>
+          <p>Please update your profile with your real name or a proper display name.</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${process.env.FRONTEND_URL || 'https://cybev.io'}/settings/profile" style="background: linear-gradient(to right, #8B5CF6, #EC4899); color: white; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold; display: inline-block;">
+              Update My Profile
+            </a>
+          </div>
+          <p style="color: #6b7280; font-size: 14px;">
+            Thank you for being part of the CYBEV community!
+          </p>
+        </div>
+      `
+    });
+
+    // Mark user as notified
+    await User.findByIdAndUpdate(userId, {
+      nameUpdateRequestedAt: new Date()
+    });
+
+    res.json({ ok: true, message: 'Name update request sent' });
+  } catch (error) {
+    console.error('Request name update error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to send request' });
+  }
+});
+
+// Bulk request name updates for all flagged users
+router.post('/data-quality/bulk-request-name-updates', async (req, res) => {
+  try {
+    const sendEmail = require('../utils/sendEmail');
+    
+    // Get all users with bad names
+    const allUsers = await User.find({}).select('name email').lean();
+    
+    const flaggedUsers = allUsers.filter(user => {
+      const validation = validateNameQuality(user.name);
+      return validation.severity !== 'good';
+    });
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const user of flaggedUsers.slice(0, 50)) { // Limit to 50
+      try {
+        await sendEmail({
+          to: user.email,
+          subject: '📝 Please Update Your CYBEV Profile Name',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h1 style="color: #8B5CF6;">Update Your Profile</h1>
+              <p>Please update your profile name to continue enjoying CYBEV.</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${process.env.FRONTEND_URL || 'https://cybev.io'}/settings/profile" style="background: linear-gradient(to right, #8B5CF6, #EC4899); color: white; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold; display: inline-block;">
+                  Update Profile
+                </a>
+              </div>
+            </div>
+          `
+        });
+        sent++;
+      } catch {
+        failed++;
+      }
+    }
+
+    res.json({ 
+      ok: true, 
+      message: `Sent ${sent} requests, ${failed} failed`,
+      sent,
+      failed,
+      total: flaggedUsers.length
+    });
+  } catch (error) {
+    console.error('Bulk request error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to send bulk requests' });
+  }
+});
+
 module.exports = router;
