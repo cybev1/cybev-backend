@@ -1,6 +1,6 @@
 // ============================================
 // FILE: routes/blog.routes.js
-// UPDATED: View throttling + Share fix
+// UPDATED: View throttling + Share fix + AI Generate
 // ============================================
 
 const express = require('express');
@@ -11,12 +11,89 @@ const requireEmailVerification = require('../middleware/requireEmailVerification
 const { createNotification } = require('../utils/notifications');
 
 // ========================================
+// AI BLOG GENERATION CONFIG
+// ========================================
+const AI_PROVIDERS = {
+  deepseek: {
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    apiKey: process.env.DEEPSEEK_API_KEY
+  },
+  openai: {
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    apiKey: process.env.OPENAI_API_KEY
+  },
+  claude: {
+    name: 'Claude',
+    baseUrl: 'https://api.anthropic.com/v1',
+    model: 'claude-3-haiku-20240307',
+    apiKey: process.env.ANTHROPIC_API_KEY
+  }
+};
+
+async function generateWithAI(prompt, options = {}) {
+  const providerOrder = ['deepseek', 'openai', 'claude'];
+  
+  for (const providerKey of providerOrder) {
+    const provider = AI_PROVIDERS[providerKey];
+    if (!provider.apiKey) continue;
+    
+    try {
+      if (providerKey === 'claude') {
+        const response = await fetch(`${provider.baseUrl}/messages`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': provider.apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            max_tokens: options.maxTokens || 4096,
+            messages: [{ role: 'user', content: prompt }]
+          })
+        });
+        if (!response.ok) throw new Error(`Claude error: ${response.status}`);
+        const data = await response.json();
+        return data.content[0].text;
+      } else {
+        const response = await fetch(`${provider.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${provider.apiKey}`
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            max_tokens: options.maxTokens || 4096,
+            temperature: options.temperature || 0.7,
+            messages: [
+              { role: 'system', content: options.systemPrompt || 'You are a professional blog writer.' },
+              { role: 'user', content: prompt }
+            ]
+          })
+        });
+        if (!response.ok) throw new Error(`${providerKey} error: ${response.status}`);
+        const data = await response.json();
+        return data.choices[0].message.content;
+      }
+    } catch (error) {
+      console.error(`AI provider ${providerKey} failed:`, error.message);
+      continue;
+    }
+  }
+  return null;
+}
+
+// ========================================
 // VIEW TRACKING - Prevent duplicate views
 // ========================================
-const viewedBlogs = new Map(); // Store: "ip:blogId" -> timestamp
-const VIEW_COOLDOWN = 30 * 60 * 1000; // 30 minutes between view counts from same IP
+const viewedBlogs = new Map();
+const VIEW_COOLDOWN = 30 * 60 * 1000;
 
-// Clean up old entries every hour
 setInterval(() => {
   const now = Date.now();
   for (const [key, timestamp] of viewedBlogs.entries()) {
@@ -26,7 +103,6 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000);
 
-// Get client IP
 const getClientIP = (req) => {
   return req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 
          req.headers['x-real-ip'] || 
@@ -35,7 +111,6 @@ const getClientIP = (req) => {
          'unknown';
 };
 
-// Check if view should be counted
 const shouldCountView = (req, blogId) => {
   const ip = getClientIP(req);
   const key = `${ip}:${blogId}`;
@@ -47,6 +122,116 @@ const shouldCountView = (req, blogId) => {
   }
   return false;
 };
+
+// ========================================
+// AI BLOG GENERATION ENDPOINT
+// ========================================
+
+router.post('/generate', verifyToken, async (req, res) => {
+  try {
+    const { topic, description, category, tone, length, includeImage, includeSEO, includeHashtags } = req.body;
+
+    if (!topic) {
+      return res.status(400).json({ ok: false, message: 'Topic is required' });
+    }
+
+    console.log('🤖 Generating AI blog for:', topic);
+
+    const wordCount = length === 'short' ? '500-800' : length === 'long' ? '1500-2500' : '800-1200';
+    
+    const prompt = `Write a professional blog post about: "${topic}"
+${description ? `Additional context: ${description}` : ''}
+
+Requirements:
+- Length: ${wordCount} words
+- Tone: ${tone || 'professional'}
+- Category: ${category || 'general'}
+${includeSEO ? '- Include SEO-optimized meta description (150-160 characters)' : ''}
+${includeHashtags ? '- Include 5-8 relevant hashtags' : ''}
+
+Format your response as JSON with these fields:
+{
+  "title": "Compelling blog title",
+  "content": "Full blog content in HTML format with <h2>, <p>, <ul>, <li> tags",
+  "excerpt": "2-3 sentence summary",
+  ${includeSEO ? '"metaDescription": "SEO meta description",' : ''}
+  ${includeHashtags ? '"tags": ["tag1", "tag2", "tag3"],' : ''}
+  "category": "${category || 'general'}"
+}
+
+Write engaging, informative content that provides real value to readers.`;
+
+    const result = await generateWithAI(prompt, {
+      systemPrompt: `You are an expert blog writer and SEO specialist. Write engaging, well-structured content. Always respond with valid JSON.`,
+      maxTokens: 4096,
+      temperature: 0.7
+    });
+
+    if (!result) {
+      // Fallback response if AI fails
+      return res.json({
+        ok: true,
+        blog: {
+          title: `${topic}`,
+          content: `<h2>${topic}</h2><p>Content generation is temporarily unavailable. Please try again later or write your blog manually.</p>`,
+          excerpt: `A blog post about ${topic}.`,
+          category: category || 'general',
+          tags: includeHashtags ? ['blog', 'content', topic.split(' ')[0]?.toLowerCase() || 'article'] : [],
+          metaDescription: includeSEO ? `Learn about ${topic} in this informative article.` : undefined
+        },
+        tokensEarned: 0,
+        generated: false
+      });
+    }
+
+    // Parse the AI response
+    let blog;
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        blog = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('No JSON found');
+      }
+    } catch (parseError) {
+      console.error('Failed to parse AI response:', parseError.message);
+      // Create blog from raw response
+      blog = {
+        title: topic,
+        content: `<div>${result.replace(/\n/g, '<br>')}</div>`,
+        excerpt: result.substring(0, 200) + '...',
+        category: category || 'general',
+        tags: includeHashtags ? ['blog', 'ai-generated'] : []
+      };
+    }
+
+    // Award tokens for AI generation
+    const tokensEarned = 5;
+    const User = require('../models/user.model');
+    await User.findByIdAndUpdate(req.user.id, {
+      $inc: { tokenBalance: tokensEarned }
+    });
+
+    console.log('✅ Blog generated successfully');
+
+    res.json({
+      ok: true,
+      success: true,
+      blog: {
+        ...blog,
+        author: req.user.id,
+        status: 'draft'
+      },
+      tokensEarned,
+      generated: true
+    });
+
+  } catch (error) {
+    console.error('❌ Blog generation error:', error);
+    res.status(500).json({ ok: false, message: 'Failed to generate blog: ' + error.message });
+  }
+});
 
 // ========================================
 // IMPORTANT: Specific routes BEFORE :id routes!
