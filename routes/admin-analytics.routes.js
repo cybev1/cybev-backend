@@ -606,7 +606,7 @@ router.post('/users/:userId/send-verification-reminder', async (req, res) => {
   try {
     const { userId } = req.params;
     const crypto = require('crypto');
-    const sendEmail = require('../utils/sendEmail');
+    const { sendEmail } = require('../utils/sendEmail');
 
     const user = await User.findById(userId);
     if (!user) {
@@ -673,7 +673,7 @@ router.post('/users/:userId/send-verification-reminder', async (req, res) => {
 router.post('/users/send-bulk-verification-reminders', async (req, res) => {
   try {
     const crypto = require('crypto');
-    const sendEmail = require('../utils/sendEmail');
+    const { sendEmail } = require('../utils/sendEmail');
 
     // Find all unverified users
     const unverifiedUsers = await User.find({ 
@@ -734,6 +734,130 @@ router.post('/users/send-bulk-verification-reminders', async (req, res) => {
   } catch (error) {
     console.error('Bulk reminder error:', error);
     res.status(500).json({ ok: false, error: 'Failed to send bulk reminders' });
+  }
+});
+
+// ==========================================
+// DELETE USER
+// ==========================================
+
+// Delete a single user (admin only)
+router.delete('/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { deleteContent } = req.query;
+
+    // Prevent self-deletion
+    if (userId === req.user.id) {
+      return res.status(400).json({ ok: false, error: 'Cannot delete your own account' });
+    }
+
+    // Find user first
+    const userToDelete = await User.findById(userId);
+    if (!userToDelete) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    // Prevent deleting other admins
+    if (userToDelete.isAdmin || userToDelete.role === 'admin') {
+      return res.status(403).json({ ok: false, error: 'Cannot delete admin users' });
+    }
+
+    // Optionally delete user's content
+    if (deleteContent === 'true') {
+      const Blog = mongoose.models.Blog;
+      const Post = mongoose.models.Post;
+      const Comment = mongoose.models.Comment;
+      const Vlog = mongoose.models.Vlog;
+
+      const deletePromises = [];
+      if (Blog) deletePromises.push(Blog.deleteMany({ author: userId }));
+      if (Post) deletePromises.push(Post.deleteMany({ author: userId }));
+      if (Comment) deletePromises.push(Comment.deleteMany({ author: userId }));
+      if (Vlog) deletePromises.push(Vlog.deleteMany({ author: userId }));
+
+      await Promise.all(deletePromises);
+      console.log(`🗑️ Deleted all content for user: ${userToDelete.email}`);
+    }
+
+    // Delete user
+    await User.findByIdAndDelete(userId);
+
+    console.log(`🗑️ Admin deleted user: ${userToDelete.email} (by admin: ${req.user.id})`);
+
+    res.json({
+      ok: true,
+      message: 'User deleted successfully',
+      deletedUser: {
+        id: userId,
+        email: userToDelete.email,
+        name: userToDelete.name
+      },
+      contentDeleted: deleteContent === 'true'
+    });
+  } catch (error) {
+    console.error('Delete user error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to delete user' });
+  }
+});
+
+// Bulk delete users
+router.post('/users/bulk-delete', async (req, res) => {
+  try {
+    const { userIds, deleteContent } = req.body;
+
+    if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+      return res.status(400).json({ ok: false, error: 'userIds array required' });
+    }
+
+    // Filter out admin's own ID and other admins
+    const adminUsers = await User.find({ 
+      _id: { $in: userIds },
+      $or: [{ isAdmin: true }, { role: 'admin' }]
+    }).select('_id');
+    
+    const adminIds = adminUsers.map(u => u._id.toString());
+    const idsToDelete = userIds.filter(id => id !== req.user.id && !adminIds.includes(id));
+
+    if (idsToDelete.length === 0) {
+      return res.status(400).json({ ok: false, error: 'No valid users to delete' });
+    }
+
+    // Get user info before deleting
+    const usersToDelete = await User.find({ _id: { $in: idsToDelete } }).select('email name');
+
+    // Optionally delete content
+    if (deleteContent) {
+      const Blog = mongoose.models.Blog;
+      const Post = mongoose.models.Post;
+      const Comment = mongoose.models.Comment;
+      const Vlog = mongoose.models.Vlog;
+
+      const deletePromises = [];
+      if (Blog) deletePromises.push(Blog.deleteMany({ author: { $in: idsToDelete } }));
+      if (Post) deletePromises.push(Post.deleteMany({ author: { $in: idsToDelete } }));
+      if (Comment) deletePromises.push(Comment.deleteMany({ author: { $in: idsToDelete } }));
+      if (Vlog) deletePromises.push(Vlog.deleteMany({ author: { $in: idsToDelete } }));
+
+      await Promise.all(deletePromises);
+    }
+
+    // Delete users
+    await User.deleteMany({ _id: { $in: idsToDelete } });
+
+    console.log(`🗑️ Admin bulk deleted ${idsToDelete.length} users`);
+
+    res.json({
+      ok: true,
+      message: `${idsToDelete.length} users deleted`,
+      deletedCount: idsToDelete.length,
+      deletedUsers: usersToDelete.map(u => ({ email: u.email, name: u.name })),
+      skipped: userIds.length - idsToDelete.length,
+      contentDeleted: !!deleteContent
+    });
+  } catch (error) {
+    console.error('Bulk delete error:', error);
+    res.status(500).json({ ok: false, error: 'Failed to delete users' });
   }
 });
 
@@ -940,7 +1064,7 @@ router.post('/data-quality/update-name/:userId', async (req, res) => {
 router.post('/data-quality/request-name-update/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
-    const sendEmail = require('../utils/sendEmail');
+    const { sendEmail } = require('../utils/sendEmail');
 
     const user = await User.findById(userId);
     if (!user) {
@@ -984,7 +1108,7 @@ router.post('/data-quality/request-name-update/:userId', async (req, res) => {
 // Bulk request name updates for all flagged users
 router.post('/data-quality/bulk-request-name-updates', async (req, res) => {
   try {
-    const sendEmail = require('../utils/sendEmail');
+    const { sendEmail } = require('../utils/sendEmail');
     
     // Get all users with bad names
     const allUsers = await User.find({}).select('name email').lean();
