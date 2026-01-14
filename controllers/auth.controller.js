@@ -283,7 +283,17 @@ exports.register = async (req, res) => {
     const verificationUrl = `${process.env.FRONTEND_URL || 'https://cybev.io'}/auth/verify-email?token=${verificationToken}`;
     
     try {
-      await sendEmail({
+      console.log('📧 ========== SENDING VERIFICATION EMAIL ==========');
+      console.log('📧 To:', user.email);
+      console.log('📧 Name:', user.name);
+      console.log('📧 Verification URL:', verificationUrl);
+      console.log('📧 EMAIL_PROVIDER:', process.env.EMAIL_PROVIDER || 'auto-detect');
+      console.log('📧 BREVO_API_KEY:', process.env.BREVO_API_KEY ? 'SET (' + process.env.BREVO_API_KEY.substring(0, 8) + '...)' : 'NOT SET');
+      console.log('📧 RESEND_API_KEY:', process.env.RESEND_API_KEY ? 'SET' : 'NOT SET');
+      console.log('📧 SENDGRID_API_KEY:', process.env.SENDGRID_API_KEY ? 'SET' : 'NOT SET');
+      console.log('📧 FROM_EMAIL:', process.env.FROM_EMAIL || process.env.BREVO_SENDER_EMAIL || 'not set');
+      
+      const emailResult = await sendEmail({
         to: user.email,
         subject: 'Welcome to CYBEV - Verify Your Email',
         html: `
@@ -305,9 +315,20 @@ exports.register = async (req, res) => {
           </div>
         `
       });
-      console.log('✅ Verification email sent to:', user.email);
+      
+      console.log('📧 Email Result:', JSON.stringify(emailResult, null, 2));
+      
+      if (emailResult.success) {
+        console.log('✅ Verification email sent successfully via:', emailResult.provider);
+      } else {
+        console.error('⚠️ Email send returned failure:', emailResult.error || 'Unknown error');
+      }
+      console.log('📧 ========== END EMAIL SENDING ==========');
     } catch (emailError) {
-      console.error('⚠️ Failed to send verification email:', emailError);
+      console.error('❌ ========== EMAIL SENDING FAILED ==========');
+      console.error('❌ Error:', emailError.message);
+      console.error('❌ Stack:', emailError.stack);
+      console.error('❌ ==========================================');
       // Don't fail registration if email fails
     }
 
