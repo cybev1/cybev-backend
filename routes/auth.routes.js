@@ -14,7 +14,181 @@ router.options('*', (req, res) => {
   res.sendStatus(200);
 });
 
-// Authentication routes
+// ========================================
+// EMAIL DIAGNOSTIC ENDPOINTS
+// ========================================
+
+// Check email service status (public - for debugging)
+router.get('/email-status', async (req, res) => {
+  try {
+    let emailService;
+    try {
+      emailService = require('../utils/email.service');
+    } catch (e) {
+      return res.json({
+        ok: false,
+        message: 'Email service module not loaded',
+        error: e.message
+      });
+    }
+
+    const status = emailService.getEmailStatus ? emailService.getEmailStatus() : { error: 'getEmailStatus not available' };
+    
+    res.json({
+      ok: true,
+      emailStatus: status,
+      environment: {
+        EMAIL_PROVIDER: process.env.EMAIL_PROVIDER || 'not set (defaults to brevo if BREVO_API_KEY exists)',
+        BREVO_API_KEY: process.env.BREVO_API_KEY ? '✅ Set (' + process.env.BREVO_API_KEY.substring(0, 8) + '...)' : '❌ Missing',
+        BREVO_SENDER_EMAIL: process.env.BREVO_SENDER_EMAIL || 'not set',
+        RESEND_API_KEY: process.env.RESEND_API_KEY ? '✅ Set' : '❌ Missing',
+        SENDGRID_API_KEY: process.env.SENDGRID_API_KEY ? '✅ Set' : '❌ Missing',
+        SMTP_HOST: process.env.SMTP_HOST || 'not set',
+        FROM_EMAIL: process.env.FROM_EMAIL || 'not set',
+        FRONTEND_URL: process.env.FRONTEND_URL || 'not set',
+        NODE_ENV: process.env.NODE_ENV || 'not set'
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({
+      ok: false,
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+});
+
+// Test email sending (admin only)
+router.post('/test-email', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user?.isAdmin) {
+      return res.status(403).json({ ok: false, message: 'Admin access required' });
+    }
+
+    const { to } = req.body;
+    const testEmail = to || user.email;
+
+    let sendEmail;
+    try {
+      sendEmail = require('../utils/sendEmail');
+    } catch (e) {
+      return res.json({ ok: false, error: 'sendEmail module not loaded: ' + e.message });
+    }
+
+    console.log('🧪 ========== EMAIL TEST ==========');
+    console.log('🧪 Testing email to:', testEmail);
+    console.log('🧪 EMAIL_PROVIDER:', process.env.EMAIL_PROVIDER || 'not set');
+    console.log('🧪 BREVO_API_KEY:', process.env.BREVO_API_KEY ? 'SET' : 'NOT SET');
+
+    const result = await sendEmail.sendEmail({
+      to: testEmail,
+      subject: '🧪 CYBEV Email Test - ' + new Date().toISOString(),
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+          <h1 style="color: #8B5CF6;">Email Test Successful! 🎉</h1>
+          <p>This is a test email from CYBEV.</p>
+          <p>If you received this, email delivery is working correctly.</p>
+          <hr style="margin: 20px 0;">
+          <p style="color: #666; font-size: 12px;">
+            Sent at: ${new Date().toISOString()}<br>
+            Provider: ${process.env.EMAIL_PROVIDER || 'auto'}<br>
+            From: ${process.env.FROM_EMAIL || process.env.BREVO_SENDER_EMAIL || 'noreply@cybev.io'}
+          </p>
+        </div>
+      `
+    });
+
+    console.log('🧪 Test email result:', JSON.stringify(result));
+    console.log('🧪 ========== END TEST ==========');
+
+    res.json({
+      ok: result.success,
+      result,
+      sentTo: testEmail,
+      provider: process.env.EMAIL_PROVIDER || 'auto'
+    });
+  } catch (error) {
+    console.error('❌ Test email error:', error);
+    res.status(500).json({ ok: false, error: error.message, stack: error.stack });
+  }
+});
+
+// Manually trigger verification email resend (admin can resend for any user)
+router.post('/admin-resend-verification', verifyToken, async (req, res) => {
+  try {
+    const adminUser = await User.findById(req.user.id);
+    if (!adminUser?.isAdmin) {
+      return res.status(403).json({ ok: false, message: 'Admin access required' });
+    }
+
+    const { userId, email } = req.body;
+    
+    let targetUser;
+    if (userId) {
+      targetUser = await User.findById(userId);
+    } else if (email) {
+      targetUser = await User.findOne({ email });
+    } else {
+      return res.status(400).json({ ok: false, message: 'userId or email required' });
+    }
+
+    if (!targetUser) {
+      return res.status(404).json({ ok: false, message: 'User not found' });
+    }
+
+    if (targetUser.isEmailVerified) {
+      return res.json({ ok: true, message: 'User already verified', alreadyVerified: true });
+    }
+
+    // Generate new token
+    const crypto = require('crypto');
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationTokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
+
+    targetUser.emailVerificationToken = verificationTokenHash;
+    targetUser.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000;
+    await targetUser.save();
+
+    // Send email
+    const sendEmail = require('../utils/sendEmail');
+    const verificationUrl = `${process.env.FRONTEND_URL || 'https://cybev.io'}/auth/verify-email?token=${verificationToken}`;
+
+    const result = await sendEmail.sendEmail({
+      to: targetUser.email,
+      subject: 'CYBEV - Verify Your Email',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h1 style="color: #8B5CF6;">Verify Your Email</h1>
+          <p>Hi ${targetUser.name},</p>
+          <p>Please click the button below to verify your email address:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${verificationUrl}" style="background: linear-gradient(to right, #8B5CF6, #EC4899); color: white; padding: 15px 30px; text-decoration: none; border-radius: 10px; font-weight: bold;">
+              Verify Email
+            </a>
+          </div>
+          <p>Or copy: ${verificationUrl}</p>
+        </div>
+      `
+    });
+
+    res.json({
+      ok: result.success,
+      message: result.success ? 'Verification email sent' : 'Failed to send email',
+      result,
+      user: { email: targetUser.email, name: targetUser.name }
+    });
+  } catch (error) {
+    console.error('Admin resend error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ========================================
+// AUTHENTICATION ROUTES
+// ========================================
+
 router.post('/register', authController.register);
 router.post('/login', authController.login);
 router.post('/verify-email', authController.verifyEmail);
