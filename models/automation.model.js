@@ -1,458 +1,405 @@
 // ============================================
 // FILE: models/automation.model.js
-// CYBEV Automation & Workflow Models
-// VERSION: 1.0.0 - Drip Campaigns, Triggers, Sequences
+// CYBEV Email Automation/Workflow Models
+// VERSION: 2.0.0 - Phase 6
 // ============================================
 
 const mongoose = require('mongoose');
 
 // ==========================================
 // AUTOMATION WORKFLOW MODEL
-// Main automation definition
+// Email sequences, drip campaigns, triggers
 // ==========================================
 
-const automationWorkflowSchema = new mongoose.Schema({
+const automationStepSchema = new mongoose.Schema({
+  id: { type: String, required: true },
+  type: { 
+    type: String, 
+    enum: ['send_email', 'wait', 'condition', 'action', 'split'],
+    required: true 
+  },
+  
+  // For send_email type
+  email: {
+    subject: String,
+    preheader: String,
+    content: {
+      blocks: [mongoose.Schema.Types.Mixed],
+      html: String
+    },
+    fromName: String,
+    fromEmail: String
+  },
+  
+  // For wait type
+  wait: {
+    duration: Number, // in minutes
+    unit: { type: String, enum: ['minutes', 'hours', 'days', 'weeks'] }
+  },
+  
+  // For condition type
+  condition: {
+    type: { 
+      type: String, 
+      enum: ['email_opened', 'email_clicked', 'tag_exists', 'custom_field', 'time_delay']
+    },
+    field: String,
+    operator: String, // equals, not_equals, contains, greater_than, etc.
+    value: mongoose.Schema.Types.Mixed,
+    // Branching
+    trueBranch: String, // step id
+    falseBranch: String
+  },
+  
+  // For action type
+  action: {
+    type: { 
+      type: String, 
+      enum: ['add_tag', 'remove_tag', 'update_field', 'webhook', 'notify']
+    },
+    tag: String,
+    field: String,
+    value: mongoose.Schema.Types.Mixed,
+    webhookUrl: String,
+    notificationEmail: String
+  },
+  
+  // For A/B split type
+  split: {
+    ratio: { type: Number, default: 50 }, // percentage for branch A
+    branchA: String,
+    branchB: String
+  },
+  
+  // Next step (for linear flow)
+  nextStep: String,
+  
+  // Position for visual editor
+  position: {
+    x: Number,
+    y: Number
+  }
+}, { _id: false });
+
+const automationSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   
-  // Basic info
   name: { type: String, required: true },
   description: String,
+  
+  // Trigger configuration
+  trigger: {
+    type: { 
+      type: String, 
+      enum: [
+        'signup',           // New subscriber signup
+        'tag_added',        // Tag added to contact
+        'tag_removed',      // Tag removed
+        'form_submitted',   // Form submission
+        'purchase',         // Purchase made
+        'date',             // Specific date (birthday, anniversary)
+        'api',              // API trigger
+        'manual',           // Manual enrollment
+        'no_activity'       // Inactivity trigger
+      ],
+      required: true
+    },
+    tag: String,           // For tag_added/removed triggers
+    formId: String,        // For form_submitted
+    dateField: String,     // For date trigger (field name on contact)
+    inactivityDays: Number // For no_activity trigger
+  },
+  
+  // Workflow steps
+  steps: [automationStepSchema],
+  entryStep: String, // First step id
   
   // Status
   status: { 
     type: String, 
-    enum: ['draft', 'active', 'paused', 'completed', 'archived'],
-    default: 'draft',
-    index: true
+    enum: ['draft', 'active', 'paused', 'archived'], 
+    default: 'draft' 
   },
   
-  // Workflow type
-  type: {
-    type: String,
-    enum: ['drip', 'trigger', 'sequence', 'workflow'],
-    default: 'drip'
-  },
-  
-  // Trigger configuration
-  trigger: {
-    type: {
-      type: String,
-      enum: [
-        'manual',           // Manually add contacts
-        'list_subscribe',   // When someone subscribes to a list
-        'tag_added',        // When tag is added to contact
-        'email_received',   // When email is received
-        'form_submit',      // When form is submitted
-        'date_based',       // Anniversary, birthday, etc.
-        'api',              // API trigger
-        'segment_enter',    // When contact enters a segment
-        'link_clicked',     // When specific link is clicked
-        'email_opened',     // When email is opened
-        'no_activity'       // After X days of no activity
-      ],
-      default: 'manual'
-    },
-    
-    // Specific trigger settings based on type
-    listId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
-    tag: String,
-    formId: String,
-    dateField: String, // For date_based triggers (e.g., 'birthday', 'signup_date')
-    segmentId: String,
-    linkUrl: String,
-    campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign' },
-    inactivityDays: Number,
-    
-    // Conditions for trigger
-    conditions: {
-      fromContains: String,
-      subjectContains: String,
-      labels: [String],
-      customConditions: mongoose.Schema.Types.Mixed
-    }
-  },
-  
-  // Entry conditions (who can enter)
-  entryConditions: {
-    allowReentry: { type: Boolean, default: false },
-    reentryWaitDays: { type: Number, default: 0 },
-    maxEntriesPerContact: { type: Number, default: 1 },
-    filterSegment: String,
-    filterTags: [String],
-    excludeTags: [String]
-  },
-  
-  // Exit conditions
-  exitConditions: {
-    onUnsubscribe: { type: Boolean, default: true },
-    onBounce: { type: Boolean, default: true },
-    onComplaint: { type: Boolean, default: true },
-    goalAchieved: {
-      enabled: { type: Boolean, default: false },
-      type: { type: String, enum: ['link_click', 'tag_added', 'purchase', 'custom'] },
-      value: String
-    }
-  },
-  
-  // Schedule/timing settings
+  // Settings
   settings: {
-    timezone: { type: String, default: 'UTC' },
-    // Send window - only send during these hours
-    sendWindow: {
+    allowReEntry: { type: Boolean, default: false }, // Can contact re-enter?
+    reEntryDelay: Number, // Days before re-entry allowed
+    exitOnUnsubscribe: { type: Boolean, default: true },
+    sendingWindow: {
       enabled: { type: Boolean, default: false },
-      startHour: { type: Number, default: 9 },
-      endHour: { type: Number, default: 17 },
-      daysOfWeek: { type: [Number], default: [1, 2, 3, 4, 5] } // Mon-Fri
+      startHour: Number,
+      endHour: Number,
+      timezone: String,
+      excludeWeekends: Boolean
     },
-    // Throttling
-    maxSendsPerHour: { type: Number, default: 1000 },
-    maxSendsPerDay: { type: Number, default: 10000 }
-  },
-  
-  // Steps in the workflow
-  steps: [{
-    stepId: { type: String, required: true }, // Unique ID for this step
-    order: { type: Number, required: true },
-    
-    // Step type
-    type: {
-      type: String,
-      enum: [
-        'send_email',
-        'wait',
-        'condition',
-        'add_tag',
-        'remove_tag',
-        'add_to_list',
-        'remove_from_list',
-        'webhook',
-        'notification',
-        'update_contact',
-        'goal_check',
-        'split_test'
-      ],
-      required: true
-    },
-    
-    // Step name
-    name: String,
-    
-    // Wait step config
-    wait: {
-      type: { type: String, enum: ['delay', 'until_date', 'until_time', 'until_day'] },
-      delay: {
-        value: Number,
-        unit: { type: String, enum: ['minutes', 'hours', 'days', 'weeks'] }
-      },
-      untilDate: Date,
-      untilTime: String, // HH:MM format
-      untilDay: { type: Number, min: 0, max: 6 } // Day of week (0=Sunday)
-    },
-    
-    // Email step config
-    email: {
-      templateId: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailTemplate' },
-      subject: String,
-      previewText: String,
-      content: {
-        html: String,
-        text: String,
-        json: mongoose.Schema.Types.Mixed
-      },
-      sender: {
-        emailAddress: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailAddress' },
-        email: String,
-        name: String
-      }
-    },
-    
-    // Condition step config
-    condition: {
-      type: { 
-        type: String, 
-        enum: ['opened_email', 'clicked_link', 'has_tag', 'in_segment', 'custom_field', 'random'] 
-      },
-      emailStepId: String, // For opened_email condition
-      linkUrl: String,
-      tag: String,
-      segment: String,
-      field: String,
-      operator: { type: String, enum: ['equals', 'not_equals', 'contains', 'greater_than', 'less_than'] },
-      value: String,
-      randomPercent: Number, // For A/B split
-      
-      // Branches
-      trueBranch: String, // stepId to go to if true
-      falseBranch: String // stepId to go to if false
-    },
-    
-    // Tag step config
-    tag: {
-      action: { type: String, enum: ['add', 'remove'] },
-      tags: [String]
-    },
-    
-    // List step config
-    list: {
-      action: { type: String, enum: ['add', 'remove'] },
-      listId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' }
-    },
-    
-    // Webhook step config
-    webhook: {
-      url: String,
-      method: { type: String, enum: ['GET', 'POST', 'PUT'], default: 'POST' },
-      headers: mongoose.Schema.Types.Mixed,
-      payload: mongoose.Schema.Types.Mixed
-    },
-    
-    // Notification step config
-    notification: {
-      type: { type: String, enum: ['email', 'slack', 'sms'] },
-      recipient: String,
-      message: String
-    },
-    
-    // Update contact step config
-    updateContact: {
-      fields: mongoose.Schema.Types.Mixed
-    },
-    
-    // Split test config
-    splitTest: {
-      variants: [{
-        name: String,
-        percentage: Number,
-        nextStepId: String
-      }]
-    },
-    
-    // Step status tracking
-    stats: {
-      entered: { type: Number, default: 0 },
-      completed: { type: Number, default: 0 },
-      failed: { type: Number, default: 0 }
+    goalTracking: {
+      enabled: { type: Boolean, default: false },
+      goalTag: String,
+      exitOnGoal: { type: Boolean, default: true }
     }
-  }],
-  
-  // Visual editor state (for frontend drag-drop)
-  editorState: {
-    nodes: mongoose.Schema.Types.Mixed,
-    edges: mongoose.Schema.Types.Mixed,
-    viewport: mongoose.Schema.Types.Mixed
   },
   
-  // Overall stats
+  // Stats
   stats: {
-    totalEntered: { type: Number, default: 0 },
-    currentlyActive: { type: Number, default: 0 },
+    enrolled: { type: Number, default: 0 },
+    active: { type: Number, default: 0 },
     completed: { type: Number, default: 0 },
-    goalReached: { type: Number, default: 0 },
+    converted: { type: Number, default: 0 },
     exited: { type: Number, default: 0 },
     emailsSent: { type: Number, default: 0 },
-    emailsOpened: { type: Number, default: 0 },
-    emailsClicked: { type: Number, default: 0 },
-    unsubscribed: { type: Number, default: 0 }
+    opens: { type: Number, default: 0 },
+    clicks: { type: Number, default: 0 }
   },
   
-  // Timestamps
-  activatedAt: Date,
-  pausedAt: Date,
-  completedAt: Date
+  // Version control for A/B testing
+  version: { type: Number, default: 1 },
   
+  activatedAt: Date,
+  pausedAt: Date
 }, { timestamps: true });
 
-automationWorkflowSchema.index({ user: 1, status: 1 });
-automationWorkflowSchema.index({ 'trigger.type': 1, status: 1 });
+automationSchema.index({ user: 1, status: 1 });
+automationSchema.index({ 'trigger.type': 1, status: 1 });
 
 // ==========================================
 // AUTOMATION SUBSCRIBER MODEL
-// Track contacts going through automation
+// Tracks contacts in automations
 // ==========================================
 
 const automationSubscriberSchema = new mongoose.Schema({
-  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'AutomationWorkflow', required: true, index: true },
-  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailContact' },
+  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'Automation', required: true, index: true },
+  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailContact', required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   
-  // Contact info (denormalized for quick access)
-  email: { type: String, required: true, index: true },
-  name: String,
+  // Current position in automation
+  currentStep: String,
   
   // Status
-  status: {
-    type: String,
-    enum: ['active', 'completed', 'exited', 'failed', 'paused'],
-    default: 'active',
-    index: true
+  status: { 
+    type: String, 
+    enum: ['active', 'paused', 'completed', 'exited', 'failed'],
+    default: 'active'
   },
   
-  // Current position
-  currentStep: {
-    stepId: String,
-    enteredAt: Date
-  },
-  
-  // Next scheduled action
-  nextAction: {
-    stepId: String,
-    scheduledFor: { type: Date, index: true },
-    type: String
-  },
-  
-  // Trigger data (what triggered this subscriber)
-  triggerData: mongoose.Schema.Types.Mixed,
-  
-  // History of steps completed
-  history: [{
+  // Journey tracking
+  journey: [{
     stepId: String,
     stepType: String,
-    enteredAt: Date,
-    completedAt: Date,
-    status: { type: String, enum: ['completed', 'skipped', 'failed'] },
-    data: mongoose.Schema.Types.Mixed, // Step-specific data (email sent, condition result, etc.)
-    error: String
+    action: String, // 'entered', 'completed', 'skipped', 'failed'
+    timestamp: { type: Date, default: Date.now },
+    data: mongoose.Schema.Types.Mixed // Email open, click data, etc.
   }],
   
-  // Email interaction tracking for this automation
-  emailInteractions: {
-    sent: { type: Number, default: 0 },
-    opened: { type: Number, default: 0 },
-    clicked: { type: Number, default: 0 },
-    lastOpenedAt: Date,
-    lastClickedAt: Date
-  },
+  // Trigger data
+  triggerData: mongoose.Schema.Types.Mixed,
   
-  // Entry tracking
-  entryCount: { type: Number, default: 1 },
-  firstEnteredAt: Date,
-  lastEnteredAt: Date,
+  // Next action scheduled
+  nextActionAt: { type: Date, index: true },
   
-  // Exit info
+  // A/B test tracking
+  splitBranch: String,
+  
+  // Exit reason
   exitReason: String,
-  exitedAt: Date,
-  goalReachedAt: Date
   
+  // Entry count (for re-entry tracking)
+  entryCount: { type: Number, default: 1 },
+  lastEntryAt: Date,
+  
+  completedAt: Date,
+  exitedAt: Date
 }, { timestamps: true });
 
-automationSubscriberSchema.index({ automation: 1, status: 1 });
-automationSubscriberSchema.index({ automation: 1, email: 1 });
-automationSubscriberSchema.index({ 'nextAction.scheduledFor': 1, status: 1 });
-automationSubscriberSchema.index({ user: 1, email: 1, automation: 1 });
+automationSubscriberSchema.index({ automation: 1, status: 1, nextActionAt: 1 });
+automationSubscriberSchema.index({ contact: 1, automation: 1 });
+automationSubscriberSchema.index({ user: 1, status: 1 });
 
 // ==========================================
 // AUTOMATION QUEUE MODEL
-// Queue for scheduled automation actions
+// Scheduled automation actions
 // ==========================================
 
 const automationQueueSchema = new mongoose.Schema({
-  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'AutomationWorkflow', required: true, index: true },
+  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'Automation', required: true, index: true },
   subscriber: { type: mongoose.Schema.Types.ObjectId, ref: 'AutomationSubscriber', required: true },
+  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'EmailContact', required: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   
   // Step to execute
   stepId: { type: String, required: true },
-  stepType: { type: String, required: true },
+  stepType: String,
   
-  // Scheduling
-  scheduledFor: { type: Date, required: true, index: true },
+  // Scheduled execution
+  scheduledAt: { type: Date, required: true, index: true },
   
-  // Status
-  status: {
-    type: String,
+  // Processing status
+  status: { 
+    type: String, 
     enum: ['pending', 'processing', 'completed', 'failed', 'cancelled'],
     default: 'pending',
     index: true
   },
   
-  // Processing info
+  // Retry logic
   attempts: { type: Number, default: 0 },
+  maxAttempts: { type: Number, default: 3 },
   lastAttemptAt: Date,
   error: String,
   
-  // Result data
+  // Result
   result: mongoose.Schema.Types.Mixed,
   
+  processedAt: Date,
   completedAt: Date
-  
 }, { timestamps: true });
 
-automationQueueSchema.index({ scheduledFor: 1, status: 1 });
-automationQueueSchema.index({ automation: 1, subscriber: 1 });
+automationQueueSchema.index({ status: 1, scheduledAt: 1 });
+automationQueueSchema.index({ user: 1, status: 1 });
 
 // ==========================================
-// AUTOMATION LOG MODEL
-// Detailed activity logging
+// AUTOMATION TEMPLATES
+// Pre-built automation workflows
 // ==========================================
 
-const automationLogSchema = new mongoose.Schema({
-  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'AutomationWorkflow', required: true, index: true },
-  subscriber: { type: mongoose.Schema.Types.ObjectId, ref: 'AutomationSubscriber' },
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  
-  // Event type
-  event: {
-    type: String,
-    enum: [
-      'workflow_activated',
-      'workflow_paused',
-      'workflow_completed',
-      'subscriber_entered',
-      'subscriber_exited',
-      'step_started',
-      'step_completed',
-      'step_failed',
-      'email_sent',
-      'email_opened',
-      'email_clicked',
-      'condition_evaluated',
-      'tag_added',
-      'tag_removed',
-      'webhook_called',
-      'goal_reached',
-      'error'
-    ],
-    required: true
+const automationTemplateSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: String,
+  category: { 
+    type: String, 
+    enum: ['welcome', 'nurture', 'sales', 'engagement', 'retention', 'custom'],
+    default: 'custom'
   },
   
-  // Step info
-  stepId: String,
-  stepType: String,
+  // Template data
+  trigger: mongoose.Schema.Types.Mixed,
+  steps: [automationStepSchema],
+  entryStep: String,
+  settings: mongoose.Schema.Types.Mixed,
   
-  // Contact info
-  email: String,
+  // Metadata
+  isSystem: { type: Boolean, default: false }, // Built-in templates
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   
-  // Event data
-  data: mongoose.Schema.Types.Mixed,
-  
-  // Error info
-  error: String,
-  
-  // IP/User agent (for opens/clicks)
-  metadata: {
-    ip: String,
-    userAgent: String,
-    location: mongoose.Schema.Types.Mixed
-  }
-  
+  // Usage stats
+  usageCount: { type: Number, default: 0 }
 }, { timestamps: true });
 
-automationLogSchema.index({ automation: 1, createdAt: -1 });
-automationLogSchema.index({ automation: 1, event: 1 });
-automationLogSchema.index({ subscriber: 1, createdAt: -1 });
+// ==========================================
+// EMAIL SUBSCRIPTION PLAN MODEL
+// Monetization tiers for email platform
+// ==========================================
+
+const emailSubscriptionSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  
+  // Plan details
+  plan: {
+    type: String,
+    enum: ['free', 'pro', 'business', 'enterprise'],
+    default: 'free'
+  },
+  
+  // Limits
+  limits: {
+    emailAddresses: { type: Number, default: 1 },
+    customDomains: { type: Number, default: 0 },
+    monthlyEmails: { type: Number, default: 500 },
+    contacts: { type: Number, default: 500 },
+    automations: { type: Number, default: 1 },
+    hasFullInbox: { type: Boolean, default: false },
+    hasAbTesting: { type: Boolean, default: false },
+    hasApiAccess: { type: Boolean, default: false },
+    hasPrioritySupport: { type: Boolean, default: false }
+  },
+  
+  // Usage tracking
+  usage: {
+    emailAddresses: { type: Number, default: 0 },
+    customDomains: { type: Number, default: 0 },
+    emailsSentThisMonth: { type: Number, default: 0 },
+    contacts: { type: Number, default: 0 },
+    automations: { type: Number, default: 0 }
+  },
+  
+  // Billing
+  billing: {
+    stripeCustomerId: String,
+    stripeSubscriptionId: String,
+    currentPeriodStart: Date,
+    currentPeriodEnd: Date,
+    cancelAtPeriodEnd: { type: Boolean, default: false }
+  },
+  
+  // Reset usage monthly
+  lastUsageReset: Date
+}, { timestamps: true });
+
+emailSubscriptionSchema.index({ user: 1 });
+emailSubscriptionSchema.index({ plan: 1 });
+
+// Plan limits lookup
+emailSubscriptionSchema.statics.PLAN_LIMITS = {
+  free: {
+    emailAddresses: 1,
+    customDomains: 0,
+    monthlyEmails: 500,
+    contacts: 500,
+    automations: 1,
+    hasFullInbox: false,
+    hasAbTesting: false,
+    hasApiAccess: false,
+    hasPrioritySupport: false
+  },
+  pro: {
+    emailAddresses: 5,
+    customDomains: 1,
+    monthlyEmails: 10000,
+    contacts: 5000,
+    automations: 10,
+    hasFullInbox: true,
+    hasAbTesting: false,
+    hasApiAccess: false,
+    hasPrioritySupport: true
+  },
+  business: {
+    emailAddresses: 999999,
+    customDomains: 5,
+    monthlyEmails: 100000,
+    contacts: 50000,
+    automations: 999999,
+    hasFullInbox: true,
+    hasAbTesting: true,
+    hasApiAccess: true,
+    hasPrioritySupport: true
+  },
+  enterprise: {
+    emailAddresses: 999999,
+    customDomains: 999999,
+    monthlyEmails: 999999,
+    contacts: 999999,
+    automations: 999999,
+    hasFullInbox: true,
+    hasAbTesting: true,
+    hasApiAccess: true,
+    hasPrioritySupport: true
+  }
+};
 
 // ==========================================
 // EXPORT MODELS
 // ==========================================
 
-const AutomationWorkflow = mongoose.models.AutomationWorkflow || mongoose.model('AutomationWorkflow', automationWorkflowSchema);
+const Automation = mongoose.models.Automation || mongoose.model('Automation', automationSchema);
 const AutomationSubscriber = mongoose.models.AutomationSubscriber || mongoose.model('AutomationSubscriber', automationSubscriberSchema);
 const AutomationQueue = mongoose.models.AutomationQueue || mongoose.model('AutomationQueue', automationQueueSchema);
-const AutomationLog = mongoose.models.AutomationLog || mongoose.model('AutomationLog', automationLogSchema);
+const AutomationTemplate = mongoose.models.AutomationTemplate || mongoose.model('AutomationTemplate', automationTemplateSchema);
+const EmailSubscription = mongoose.models.EmailSubscription || mongoose.model('EmailSubscription', emailSubscriptionSchema);
 
 module.exports = {
-  AutomationWorkflow,
+  Automation,
   AutomationSubscriber,
   AutomationQueue,
-  AutomationLog
+  AutomationTemplate,
+  EmailSubscription
 };
