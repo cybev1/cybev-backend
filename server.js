@@ -2,9 +2,9 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.9.0 - Added Email Platform Routes
-// PREVIOUS: 6.8.3 - Admin Analytics, Meet, Social Tools
-// ROLLBACK: If issues, revert to VERSION 6.8.3
+// VERSION: 6.9.1 - Phase 6 Email Platform Complete
+// PREVIOUS: 6.9.0 - Email Platform Routes Added
+// ROLLBACK: If issues, revert to VERSION 6.9.0
 // GITHUB: https://github.com/cybev1/cybev-backend
 // UPDATED: 2026-01-16
 // ============================================
@@ -69,7 +69,7 @@ const RESERVED_SUBDOMAINS = [
   'billing', 'dashboard', 'studio', 'dev', 'staging', 'test',
   'ns1', 'ns2', 'mx', 'webmail', 'cpanel', 'whm', 'autoconfig',
   'autodiscover', '_dmarc', '_domainkey', 'webdisk', 'cpcalendars', 'cpcontacts',
-  'meet', 'social', 'campaigns', 'email' // NEW v6.9.0
+  'meet', 'social', 'campaigns', 'email' // v6.9.0+
 ];
 
 app.use((req, res, next) => {
@@ -127,7 +127,22 @@ if (!MONGODB_URI) {
   console.error('❌ MONGODB_URI not set!');
 } else {
   mongoose.connect(MONGODB_URI)
-    .then(() => console.log('✅ MongoDB connected'))
+    .then(() => {
+      console.log('✅ MongoDB connected');
+      
+      // ==========================================
+      // START AUTOMATION PROCESSOR (after DB connected)
+      // ==========================================
+      if (process.env.ENABLE_AUTOMATION_PROCESSOR === 'true') {
+        try {
+          const automationProcessor = require('./cron/automation-processor');
+          automationProcessor.start();
+          console.log('✅ Automation processor started');
+        } catch (err) {
+          console.log('⚠️ Automation processor not started:', err.message);
+        }
+      }
+    })
     .catch(err => console.error('❌ MongoDB error:', err.message));
 }
 
@@ -227,45 +242,47 @@ const routes = [
   ['verification', '/api/verification', './routes/verification.routes'],
   
   // Content
-  ['blog', '/api/blogs', './routes/blog.routes'],
-  ['blogsite', '/api/blogsites', './routes/blogsite.routes'],
   ['posts', '/api/posts', './routes/posts.routes'],
-  ['feed', '/api/feed', './routes/feed.routes'],
   ['comments', '/api/comments', './routes/comment.routes'],
-  ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
-  ['vlog', '/api/vlogs', './routes/vlog.routes'],
+  ['blogs', '/api/blogs', './routes/blog.routes'],
+  ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],
+  ['blogsite', '/api/blogsite', './routes/blogsite.routes'],
+  ['vlogs', '/api/vlogs', './routes/vlog.routes'],
+  ['stories', '/api/stories', './routes/story.routes'],
   ['content', '/api/content', './routes/content.routes'],
   
-  // Notifications & Messages
-  ['notifications', '/api/notifications', './routes/notification.routes'],
-  ['notifications-adv', '/api/notifications', './routes/notifications-advanced.routes'],
-  ['messages', '/api/messages', './routes/message.routes'],
-  
   // Social
-  ['reactions', '/api/reactions', './routes/reaction.routes'],
-  ['follow-check', '/api/follow', './routes/follow-check.routes'],
   ['follow', '/api/follow', './routes/follow.routes'],
-  ['story', '/api/stories', './routes/story.routes'],
-  ['share', '/api/share', './routes/share.routes'],
-  ['hashtag', '/api/hashtags', './routes/hashtag.routes'],
+  ['follow-check', '/api/follow', './routes/follow-check.routes'],
+  ['notifications', '/api/notifications', './routes/notification.routes'],
+  ['notifications-advanced', '/api/notifications', './routes/notifications-advanced.routes'],
+  ['notification-preferences', '/api/notifications', './routes/notification.preferences.routes'],
+  ['messages', '/api/messages', './routes/message.routes'],
+  ['reactions', '/api/reactions', './routes/reaction.routes'],
+  ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
+  ['hashtags', '/api/hashtags', './routes/hashtag.routes'],
+  ['groups', '/api/groups', './routes/group.routes'],
+  ['groups-enhanced', '/api/groups', './routes/group-enhanced.routes'],
   ['search', '/api/search', './routes/search.routes'],
-  ['group-enhanced', '/api/groups', './routes/group-enhanced.routes'],
-  ['group', '/api/groups', './routes/group.routes'],
+  ['feed', '/api/feed', './routes/feed.routes'],
+  ['share', '/api/share', './routes/share.routes'],
   
   // Live & Streaming
   ['live', '/api/live', './routes/live.routes'],
+  ['stream-schedule', '/api/stream', './routes/stream-schedule.routes'],
   ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
-  ['stream-schedule', '/api/streams', './routes/stream-schedule.routes'],
   
-  // Web3 & NFT
+  // NFT & Web3
   ['nft', '/api/nft', './routes/nft.routes'],
   ['mint', '/api/mint', './routes/mint.routes'],
   ['mint-badge', '/api/mint-badge', './routes/mint-badge.routes'],
-  ['staking', '/api/staking', './routes/staking.routes'],
   ['wallet', '/api/wallet', './routes/wallet.routes'],
+  ['staking', '/api/staking', './routes/staking.routes'],
+  ['tipping', '/api/tipping', './routes/tipping.routes'],
+  ['boost', '/api/boost', './routes/boost.routes'],
+  ['boosted', '/api/boosted', './routes/boosted.routes'],
   
   // Monetization
-  ['tipping', '/api/tips', './routes/tipping.routes'],
   ['subscription', '/api/subscriptions', './routes/subscription.routes'],
   ['earnings', '/api/earnings', './routes/earnings.routes'],
   ['monetization', '/api/monetization', './routes/monetization.routes'],
@@ -326,7 +343,7 @@ const routes = [
   ['ai-generate', '/api/ai-generate', './routes/ai-generate.routes'],
   
   // ==========================================
-  // v6.9.0 - Email Platform (NEW)
+  // v6.9.0+ - Email Platform (Phase 6)
   // ==========================================
   ['email', '/api/email', './routes/email.routes'],
   ['sender-domains', '/api/sender-domains', './routes/sender-domains.routes'],
@@ -361,33 +378,48 @@ console.log(`=== Routes: ${loadedCount} loaded, ${failedCount} skipped ===\n`);
 (async () => {
   try {
     const { EmailPlan } = require('./models/email-subscription.model');
-    await EmailPlan.initializeDefaultPlans();
+    if (EmailPlan && EmailPlan.initializeDefaultPlans) {
+      await EmailPlan.initializeDefaultPlans();
+      console.log('✅ Email plans initialized');
+    }
   } catch (err) {
     console.log('⚠️ Email plans initialization skipped:', err.message);
   }
 })();
 
 // ==========================================
-// START AUTOMATION PROCESSOR (if enabled)
+// AWS SES STATUS CHECK (v6.9.1)
 // ==========================================
 
-if (process.env.ENABLE_AUTOMATION_PROCESSOR !== 'false') {
+(async () => {
   try {
-    const automationProcessor = require('./cron/automation-processor');
-    automationProcessor.start();
+    const sesService = require('./services/ses.service');
+    const status = await sesService.getServiceStatus();
+    if (status.enabled) {
+      console.log(`✅ AWS SES ready | Region: ${status.region}`);
+    } else {
+      console.log('⚠️ AWS SES not configured - add AWS credentials to .env');
+    }
   } catch (err) {
-    console.log('⚠️ Automation processor not started:', err.message);
+    console.log('⚠️ AWS SES check skipped:', err.message);
   }
-}
+})();
 
 // ==========================================
 // HEALTH CHECK & ROOT
 // ==========================================
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  // Check SES status
+  let sesStatus = { enabled: false };
+  try {
+    const sesService = require('./services/ses.service');
+    sesStatus = await sesService.getServiceStatus();
+  } catch (err) {}
+  
   res.json({
     ok: true,
-    version: '6.9.0',
+    version: '6.9.1',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -396,17 +428,21 @@ app.get('/api/health', (req, res) => {
       aiGeneration: 'enabled',
       church: 'enabled',
       forms: 'enabled',
-      emailPlatform: 'enabled',  // NEW v6.9.0
-      automation: 'enabled'      // NEW v6.9.0
+      emailPlatform: sesStatus.enabled ? 'enabled' : 'not_configured',
+      automation: process.env.ENABLE_AUTOMATION_PROCESSOR === 'true' ? 'enabled' : 'disabled'
     },
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    ses: {
+      configured: sesStatus.enabled,
+      region: sesStatus.region || 'not_set'
+    },
     routes: { loaded: loadedCount, skipped: failedCount }
   });
 });
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v6.9.0',
+    message: 'CYBEV API v6.9.1',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
     features: ['meet', 'social-tools', 'campaigns', 'ai-generate', 'church', 'forms', 'email-platform', 'automation']
@@ -445,6 +481,10 @@ io.on('connection', (socket) => {
   socket.on('stream-chat', ({ streamId, message }) => {
     io.to(`stream:${streamId}`).emit('chat-message', message);
   });
+  
+  // Email campaign events (v6.9.1)
+  socket.on('join-campaign', (campaignId) => socket.join(`campaign:${campaignId}`));
+  socket.on('leave-campaign', (campaignId) => socket.leave(`campaign:${campaignId}`));
 });
 
 // ==========================================
@@ -468,20 +508,20 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v6.9.0
+  CYBEV API Server v6.9.1
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  NEW Features v6.9.0:
-  ✅ Email Platform (Send/Receive)
+  Phase 6 Features (v6.9.x):
+  ✅ AWS SES Email Integration
+  ✅ Drag-Drop Campaign Editor
   ✅ Custom Domain Verification
-  ✅ Campaign Management
   ✅ Automation Workflows
   ✅ Subscription Tiers
   
-  Previous v6.8.x Features:
+  Previous Features (v6.8.x):
   ✅ Meet (Video Conferencing)
   ✅ Social Tools (Automation)
   ✅ Campaigns (Marketing)
