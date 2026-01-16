@@ -2,11 +2,11 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.8.3 - Added admin-analytics routes, fixed wallet ObjectId
-// PREVIOUS: 6.8.2 - Meet, Social Tools, Campaigns, AI, Forms
-// ROLLBACK: If issues, revert to VERSION 6.8.2
+// VERSION: 6.9.0 - Added Email Platform Routes
+// PREVIOUS: 6.8.3 - Admin Analytics, Meet, Social Tools
+// ROLLBACK: If issues, revert to VERSION 6.8.3
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-13
+// UPDATED: 2026-01-16
 // ============================================
 
 const express = require('express');
@@ -69,7 +69,7 @@ const RESERVED_SUBDOMAINS = [
   'billing', 'dashboard', 'studio', 'dev', 'staging', 'test',
   'ns1', 'ns2', 'mx', 'webmail', 'cpanel', 'whm', 'autoconfig',
   'autodiscover', '_dmarc', '_domainkey', 'webdisk', 'cpcalendars', 'cpcontacts',
-  'meet', 'social', 'campaigns' // NEW v6.8.1
+  'meet', 'social', 'campaigns', 'email' // NEW v6.9.0
 ];
 
 app.use((req, res, next) => {
@@ -222,12 +222,11 @@ const routes = [
   ['auth', '/api/auth', './routes/auth.routes'],
   ['oauth', '/api/auth', './routes/oauth.routes'],
   ['user', '/api/users', './routes/user.routes'],
-  ['user-alt', '/api/user', './routes/user.routes'],
-  ['user-profile', '/api/users', './routes/user-profile.routes'],
-  ['notification-prefs', '/api/notifications', './routes/notification.preferences.routes'],
+  ['profile', '/api/profile', './routes/profile.routes'],
+  ['settings', '/api/settings', './routes/settings.routes'],
+  ['verification', '/api/verification', './routes/verification.routes'],
   
   // Content
-  ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],
   ['blog', '/api/blogs', './routes/blog.routes'],
   ['blogsite', '/api/blogsites', './routes/blogsite.routes'],
   ['posts', '/api/posts', './routes/posts.routes'],
@@ -318,13 +317,23 @@ const routes = [
   ['upload', '/api/upload', './routes/upload.routes'],
   
   // ==========================================
-  // NEW v6.8.1+ - Studio Features
+  // v6.8.1+ - Studio Features
   // ==========================================
   ['meet', '/api/meet', './routes/meet.routes'],
   ['social-tools', '/api/social-tools', './routes/social-tools.routes'],
   ['campaigns', '/api/campaigns', './routes/campaigns.routes'],
   ['contacts', '/api/contacts', './routes/contacts.routes'],
-  ['ai-generate', '/api/ai-generate', './routes/ai-generate.routes']
+  ['ai-generate', '/api/ai-generate', './routes/ai-generate.routes'],
+  
+  // ==========================================
+  // v6.9.0 - Email Platform (NEW)
+  // ==========================================
+  ['email', '/api/email', './routes/email.routes'],
+  ['sender-domains', '/api/sender-domains', './routes/sender-domains.routes'],
+  ['campaigns-enhanced', '/api/campaigns-enhanced', './routes/campaigns-enhanced.routes'],
+  ['email-webhooks', '/api/email-webhooks', './routes/email-webhooks.routes'],
+  ['automation', '/api/automation', './routes/automation.routes'],
+  ['email-subscription', '/api/email-subscription', './routes/email-subscription.routes']
 ];
 
 // Load all routes with error handling
@@ -346,13 +355,39 @@ routes.forEach(([name, path, file]) => {
 console.log(`=== Routes: ${loadedCount} loaded, ${failedCount} skipped ===\n`);
 
 // ==========================================
+// INITIALIZE EMAIL PLANS ON STARTUP
+// ==========================================
+
+(async () => {
+  try {
+    const { EmailPlan } = require('./models/email-subscription.model');
+    await EmailPlan.initializeDefaultPlans();
+  } catch (err) {
+    console.log('⚠️ Email plans initialization skipped:', err.message);
+  }
+})();
+
+// ==========================================
+// START AUTOMATION PROCESSOR (if enabled)
+// ==========================================
+
+if (process.env.ENABLE_AUTOMATION_PROCESSOR !== 'false') {
+  try {
+    const automationProcessor = require('./cron/automation-processor');
+    automationProcessor.start();
+  } catch (err) {
+    console.log('⚠️ Automation processor not started:', err.message);
+  }
+}
+
+// ==========================================
 // HEALTH CHECK & ROOT
 // ==========================================
 
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
-    version: '6.8.2',
+    version: '6.9.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -360,7 +395,9 @@ app.get('/api/health', (req, res) => {
       campaigns: 'enabled',
       aiGeneration: 'enabled',
       church: 'enabled',
-      forms: 'enabled'
+      forms: 'enabled',
+      emailPlatform: 'enabled',  // NEW v6.9.0
+      automation: 'enabled'      // NEW v6.9.0
     },
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     routes: { loaded: loadedCount, skipped: failedCount }
@@ -369,10 +406,10 @@ app.get('/api/health', (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v6.8.2',
+    message: 'CYBEV API v6.9.0',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
-    features: ['meet', 'social-tools', 'campaigns', 'ai-generate', 'church', 'forms']
+    features: ['meet', 'social-tools', 'campaigns', 'ai-generate', 'church', 'forms', 'email-platform', 'automation']
   });
 });
 
@@ -386,7 +423,7 @@ io.on('connection', (socket) => {
   socket.on('join-conversation', (id) => socket.join(`conversation:${id}`));
   socket.on('leave-conversation', (id) => socket.leave(`conversation:${id}`));
   
-  // Meeting events (NEW v6.8.1)
+  // Meeting events
   socket.on('join-meeting', (roomId) => {
     socket.join(`meeting:${roomId}`);
     socket.to(`meeting:${roomId}`).emit('participant-joined', { socketId: socket.id });
@@ -431,13 +468,20 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v6.8.2
+  CYBEV API Server v6.9.0
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  NEW Features v6.8.x:
+  NEW Features v6.9.0:
+  ✅ Email Platform (Send/Receive)
+  ✅ Custom Domain Verification
+  ✅ Campaign Management
+  ✅ Automation Workflows
+  ✅ Subscription Tiers
+  
+  Previous v6.8.x Features:
   ✅ Meet (Video Conferencing)
   ✅ Social Tools (Automation)
   ✅ Campaigns (Marketing)
