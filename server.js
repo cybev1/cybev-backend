@@ -2,11 +2,11 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.9.1 - Phase 6 Email Platform Complete
-// PREVIOUS: 6.9.0 - Email Platform Routes Added
-// ROLLBACK: If issues, revert to VERSION 6.9.0
+// VERSION: 6.9.2 - Added AI Image Generation Route
+// PREVIOUS: 6.9.1 - Phase 6 Email Platform Complete
+// ROLLBACK: If issues, revert to VERSION 6.9.1
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-16
+// UPDATED: 2026-01-17
 // ============================================
 
 const express = require('express');
@@ -229,50 +229,32 @@ app.get('/api/vlogs/my', authMiddleware, async (req, res) => {
 });
 
 // ==========================================
-// ALL ROUTES - Auto-loading with error handling
+// ROUTE DEFINITIONS (Array-based loading)
 // ==========================================
 
 const routes = [
   // Auth & Users
   ['auth', '/api/auth', './routes/auth.routes'],
-  ['oauth', '/api/auth', './routes/oauth.routes'],
-  ['user', '/api/users', './routes/user.routes'],
-  ['profile', '/api/profile', './routes/profile.routes'],
-  ['settings', '/api/settings', './routes/settings.routes'],
-  ['verification', '/api/verification', './routes/verification.routes'],
+  ['users', '/api/users', './routes/user.routes'],
+  ['followers', '/api/followers', './routes/follower.routes'],
   
   // Content
-  ['posts', '/api/posts', './routes/posts.routes'],
-  ['comments', '/api/comments', './routes/comment.routes'],
+  ['posts', '/api/posts', './routes/post.routes'],
   ['blogs', '/api/blogs', './routes/blog.routes'],
-  ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],
-  ['blogsite', '/api/blogsite', './routes/blogsite.routes'],
-  ['vlogs', '/api/vlogs', './routes/vlog.routes'],
-  ['stories', '/api/stories', './routes/story.routes'],
-  ['content', '/api/content', './routes/content.routes'],
-  
-  // Social
-  ['follow', '/api/follow', './routes/follow.routes'],
-  ['follow-check', '/api/follow', './routes/follow-check.routes'],
+  ['comments', '/api/comments', './routes/comment.routes'],
   ['notifications', '/api/notifications', './routes/notification.routes'],
-  ['notifications-advanced', '/api/notifications', './routes/notifications-advanced.routes'],
-  ['notification-preferences', '/api/notifications', './routes/notification.preferences.routes'],
   ['messages', '/api/messages', './routes/message.routes'],
-  ['reactions', '/api/reactions', './routes/reaction.routes'],
   ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
-  ['hashtags', '/api/hashtags', './routes/hashtag.routes'],
-  ['groups', '/api/groups', './routes/group.routes'],
-  ['groups-enhanced', '/api/groups', './routes/group-enhanced.routes'],
-  ['search', '/api/search', './routes/search.routes'],
-  ['feed', '/api/feed', './routes/feed.routes'],
-  ['share', '/api/share', './routes/share.routes'],
+  ['reactions', '/api/reactions', './routes/reaction.routes'],
+  ['hashtag', '/api/hashtag', './routes/hashtag.routes'],
   
-  // Live & Streaming
-  ['live', '/api/live', './routes/live.routes'],
-  ['stream-schedule', '/api/stream', './routes/stream-schedule.routes'],
+  // Streaming
+  ['streams', '/api/streams', './routes/stream.routes'],
+  ['stream-schedule', '/api/stream-schedule', './routes/stream-schedule.routes'],
   ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
+  ['mobile', '/api/mobile', './routes/mobile.routes'],
   
-  // NFT & Web3
+  // Web3 & NFT
   ['nft', '/api/nft', './routes/nft.routes'],
   ['mint', '/api/mint', './routes/mint.routes'],
   ['mint-badge', '/api/mint-badge', './routes/mint-badge.routes'],
@@ -281,25 +263,24 @@ const routes = [
   ['tipping', '/api/tipping', './routes/tipping.routes'],
   ['boost', '/api/boost', './routes/boost.routes'],
   ['boosted', '/api/boosted', './routes/boosted.routes'],
-  
-  // Monetization
-  ['subscription', '/api/subscriptions', './routes/subscription.routes'],
+  ['subscription', '/api/subscription', './routes/subscription.routes'],
   ['earnings', '/api/earnings', './routes/earnings.routes'],
   ['monetization', '/api/monetization', './routes/monetization.routes'],
   ['payments', '/api/payments', './routes/payments.routes'],
   
-  // Sites & Domains
-  ['sites-my', '/api/sites', './routes/sites-my.routes'],
+  // Sites
+  ['sites-my', '/api/sites/my', './routes/sites-my.routes'],
   ['sites', '/api/sites', './routes/sites.routes'],
   ['domain', '/api/domain', './routes/domain.routes'],
   ['seo', '/api/seo', './routes/seo.routes'],
   
-  // AI
+  // AI Features
   ['ai', '/api/ai', './routes/ai.routes'],
   ['ai-site', '/api/ai', './routes/ai-site.routes'],
+  ['ai-image', '/api/ai', './routes/ai-image.routes'],
   
   // Analytics
-  ['analytics-enhanced', '/api/analytics', './routes/analytics-enhanced.routes'],
+  ['analytics-enhanced', '/api/analytics-enhanced', './routes/analytics-enhanced.routes'],
   ['analytics', '/api/analytics', './routes/analytics.routes'],
   ['creator-analytics', '/api/creator-analytics', './routes/creator-analytics.routes'],
   
@@ -330,7 +311,6 @@ const routes = [
   ['leaderboard', '/api/leaderboard', './routes/leaderboard.routes'],
   ['i18n', '/api/i18n', './routes/i18n.routes'],
   ['push', '/api/push', './routes/push.routes'],
-  ['mobile', '/api/mobile', './routes/mobile.routes'],
   ['upload', '/api/upload', './routes/upload.routes'],
   
   // ==========================================
@@ -419,13 +399,14 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '6.9.1',
+    version: '6.9.2',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
       socialTools: 'enabled',
       campaigns: 'enabled',
       aiGeneration: 'enabled',
+      aiImageGeneration: 'enabled',
       church: 'enabled',
       forms: 'enabled',
       emailPlatform: sesStatus.enabled ? 'enabled' : 'not_configured',
@@ -442,10 +423,10 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v6.9.1',
+    message: 'CYBEV API v6.9.2',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
-    features: ['meet', 'social-tools', 'campaigns', 'ai-generate', 'church', 'forms', 'email-platform', 'automation']
+    features: ['meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 'church', 'forms', 'email-platform', 'automation']
   });
 });
 
@@ -508,7 +489,7 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v6.9.1
+  CYBEV API Server v6.9.2
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
@@ -520,6 +501,7 @@ server.listen(PORT, () => {
   ✅ Custom Domain Verification
   ✅ Automation Workflows
   ✅ Subscription Tiers
+  ✅ AI Image Generation (v6.9.2)
   
   Previous Features (v6.8.x):
   ✅ Meet (Video Conferencing)
