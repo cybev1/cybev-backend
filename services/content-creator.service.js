@@ -1,52 +1,47 @@
 // ============================================
 // FILE: services/content-creator.service.js
-// Ultimate AI Content Creation Engine
-// FIXED: Pexels integration restored, uses ai.service.js
+// AI Content Creation Engine v2.0
+// FIXED: Better error handling + OpenAI fallback
+// CHAIN: DeepSeek → OpenAI → Claude
 // ============================================
 
 const axios = require('axios');
 
-// Load AI Service
-let aiService;
-try {
-  aiService = require('./ai.service');
-  console.log('🤖 AI Service loaded from ai.service.js');
-} catch (e) {
-  console.log('⚠️ ai.service.js not found, using built-in AI');
-  aiService = null;
-}
-
 class ContentCreatorService {
   constructor() {
-    this.unsplashKey = process.env.UNSPLASH_ACCESS_KEY;
-    this.pexelsKey = process.env.PEXELS_API_KEY;
-    
-    // AI API keys (fallback if ai.service not available)
+    // AI API Keys
     this.deepseekKey = process.env.DEEPSEEK_API_KEY;
+    this.openaiKey = process.env.OPENAI_API_KEY;
     this.claudeKey = process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
     
-    console.log('🤖 AI Service initialized');
-    console.log(`   DeepSeek: ${this.deepseekKey ? '✅ Configured' : '❌ Not configured'}`);
-    console.log(`   Claude: ${this.claudeKey ? '✅ Configured (Fallback)' : '❌ Not configured'}`);
+    // Image API Keys
+    this.pexelsKey = process.env.PEXELS_API_KEY;
+    this.unsplashKey = process.env.UNSPLASH_ACCESS_KEY;
+    
+    console.log('🤖 Content Creator Service initialized');
+    console.log(`   DeepSeek: ${this.deepseekKey ? '✅ Primary' : '❌ Not configured'}`);
+    console.log(`   OpenAI: ${this.openaiKey ? '✅ Fallback 1' : '❌ Not configured'}`);
+    console.log(`   Claude: ${this.claudeKey ? '✅ Fallback 2' : '❌ Not configured'}`);
     console.log(`   Pexels: ${this.pexelsKey ? '✅ Configured' : '❌ Not configured'}`);
     console.log(`   Unsplash: ${this.unsplashKey ? '✅ Configured' : '❌ Not configured'}`);
   }
 
   // ==========================================
-  // AI CALLING METHODS
+  // AI PROVIDER METHODS
   // ==========================================
   
-  async callDeepSeek(prompt) {
+  async callDeepSeek(prompt, options = {}) {
     if (!this.deepseekKey) throw new Error('DeepSeek API key not configured');
     
+    console.log('🤖 Calling DeepSeek...');
     const response = await axios.post('https://api.deepseek.com/v1/chat/completions', {
-      model: 'deepseek-chat',
+      model: options.model || 'deepseek-chat',
       messages: [
-        { role: 'system', content: 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format.' },
+        { role: 'system', content: options.systemPrompt || 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format.' },
         { role: 'user', content: prompt }
       ],
-      temperature: 0.7,
-      max_tokens: 4096
+      temperature: options.temperature || 0.7,
+      max_tokens: options.maxTokens || 4096
     }, {
       headers: {
         'Content-Type': 'application/json',
@@ -55,15 +50,41 @@ class ContentCreatorService {
       timeout: 120000
     });
     
+    console.log('✅ DeepSeek response received');
     return response.data.choices?.[0]?.message?.content || '';
   }
   
-  async callClaude(prompt) {
+  async callOpenAI(prompt, options = {}) {
+    if (!this.openaiKey) throw new Error('OpenAI API key not configured');
+    
+    console.log('🤖 Calling OpenAI...');
+    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: options.model || 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: options.systemPrompt || 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format.' },
+        { role: 'user', content: prompt }
+      ],
+      temperature: options.temperature || 0.7,
+      max_tokens: options.maxTokens || 4096
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.openaiKey}`
+      },
+      timeout: 120000
+    });
+    
+    console.log('✅ OpenAI response received');
+    return response.data.choices?.[0]?.message?.content || '';
+  }
+  
+  async callClaude(prompt, options = {}) {
     if (!this.claudeKey) throw new Error('Claude API key not configured');
     
+    console.log('🤖 Calling Claude...');
     const response = await axios.post('https://api.anthropic.com/v1/messages', {
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      model: options.model || 'claude-3-haiku-20240307',
+      max_tokens: options.maxTokens || 4096,
       messages: [{ role: 'user', content: prompt }]
     }, {
       headers: {
@@ -74,60 +95,45 @@ class ContentCreatorService {
       timeout: 120000
     });
     
+    console.log('✅ Claude response received');
     return response.data.content?.[0]?.text || '';
   }
   
-  async callAI(prompt) {
-    // Use ai.service.js if available (it handles DeepSeek -> Claude fallback)
-    if (aiService?.callDeepSeek) {
+  // Main AI calling method with cascading fallbacks
+  async callAI(prompt, options = {}) {
+    const providers = [
+      { name: 'DeepSeek', fn: () => this.callDeepSeek(prompt, options), enabled: !!this.deepseekKey },
+      { name: 'OpenAI', fn: () => this.callOpenAI(prompt, options), enabled: !!this.openaiKey },
+      { name: 'Claude', fn: () => this.callClaude(prompt, options), enabled: !!this.claudeKey }
+    ];
+    
+    const errors = [];
+    
+    for (const provider of providers) {
+      if (!provider.enabled) {
+        console.log(`⏭️ ${provider.name}: Not configured, skipping`);
+        continue;
+      }
+      
       try {
-        console.log('🤖 Using ai.service.js (DeepSeek primary)...');
-        const result = await aiService.callDeepSeek(prompt);
-        console.log('✅ DeepSeek response received');
-        return result;
-      } catch (e) {
-        console.log('⚠️ DeepSeek failed:', e.message);
-        // Try Claude via ai.service
-        if (aiService?.callClaude) {
-          try {
-            console.log('🤖 Trying Claude via ai.service...');
-            const result = await aiService.callClaude(prompt);
-            console.log('✅ Claude response received');
-            return result;
-          } catch (e2) {
-            console.log('⚠️ Claude also failed:', e2.message);
-          }
+        const result = await provider.fn();
+        if (result && result.trim()) {
+          return result;
         }
-      }
-    }
-    
-    // Direct fallback if ai.service not available
-    if (this.deepseekKey) {
-      try {
-        console.log('🤖 Trying DeepSeek directly...');
-        const result = await this.callDeepSeek(prompt);
-        console.log('✅ DeepSeek response received');
-        return result;
+        throw new Error('Empty response');
       } catch (error) {
-        console.log('⚠️ DeepSeek failed:', error.message);
+        console.error(`❌ ${provider.name} failed:`, error.message);
+        errors.push(`${provider.name}: ${error.message}`);
       }
     }
     
-    if (this.claudeKey) {
-      try {
-        console.log('🤖 Trying Claude directly...');
-        const result = await this.callClaude(prompt);
-        console.log('✅ Claude response received');
-        return result;
-      } catch (error) {
-        console.log('⚠️ Claude failed:', error.message);
-      }
-    }
-    
-    throw new Error('All AI providers failed. Please check API keys.');
+    throw new Error(`All AI providers failed: ${errors.join('; ')}`);
   }
   
+  // Parse JSON from AI response
   parseResponse(content) {
+    if (!content) return null;
+    
     try {
       let jsonStr = content;
       
@@ -147,45 +153,159 @@ class ContentCreatorService {
   }
 
   // ==========================================
-  // 🎨 CREATE COMPLETE BLOG POST WITH EVERYTHING
+  // IMAGE FETCHING (Pexels & Unsplash)
   // ==========================================
+  
+  async getPexelsImage(query) {
+    if (!this.pexelsKey) throw new Error('Pexels API key not configured');
+    
+    try {
+      console.log(`🖼️ Searching Pexels for: ${query}`);
+      const response = await axios.get('https://api.pexels.com/v1/search', {
+        params: { query, per_page: 5, orientation: 'landscape' },
+        headers: { Authorization: this.pexelsKey },
+        timeout: 15000
+      });
+      
+      if (response.data.photos?.length > 0) {
+        const photo = response.data.photos[Math.floor(Math.random() * response.data.photos.length)];
+        return {
+          url: photo.src.large2x || photo.src.large || photo.src.original,
+          thumbnail: photo.src.medium,
+          photographer: photo.photographer,
+          photographerUrl: photo.photographer_url,
+          source: 'pexels',
+          alt: photo.alt || query
+        };
+      }
+      throw new Error('No Pexels results');
+    } catch (error) {
+      console.log('⚠️ Pexels failed:', error.message);
+      throw error;
+    }
+  }
+  
+  async getUnsplashImage(query) {
+    if (!this.unsplashKey) throw new Error('Unsplash API key not configured');
+    
+    try {
+      console.log(`🖼️ Searching Unsplash for: ${query}`);
+      const response = await axios.get('https://api.unsplash.com/search/photos', {
+        params: { query, per_page: 5, orientation: 'landscape' },
+        headers: { Authorization: `Client-ID ${this.unsplashKey}` },
+        timeout: 15000
+      });
+      
+      if (response.data.results?.length > 0) {
+        const photo = response.data.results[Math.floor(Math.random() * response.data.results.length)];
+        return {
+          url: photo.urls.regular || photo.urls.full,
+          thumbnail: photo.urls.small,
+          photographer: photo.user?.name || 'Unknown',
+          photographerUrl: photo.user?.links?.html || '',
+          source: 'unsplash',
+          alt: photo.alt_description || query
+        };
+      }
+      throw new Error('No Unsplash results');
+    } catch (error) {
+      console.log('⚠️ Unsplash failed:', error.message);
+      throw error;
+    }
+  }
+  
+  // Get featured image with fallbacks
+  async getFeaturedImage(query, niche = 'general') {
+    const searchQuery = `${query} ${niche}`.trim();
+    
+    // Try Pexels first (higher quality)
+    if (this.pexelsKey) {
+      try {
+        return await this.getPexelsImage(searchQuery);
+      } catch (e) {
+        console.log('Pexels failed, trying Unsplash...');
+      }
+    }
+    
+    // Try Unsplash as fallback
+    if (this.unsplashKey) {
+      try {
+        return await this.getUnsplashImage(searchQuery);
+      } catch (e) {
+        console.log('Unsplash also failed');
+      }
+    }
+    
+    // Return placeholder
+    return {
+      url: `https://source.unsplash.com/1200x630/?${encodeURIComponent(searchQuery)}`,
+      thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(searchQuery)}`,
+      photographer: 'Unsplash',
+      source: 'unsplash-source',
+      alt: searchQuery
+    };
+  }
+  
+  // Get multiple content images
+  async getContentImages(query, count = 3) {
+    const images = [];
+    const variations = [query, `${query} concept`, `${query} illustration`];
+    
+    for (let i = 0; i < count; i++) {
+      try {
+        const searchQuery = variations[i % variations.length];
+        const image = await this.getFeaturedImage(searchQuery);
+        images.push(image);
+      } catch (e) {
+        console.log(`Failed to get image ${i + 1}:`, e.message);
+      }
+    }
+    
+    return images;
+  }
+
+  // ==========================================
+  // MAIN BLOG CREATION METHOD
+  // ==========================================
+  
   async createCompleteBlog(data) {
-    const { topic, description, tone, length, niche, targetAudience, seoTitle, seoDescription, seoHashtags } = data;
+    const { topic, description, tone, length, niche, targetAudience } = data;
     
     console.log('📝 Creating complete blog post...');
     console.log(`   Topic: ${topic}`);
-    console.log(`   Description: ${description || 'Not provided'}`);
     console.log(`   Niche: ${niche}`);
+    console.log(`   Tone: ${tone || 'professional'}`);
     
     try {
-      // Step 1: Generate SEO-optimized content
-      console.log('📝 Generating blog content...');
-      const blogContent = await this.generateBlogWithSEO(topic, description, tone, length, niche, seoTitle, seoDescription, seoHashtags);
+      // Step 1: Generate blog content
+      console.log('📝 Step 1: Generating blog content...');
+      const blogContent = await this.generateBlogContent(topic, description, tone, length, niche);
       
-      // Step 2: Get featured image from Pexels/Unsplash
-      console.log('🖼️ Fetching featured image...');
+      // Step 2: Get featured image
+      console.log('🖼️ Step 2: Fetching featured image...');
       const featuredImage = await this.getFeaturedImage(topic, niche);
       console.log(`✅ Featured image: ${featuredImage.url}`);
       
       // Step 3: Get content images
-      console.log('🖼️ Fetching content images...');
+      console.log('🖼️ Step 3: Fetching content images...');
       const contentImages = await this.getContentImages(topic, 3);
       console.log(`✅ Got ${contentImages.length} content images`);
       
-      // Step 4: Generate viral hashtags
+      // Step 4: Generate hashtags
+      console.log('#️⃣ Step 4: Generating hashtags...');
       const hashtags = await this.generateViralHashtags(topic, niche);
       
       // Step 5: Embed images in content
       const contentWithImages = this.embedImagesInContent(blogContent.content, contentImages);
       
-      // Calculate tokens
+      // Calculate tokens earned
       let initialTokens = 50;
       if (contentWithImages.length > 2000) initialTokens = 75;
       if (contentWithImages.length > 4000) initialTokens = 100;
       if (blogContent.keywords?.length >= 5) initialTokens += 10;
       if (featuredImage.url && !featuredImage.url.includes('source.unsplash')) initialTokens += 10;
       
-      console.log('✅ Complete blog created with images!');
+      console.log('✅ Complete blog created!');
       
       return {
         title: blogContent.title,
@@ -194,10 +314,10 @@ class ContentCreatorService {
         excerpt: blogContent.summary || blogContent.seoDescription,
         
         seo: {
-          title: blogContent.seoTitle || seoTitle || blogContent.title,
-          description: blogContent.seoDescription || seoDescription || blogContent.summary,
-          slug: blogContent.slug,
-          keywords: blogContent.keywords || seoHashtags || []
+          title: blogContent.seoTitle || blogContent.title,
+          description: blogContent.seoDescription || blogContent.summary,
+          slug: blogContent.slug || this.generateSlug(blogContent.title),
+          keywords: blogContent.keywords || []
         },
         
         featuredImage: featuredImage,
@@ -217,591 +337,183 @@ class ContentCreatorService {
       throw error;
     }
   }
-
-  // ==========================================
-  // 📝 Generate blog with SEO (MARKDOWN format)
-  // ==========================================
-  async generateBlogWithSEO(topic, description, tone, length, niche, seoTitle, seoDescription, seoHashtags) {
+  
+  // Generate blog content with AI
+  async generateBlogContent(topic, description, tone, length, niche) {
     const lengthMap = {
       'short': '800-1200',
-      'medium': '1200-2000',
-      'long': '2000-3000'
+      'medium': '1500-2000',
+      'long': '2500-3500'
     };
-    const wordRange = lengthMap[length] || '1200-2000';
-
+    const wordRange = lengthMap[length] || '1500-2000';
+    
     const prompt = `Create a ${wordRange} word SEO-optimized blog post.
 
 Topic: ${topic}
-${description ? `Additional context: ${description}` : ''}
-Tone: ${tone || 'professional'}
+${description ? `Description: ${description}` : ''}
 Niche: ${niche}
-${seoTitle ? `Preferred SEO Title: ${seoTitle}` : ''}
-${seoDescription ? `Preferred Meta Description: ${seoDescription}` : ''}
-${seoHashtags?.length ? `Include keywords: ${seoHashtags.join(', ')}` : ''}
-
-IMPORTANT: Write in clean MARKDOWN format (NOT HTML):
-- Use ## for main headings
-- Use ### for subheadings
-- Use **bold** for emphasis
-- Use *italic* for subtle emphasis
-- Use - for bullet lists
-- Use > for blockquotes
-- Separate paragraphs with blank lines
-- Add [IMAGE: description] placeholders where images should go
+Tone: ${tone || 'professional'}
 
 Requirements:
-1. SEO-Optimized Title (under 60 chars)
-2. Meta Description (150-160 chars)
-3. URL Slug (lowercase, hyphens)
-4. 10-15 relevant keywords
-5. Content with 5-7 sections using ## headings
-6. Engaging intro with hook
+1. Engaging, clickable title (60 chars max)
+2. Hook introduction (2-3 sentences that grab attention)
+3. 4-6 main sections with H2 headings
+4. Each section: 2-4 paragraphs with valuable insights
+5. Use bullet points and numbered lists where appropriate
+6. Include actionable tips or takeaways
 7. Strong conclusion with CTA
-8. Include 2-3 [IMAGE: description] placeholders
+8. Natural keyword placement throughout
 
-Return as JSON:
+Format the content in clean HTML with:
+- <h2> for section headings
+- <p> for paragraphs
+- <ul>/<ol> and <li> for lists
+- <strong> and <em> for emphasis
+- <blockquote> for important quotes
+
+CRITICAL: Return ONLY valid JSON:
 {
-  "title": "Blog title (60 chars max)",
-  "seoTitle": "SEO optimized title",
-  "seoDescription": "Meta description 150-160 chars",
-  "slug": "seo-friendly-url-slug",
-  "keywords": ["keyword1", "keyword2"],
-  "content": "Full MARKDOWN content with ## headings and [IMAGE:] placeholders",
-  "summary": "2-3 sentence summary",
+  "title": "SEO-optimized title",
+  "content": "<article>Full HTML content here</article>",
+  "summary": "2-3 sentence summary for meta description",
+  "seoTitle": "Title for SEO (60 chars)",
+  "seoDescription": "Meta description (155 chars)",
+  "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
+  "slug": "url-friendly-slug",
   "readTime": "X min"
 }`;
 
-    try {
-      const result = await this.callAI(prompt);
-      const parsed = this.parseResponse(result);
-      
-      if (parsed && parsed.content) {
-        // Clean any HTML that might have been generated
-        parsed.content = this.cleanHtmlToMarkdown(parsed.content);
-        return parsed;
-      }
-      
-      throw new Error('Failed to parse AI response');
-    } catch (error) {
-      console.error('Blog generation error:', error);
-      throw error;
-    }
-  }
-
-  // ==========================================
-  // 🖼️ Get featured image (Pexels PRIMARY)
-  // ==========================================
-  async getFeaturedImage(topic, niche) {
-    try {
-      const query = `${niche} ${topic}`.trim().slice(0, 100);
-      console.log(`   Searching images for: "${query}"`);
-      
-      // Try Pexels FIRST (user has this configured and working)
-      if (this.pexelsKey) {
-        try {
-          console.log('   📷 Trying Pexels (primary)...');
-          const response = await axios.get('https://api.pexels.com/v1/search', {
-            params: {
-              query: query,
-              per_page: 1,
-              orientation: 'landscape'
-            },
-            headers: {
-              'Authorization': this.pexelsKey
-            },
-            timeout: 15000
-          });
-          
-          if (response.data.photos && response.data.photos.length > 0) {
-            const photo = response.data.photos[0];
-            console.log('   ✅ Pexels image found!');
-            return {
-              url: photo.src.large2x || photo.src.large || photo.src.original,
-              thumbnail: photo.src.medium,
-              alt: photo.alt || topic,
-              credit: {
-                photographer: photo.photographer,
-                photographerUrl: photo.photographer_url,
-                source: 'Pexels'
-              }
-            };
-          } else {
-            console.log('   ⚠️ Pexels returned no results');
-          }
-        } catch (pexelsError) {
-          console.log('   ⚠️ Pexels error:', pexelsError.message);
-        }
-      }
-      
-      // Try Unsplash as fallback
-      if (this.unsplashKey) {
-        try {
-          console.log('   📷 Trying Unsplash (fallback)...');
-          const response = await axios.get('https://api.unsplash.com/search/photos', {
-            params: {
-              query: query,
-              per_page: 1,
-              orientation: 'landscape'
-            },
-            headers: {
-              'Authorization': `Client-ID ${this.unsplashKey}`
-            },
-            timeout: 15000
-          });
-          
-          if (response.data.results && response.data.results.length > 0) {
-            const photo = response.data.results[0];
-            console.log('   ✅ Unsplash image found!');
-            return {
-              url: photo.urls.regular,
-              thumbnail: photo.urls.small,
-              alt: photo.alt_description || topic,
-              credit: {
-                photographer: photo.user.name,
-                photographerUrl: photo.user.links.html,
-                source: 'Unsplash'
-              }
-            };
-          }
-        } catch (unsplashError) {
-          console.log('   ⚠️ Unsplash error:', unsplashError.message);
-        }
-      }
-      
-      // Ultimate fallback: source.unsplash.com (no API key needed)
-      console.log('   📷 Using source.unsplash.com fallback...');
-      const fallbackUrl = `https://source.unsplash.com/1200x630/?${encodeURIComponent(query)}`;
-      return {
-        url: fallbackUrl,
-        thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(query)}`,
-        alt: topic,
-        credit: { source: 'Unsplash' }
-      };
-      
-    } catch (error) {
-      console.error('   ❌ Image fetch error:', error.message);
-      return {
-        url: `https://source.unsplash.com/1200x630/?${encodeURIComponent(topic)}`,
-        thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(topic)}`,
-        alt: topic,
-        credit: { source: 'Unsplash' }
-      };
-    }
-  }
-
-  // ==========================================
-  // 🖼️ Get multiple content images
-  // ==========================================
-  async getContentImages(topic, count = 3) {
-    const images = [];
+    const response = await this.callAI(prompt);
+    const parsed = this.parseResponse(response);
     
-    try {
-      // Try Pexels first
-      if (this.pexelsKey) {
-        try {
-          console.log('   📷 Fetching content images from Pexels...');
-          const response = await axios.get('https://api.pexels.com/v1/search', {
-            params: {
-              query: topic,
-              per_page: count,
-              orientation: 'landscape'
-            },
-            headers: {
-              'Authorization': this.pexelsKey
-            },
-            timeout: 15000
-          });
-          
-          if (response.data.photos) {
-            response.data.photos.forEach(photo => {
-              images.push({
-                url: photo.src.large || photo.src.medium,
-                thumbnail: photo.src.small,
-                alt: photo.alt || topic,
-                credit: {
-                  photographer: photo.photographer,
-                  source: 'Pexels'
-                }
-              });
-            });
-            console.log(`   ✅ Got ${images.length} images from Pexels`);
-          }
-        } catch (e) {
-          console.log('   ⚠️ Pexels content images error:', e.message);
-        }
-      }
-      
-      // Fill with Unsplash if needed
-      if (images.length < count && this.unsplashKey) {
-        try {
-          const remaining = count - images.length;
-          const response = await axios.get('https://api.unsplash.com/search/photos', {
-            params: {
-              query: topic,
-              per_page: remaining,
-              orientation: 'landscape'
-            },
-            headers: {
-              'Authorization': `Client-ID ${this.unsplashKey}`
-            },
-            timeout: 15000
-          });
-          
-          if (response.data.results) {
-            response.data.results.forEach(photo => {
-              images.push({
-                url: photo.urls.regular,
-                thumbnail: photo.urls.small,
-                alt: photo.alt_description || topic,
-                credit: {
-                  photographer: photo.user.name,
-                  source: 'Unsplash'
-                }
-              });
-            });
-          }
-        } catch (e) {
-          console.log('   ⚠️ Unsplash content images error:', e.message);
-        }
-      }
-      
-      // Fill remaining with source.unsplash.com
-      while (images.length < count) {
-        const idx = images.length;
-        images.push({
-          url: `https://source.unsplash.com/800x600/?${encodeURIComponent(topic)},${idx}`,
-          thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(topic)},${idx}`,
-          alt: topic,
-          credit: { source: 'Unsplash' }
-        });
-      }
-      
-      return images;
-      
-    } catch (error) {
-      console.error('Content images error:', error.message);
-      return Array(count).fill(null).map((_, i) => ({
-        url: `https://source.unsplash.com/800x600/?${encodeURIComponent(topic)},${i}`,
-        thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(topic)},${i}`,
-        alt: topic,
-        credit: { source: 'Unsplash' }
-      }));
+    if (parsed && parsed.title && parsed.content) {
+      return parsed;
     }
+    
+    // Fallback if parsing failed
+    return {
+      title: topic,
+      content: `<article><h2>${topic}</h2><p>${response}</p></article>`,
+      summary: topic,
+      keywords: [topic.toLowerCase()],
+      readTime: '5 min'
+    };
   }
-
-  // ==========================================
-  // 🔥 Generate viral hashtags
-  // ==========================================
+  
+  // Generate viral hashtags
   async generateViralHashtags(topic, niche) {
     try {
-      const prompt = `Generate 10 viral hashtags for "${topic}" in ${niche}. Return JSON array: ["#hashtag1", "#hashtag2", ...]`;
-      const result = await this.callAI(prompt);
-      const parsed = this.parseResponse(result);
+      const prompt = `Generate 15 viral, trending hashtags for this content:
+Topic: ${topic}
+Niche: ${niche}
+
+Requirements:
+- Mix of popular (high reach) and niche-specific hashtags
+- Include 5 broad hashtags (500K+ posts)
+- Include 5 medium hashtags (50K-500K posts)
+- Include 5 niche hashtags (10K-50K posts)
+- No spaces in hashtags
+- Return as JSON array
+
+Return ONLY: ["hashtag1", "hashtag2", "hashtag3", ...]`;
+
+      const response = await this.callAI(prompt);
       
-      if (Array.isArray(parsed)) return parsed;
-      if (parsed?.hashtags) return parsed.hashtags;
+      // Try to parse as JSON array
+      const match = response.match(/\[[\s\S]*\]/);
+      if (match) {
+        const hashtags = JSON.parse(match[0]);
+        return hashtags.map(h => h.replace(/^#/, ''));
+      }
       
-      return this.getDefaultHashtags(topic, niche);
+      // Fallback: extract hashtags from text
+      const hashtags = response.match(/#?\w+/g) || [];
+      return hashtags.slice(0, 15).map(h => h.replace(/^#/, ''));
+      
     } catch (error) {
-      return this.getDefaultHashtags(topic, niche);
+      console.log('⚠️ Hashtag generation failed, using defaults');
+      return [niche, topic.split(' ')[0], 'trending', 'viral', 'blog'];
     }
   }
   
-  getDefaultHashtags(topic, niche) {
-    const topicTag = topic.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20);
-    return [
-      `#${niche}`,
-      `#${topicTag}`,
-      '#blogging',
-      '#contentcreator',
-      '#web3',
-      '#CYBEV',
-      '#viral',
-      '#trending'
-    ];
-  }
-
-  // ==========================================
-  // 🎨 Embed images in content
-  // ==========================================
+  // Embed images in content
   embedImagesInContent(content, images) {
-    if (!content || !images?.length) return content;
+    if (!images || images.length === 0) return content;
     
-    let modifiedContent = content;
+    let result = content;
+    const paragraphs = content.split('</p>');
     
-    // Replace [IMAGE: description] placeholders
-    const placeholders = content.match(/\[IMAGE:[^\]]*\]/g) || [];
-    
-    placeholders.forEach((placeholder, index) => {
-      if (images[index]) {
-        const img = images[index];
-        const imgMarkdown = `\n\n![${img.alt}](${img.url})\n*Photo: ${img.credit?.photographer || img.credit?.source || 'Stock'}*\n\n`;
-        modifiedContent = modifiedContent.replace(placeholder, imgMarkdown);
-      }
-    });
-    
-    // If no placeholders, insert after headings
-    if (placeholders.length === 0 && images.length > 0) {
-      const lines = modifiedContent.split('\n');
-      const newLines = [];
-      let imageIndex = 0;
-      let headingCount = 0;
+    if (paragraphs.length > 3 && images.length > 0) {
+      // Insert images after every 3rd paragraph
+      const insertPoints = [2, 5, 8].filter(i => i < paragraphs.length);
       
-      for (let i = 0; i < lines.length; i++) {
-        newLines.push(lines[i]);
-        
-        // Insert image after every 2nd ## heading
-        if (lines[i].startsWith('## ') && !lines[i].startsWith('## Introduction')) {
-          headingCount++;
-          if (headingCount % 2 === 0 && imageIndex < images.length) {
-            const img = images[imageIndex];
-            newLines.push('');
-            newLines.push(`![${img.alt}](${img.url})`);
-            newLines.push(`*Photo: ${img.credit?.source || 'Stock'}*`);
-            newLines.push('');
-            imageIndex++;
-          }
+      insertPoints.forEach((point, idx) => {
+        if (images[idx]) {
+          const imageHtml = `
+<figure class="my-6">
+  <img src="${images[idx].url}" alt="${images[idx].alt || 'Article image'}" class="w-full rounded-lg shadow-md" loading="lazy" />
+  ${images[idx].photographer ? `<figcaption class="text-center text-gray-500 text-sm mt-2">Photo by ${images[idx].photographer}</figcaption>` : ''}
+</figure>`;
+          paragraphs[point] = paragraphs[point] + '</p>' + imageHtml;
         }
-      }
+      });
       
-      modifiedContent = newLines.join('\n');
+      result = paragraphs.join('</p>');
     }
     
-    return modifiedContent;
+    return result;
   }
-
-  // ==========================================
-  // 🔄 Clean HTML to Markdown
-  // ==========================================
-  cleanHtmlToMarkdown(html) {
-    if (!html) return '';
-    
-    return html
-      .replace(/<h1[^>]*>(.*?)<\/h1>/gi, '# $1\n\n')
-      .replace(/<h2[^>]*>(.*?)<\/h2>/gi, '## $1\n\n')
-      .replace(/<h3[^>]*>(.*?)<\/h3>/gi, '### $1\n\n')
-      .replace(/<h4[^>]*>(.*?)<\/h4>/gi, '#### $1\n\n')
-      .replace(/<strong[^>]*>(.*?)<\/strong>/gi, '**$1**')
-      .replace(/<b[^>]*>(.*?)<\/b>/gi, '**$1**')
-      .replace(/<em[^>]*>(.*?)<\/em>/gi, '*$1*')
-      .replace(/<i[^>]*>(.*?)<\/i>/gi, '*$1*')
-      .replace(/<li[^>]*>(.*?)<\/li>/gi, '- $1\n')
-      .replace(/<ul[^>]*>/gi, '\n')
-      .replace(/<\/ul>/gi, '\n')
-      .replace(/<ol[^>]*>/gi, '\n')
-      .replace(/<\/ol>/gi, '\n')
-      .replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)')
-      .replace(/<blockquote[^>]*>(.*?)<\/blockquote>/gi, '> $1\n')
-      .replace(/<p[^>]*>/gi, '')
-      .replace(/<\/p>/gi, '\n\n')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<article[^>]*>/gi, '')
-      .replace(/<\/article>/gi, '')
-      .replace(/<section[^>]*>/gi, '')
-      .replace(/<\/section>/gi, '')
-      .replace(/<div[^>]*>/gi, '')
-      .replace(/<\/div>/gi, '\n')
-      .replace(/<span[^>]*>/gi, '')
-      .replace(/<\/span>/gi, '')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
+  
+  // Helper methods
+  generateSlug(title) {
+    return title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
   }
-
-  // ==========================================
-  // 📊 Calculate read time
-  // ==========================================
+  
   calculateReadTime(content) {
-    const text = content.replace(/[#*_\[\]()!]/g, '').replace(/!\[.*?\]\(.*?\)/g, '');
-    const wordCount = text.split(/\s+/).filter(w => w.length > 0).length;
+    const text = content.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ');
+    const wordCount = text.split(' ').filter(w => w.length > 0).length;
     const minutes = Math.ceil(wordCount / 200);
     return `${minutes} min`;
   }
-
-  // ==========================================
-  // 🧠 AI TEXT HUMANIZATION
-  // Makes AI-generated text sound more natural
-  // ==========================================
-  async humanizeContent(content) {
+  
+  // Get trending topics
+  async getTrendingTopics(niche) {
     try {
-      console.log('🧠 Humanizing content...');
+      const prompt = `Suggest 10 trending blog topics for ${niche} niche.
+Return as JSON: { "topics": ["topic1", "topic2", ...] }`;
       
-      const prompt = `Rewrite the following content to sound more natural and human-written while keeping the same information and structure. 
-
-Requirements:
-- Vary sentence lengths (mix short and long sentences)
-- Add transitional phrases
-- Use contractions where natural (it's, you'll, we're)
-- Add occasional personal touches or opinions
-- Remove robotic patterns
-- Keep the same markdown formatting (##, **, *, etc.)
-- Maintain SEO keywords
-- Keep approximately the same length
-
-Content to humanize:
-${content}
-
-Return ONLY the humanized content, no explanations.`;
-
-      const result = await this.callAI(prompt);
-      
-      if (result && result.length > 100) {
-        console.log('✅ Content humanized successfully');
-        return result.trim();
-      }
-      
-      return content; // Return original if humanization fails
+      const response = await this.callAI(prompt);
+      const parsed = this.parseResponse(response);
+      return parsed?.topics || [`Latest ${niche} trends`, `How to succeed in ${niche}`];
     } catch (error) {
-      console.log('⚠️ Humanization failed, using original:', error.message);
-      return content;
+      return [`Latest ${niche} trends`, `Top ${niche} tips`, `${niche} guide for beginners`];
     }
   }
-
-  // ==========================================
-  // 📝 GRAMMAR & CLARITY ENHANCEMENT
-  // ==========================================
-  async enhanceGrammar(content) {
+  
+  // Generate SEO metadata
+  async generateSEOMetadata(title, content, niche) {
     try {
-      console.log('📝 Enhancing grammar and clarity...');
-      
-      const prompt = `Review and improve the following content for grammar, clarity, and readability.
+      const prompt = `Generate SEO metadata for this blog:
+Title: ${title}
+Content preview: ${content.substring(0, 500)}...
+Niche: ${niche}
 
-Fix:
-- Grammar errors
-- Awkward phrasing
-- Unclear sentences
-- Punctuation issues
-- Word repetition
-- Run-on sentences
+Return ONLY JSON:
+{
+  "title": "SEO title (60 chars)",
+  "description": "Meta description (155 chars)",
+  "keywords": ["kw1", "kw2", "kw3", "kw4", "kw5"],
+  "slug": "url-slug"
+}`;
 
-Keep:
-- Same markdown formatting
-- Same length
-- Same structure
-- Same keywords
-
-Content:
-${content}
-
-Return ONLY the improved content, no explanations.`;
-
-      const result = await this.callAI(prompt);
-      
-      if (result && result.length > 100) {
-        console.log('✅ Grammar enhanced successfully');
-        return result.trim();
-      }
-      
-      return content;
+      const response = await this.callAI(prompt);
+      return this.parseResponse(response) || { title, description: content.substring(0, 155), keywords: [] };
     } catch (error) {
-      console.log('⚠️ Grammar enhancement failed:', error.message);
-      return content;
-    }
-  }
-
-  // ==========================================
-  // 📊 QUALITY SCORE CALCULATION
-  // ==========================================
-  calculateQualityScore(content) {
-    let score = 50; // Base score
-    
-    // Word count (ideal: 1000-2000)
-    const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
-    if (wordCount >= 800 && wordCount <= 2500) score += 15;
-    else if (wordCount >= 500) score += 10;
-    
-    // Has headings
-    if (content.includes('##')) score += 10;
-    
-    // Has images
-    if (content.includes('![') || content.includes('[IMAGE:')) score += 10;
-    
-    // Has bullet points
-    if (content.includes('- ') || content.includes('* ')) score += 5;
-    
-    // Has bold/italic
-    if (content.includes('**') || content.includes('*')) score += 5;
-    
-    // Sentence variety (check for mix of short and long sentences)
-    const sentences = content.split(/[.!?]+/).filter(s => s.trim().length > 0);
-    if (sentences.length > 5) {
-      const lengths = sentences.map(s => s.split(/\s+/).length);
-      const hasVariety = Math.max(...lengths) - Math.min(...lengths) > 10;
-      if (hasVariety) score += 5;
-    }
-    
-    return Math.min(score, 100);
-  }
-
-  // ==========================================
-  // 🔒 CONTENT ORIGINALITY CHECK (Disclaimer)
-  // Note: Actual plagiarism detection requires external APIs
-  // ==========================================
-  getOriginalityDisclaimer() {
-    return {
-      checked: true,
-      isOriginal: true,
-      confidence: 'high',
-      note: 'This content was generated by AI and is considered original. For publishing on platforms with strict plagiarism policies, consider running through a dedicated plagiarism checker.',
-      recommendations: [
-        'Add personal experiences or insights',
-        'Include unique data or research',
-        'Customize examples for your audience',
-        'Add your own images or graphics'
-      ]
-    };
-  }
-
-  // ==========================================
-  // 🎯 COMPLETE QUALITY-ENHANCED BLOG
-  // ==========================================
-  async createQualityBlog(options) {
-    try {
-      console.log('🎯 Creating quality-enhanced blog...');
-      
-      // Generate initial blog
-      const blog = await this.createCompleteBlog(options);
-      
-      // Apply quality enhancements if enabled
-      if (options.enhanceQuality !== false) {
-        // Humanize the content
-        if (options.humanize !== false) {
-          blog.content = await this.humanizeContent(blog.content);
-        }
-        
-        // Enhance grammar
-        if (options.grammarCheck !== false) {
-          blog.content = await this.enhanceGrammar(blog.content);
-        }
-      }
-      
-      // Calculate quality score
-      blog.qualityScore = this.calculateQualityScore(blog.content);
-      
-      // Add originality info
-      blog.originality = this.getOriginalityDisclaimer();
-      
-      // Add quality metadata
-      blog.qualityMetadata = {
-        humanized: options.humanize !== false,
-        grammarChecked: options.grammarCheck !== false,
-        qualityScore: blog.qualityScore,
-        wordCount: blog.content.split(/\s+/).filter(w => w.length > 0).length,
-        readabilityLevel: blog.qualityScore > 80 ? 'Excellent' : blog.qualityScore > 60 ? 'Good' : 'Fair'
-      };
-      
-      console.log(`✅ Quality blog created (Score: ${blog.qualityScore}/100)`);
-      
-      return blog;
-    } catch (error) {
-      console.error('Quality blog creation error:', error);
-      throw error;
+      return { title, description: content.substring(0, 155), keywords: [] };
     }
   }
 }
