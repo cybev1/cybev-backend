@@ -240,6 +240,7 @@ const routes = [
   
   // Content
   ['posts', '/api/posts', './routes/post.routes'],
+  ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],  // ⚠️ MUST be BEFORE blog.routes!
   ['blogs', '/api/blogs', './routes/blog.routes'],
   ['comments', '/api/comments', './routes/comment.routes'],
   ['notifications', '/api/notifications', './routes/notification.routes'],
