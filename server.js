@@ -239,6 +239,7 @@ const routes = [
   ['followers', '/api/followers', './routes/follower.routes'],
   
   // Content
+  ['content', '/api/content', './routes/content.routes'],  // ⚠️ AI Blog Generator - create-blog endpoint
   ['posts', '/api/posts', './routes/post.routes'],
   ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],  // ⚠️ MUST be BEFORE blog.routes!
   ['blogs', '/api/blogs', './routes/blog.routes'],
