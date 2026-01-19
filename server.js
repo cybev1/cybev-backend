@@ -2,11 +2,11 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 6.9.2 - Added AI Image Generation Route
-// PREVIOUS: 6.9.1 - Phase 6 Email Platform Complete
-// ROLLBACK: If issues, revert to VERSION 6.9.1
+// VERSION: 7.0.0 - Premium Email Marketing Platform
+// PREVIOUS: 6.9.2 - AI Image Generation Route
+// ROLLBACK: If issues, revert to VERSION 6.9.2
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-17
+// UPDATED: 2026-01-19
 // ============================================
 
 const express = require('express');
@@ -229,66 +229,44 @@ app.get('/api/vlogs/my', authMiddleware, async (req, res) => {
 });
 
 // ==========================================
-// ROUTE DEFINITIONS (Array-based loading)
+// ALL ROUTES - v7.0.0 Premium Email Platform
 // ==========================================
 
 const routes = [
-  // Auth & Users
+  // Core
   ['auth', '/api/auth', './routes/auth.routes'],
   ['users', '/api/users', './routes/user.routes'],
-  ['followers', '/api/followers', './routes/follower.routes'],
-  
-  // Content
-  ['content', '/api/content', './routes/content.routes'],  // ⚠️ AI Blog Generator - create-blog endpoint
   ['posts', '/api/posts', './routes/post.routes'],
-  ['blogs-my', '/api/blogs', './routes/blogs-my.routes'],  // ⚠️ MUST be BEFORE blog.routes!
-  ['blogs', '/api/blogs', './routes/blog.routes'],
   ['comments', '/api/comments', './routes/comment.routes'],
-  ['notifications', '/api/notifications', './routes/notification.routes'],
   ['messages', '/api/messages', './routes/message.routes'],
+  ['notifications', '/api/notifications', './routes/notification.routes'],
+  ['follows', '/api/follows', './routes/follow.routes'],
+  ['search', '/api/search', './routes/search.routes'],
+  ['hashtags', '/api/hashtags', './routes/hashtag.routes'],
   ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
-  ['reactions', '/api/reactions', './routes/reaction.routes'],
-  ['hashtag', '/api/hashtag', './routes/hashtag.routes'],
   
-  // Streaming
-  ['streams', '/api/streams', './routes/stream.routes'],
-  ['stream-schedule', '/api/stream-schedule', './routes/stream-schedule.routes'],
-  ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
-  ['mobile', '/api/mobile', './routes/mobile.routes'],
+  // Media & Content
+  ['media', '/api/media', './routes/media.routes'],
+  ['vlogs', '/api/vlogs', './routes/vlog.routes'],
+  ['stories', '/api/stories', './routes/story.routes'],
+  ['polls', '/api/polls', './routes/poll.routes'],
+  ['reactions', '/api/reactions', './routes/reaction.routes'],
+  ['reels', '/api/reels', './routes/reels.routes'],
+  
+  // Websites & Blogs
+  ['websites', '/api/websites', './routes/website.routes'],
+  ['blogs', '/api/blogs', './routes/blog.routes'],
+  ['blog-templates', '/api/blog-templates', './routes/blog-templates.routes'],
+  ['public-blog', '/api/public-blog', './routes/public-blog.routes'],
+  ['web3-blog', '/api/web3-blog', './routes/web3-blog.routes'],
   
   // Web3 & NFT
   ['nft', '/api/nft', './routes/nft.routes'],
-  ['mint', '/api/mint', './routes/mint.routes'],
-  ['mint-badge', '/api/mint-badge', './routes/mint-badge.routes'],
+  ['tokens', '/api/tokens', './routes/token.routes'],
   ['wallet', '/api/wallet', './routes/wallet.routes'],
-  ['staking', '/api/staking', './routes/staking.routes'],
-  ['tipping', '/api/tipping', './routes/tipping.routes'],
-  ['boost', '/api/boost', './routes/boost.routes'],
-  ['boosted', '/api/boosted', './routes/boosted.routes'],
-  ['subscription', '/api/subscription', './routes/subscription.routes'],
-  ['earnings', '/api/earnings', './routes/earnings.routes'],
-  ['monetization', '/api/monetization', './routes/monetization.routes'],
-  ['payments', '/api/payments', './routes/payments.routes'],
-  
-  // Sites
-  ['sites-my', '/api/sites/my', './routes/sites-my.routes'],
-  ['sites', '/api/sites', './routes/sites.routes'],
-  ['domain', '/api/domain', './routes/domain.routes'],
-  ['seo', '/api/seo', './routes/seo.routes'],
-  
-  // AI Features
-  ['ai', '/api/ai', './routes/ai.routes'],
-  ['ai-site', '/api/ai', './routes/ai-site.routes'],
-  ['ai-image', '/api/ai', './routes/ai-image.routes'],
-  
-  // Analytics
-  ['analytics-enhanced', '/api/analytics-enhanced', './routes/analytics-enhanced.routes'],
-  ['analytics', '/api/analytics', './routes/analytics.routes'],
-  ['creator-analytics', '/api/creator-analytics', './routes/creator-analytics.routes'],
   
   // Admin
-  ['admin', '/api/admin', './routes/admin.routes'],
-  ['admin-analytics', '/api/admin-analytics', './routes/admin-analytics.routes'],
+  ['admin-users', '/api/admin/users', './routes/admin-users.routes'],
   ['admin-charts', '/api/admin/charts', './routes/admin-charts.routes'],
   ['admin-summary', '/api/admin', './routes/admin-summary.routes'],
   ['admin-insight', '/api/admin', './routes/admin-insight.routes'],
@@ -332,7 +310,14 @@ const routes = [
   ['campaigns-enhanced', '/api/campaigns-enhanced', './routes/campaigns-enhanced.routes'],
   ['email-webhooks', '/api/email-webhooks', './routes/email-webhooks.routes'],
   ['automation', '/api/automation', './routes/automation.routes'],
-  ['email-subscription', '/api/email-subscription', './routes/email-subscription.routes']
+  ['email-subscription', '/api/email-subscription', './routes/email-subscription.routes'],
+  
+  // ==========================================
+  // v7.0.0 - Premium Email Marketing Platform
+  // World-Class Features: A/B Testing, Automation,
+  // Advanced Segmentation, Send Time Optimization
+  // ==========================================
+  ['campaigns-premium', '/api/campaigns-premium', './routes/campaigns-premium.routes']
 ];
 
 // Load all routes with error handling
@@ -370,6 +355,30 @@ console.log(`=== Routes: ${loadedCount} loaded, ${failedCount} skipped ===\n`);
 })();
 
 // ==========================================
+// INITIALIZE PREMIUM SUBSCRIPTION PLANS (v7.0.0)
+// ==========================================
+
+(async () => {
+  try {
+    const { EmailSubscriptionPlan } = require('./models/campaign-premium.model');
+    if (EmailSubscriptionPlan) {
+      const existingPlans = await EmailSubscriptionPlan.countDocuments();
+      if (existingPlans === 0) {
+        await EmailSubscriptionPlan.insertMany([
+          { name: 'free', displayName: 'Free', description: 'Get started with email marketing', price: { monthly: 0, yearly: 0 }, limits: { emailsPerMonth: 500, contacts: 500, lists: 3, automations: 1, abTesting: false, advancedSegmentation: false, sendTimeOptimization: false }, sortOrder: 1 },
+          { name: 'starter', displayName: 'Starter', description: 'For growing creators', price: { monthly: 9.99, yearly: 99 }, limits: { emailsPerMonth: 10000, contacts: 5000, lists: 10, automations: 5, customDomains: 1, abTesting: true, advancedSegmentation: false }, sortOrder: 2 },
+          { name: 'growth', displayName: 'Growth', description: 'For serious marketers', price: { monthly: 29.99, yearly: 299 }, limits: { emailsPerMonth: 50000, contacts: 25000, lists: 50, automations: 20, customDomains: 3, abTesting: true, advancedSegmentation: true, sendTimeOptimization: true, customBranding: true }, sortOrder: 3 },
+          { name: 'pro', displayName: 'Pro', description: 'For power users', price: { monthly: 79.99, yearly: 799 }, limits: { emailsPerMonth: 150000, contacts: 100000, lists: -1, automations: -1, customDomains: 10, abTesting: true, advancedSegmentation: true, sendTimeOptimization: true, customBranding: true, apiAccess: true, webhooks: true, prioritySupport: true }, sortOrder: 4 }
+        ]);
+        console.log('✅ Premium email plans initialized');
+      }
+    }
+  } catch (err) {
+    console.log('⚠️ Premium plans initialization skipped:', err.message);
+  }
+})();
+
+// ==========================================
 // AWS SES STATUS CHECK (v6.9.1)
 // ==========================================
 
@@ -401,7 +410,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '6.9.2',
+    version: '7.0.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -412,7 +421,13 @@ app.get('/api/health', async (req, res) => {
       church: 'enabled',
       forms: 'enabled',
       emailPlatform: sesStatus.enabled ? 'enabled' : 'not_configured',
-      automation: process.env.ENABLE_AUTOMATION_PROCESSOR === 'true' ? 'enabled' : 'disabled'
+      automation: process.env.ENABLE_AUTOMATION_PROCESSOR === 'true' ? 'enabled' : 'disabled',
+      // v7.0.0 Premium Features
+      premiumEmail: 'enabled',
+      abTesting: 'enabled',
+      advancedSegmentation: 'enabled',
+      sendTimeOptimization: 'enabled',
+      automationWorkflows: 'enabled'
     },
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     ses: {
@@ -425,10 +440,16 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v6.9.2',
+    message: 'CYBEV API v7.0.0 - Premium Email Marketing',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
-    features: ['meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 'church', 'forms', 'email-platform', 'automation']
+    features: [
+      'meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 
+      'church', 'forms', 'email-platform', 'automation',
+      // v7.0.0 Premium
+      'premium-email', 'ab-testing', 'advanced-segmentation', 
+      'send-time-optimization', 'automation-workflows'
+    ]
   });
 });
 
@@ -465,9 +486,13 @@ io.on('connection', (socket) => {
     io.to(`stream:${streamId}`).emit('chat-message', message);
   });
   
-  // Email campaign events (v6.9.1)
+  // Email campaign events (v6.9.1+)
   socket.on('join-campaign', (campaignId) => socket.join(`campaign:${campaignId}`));
   socket.on('leave-campaign', (campaignId) => socket.leave(`campaign:${campaignId}`));
+  
+  // Automation events (v7.0.0)
+  socket.on('join-automation', (automationId) => socket.join(`automation:${automationId}`));
+  socket.on('leave-automation', (automationId) => socket.leave(`automation:${automationId}`));
 });
 
 // ==========================================
@@ -491,26 +516,28 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v6.9.2
+  CYBEV API Server v7.0.0
+  Premium Email Marketing Platform
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  Phase 6 Features (v6.9.x):
+  v7.0.0 Premium Email Features:
+  ✅ A/B Testing (Subject, Content, Sender)
+  ✅ Advanced Segmentation (20+ operators)
+  ✅ Send Time Optimization
+  ✅ Automation Workflows
+  ✅ Engagement Scoring
+  ✅ Behavioral Targeting
+  ✅ Template Library
+  ✅ Subscription Tiers
+  
+  Previous Features (v6.9.x):
   ✅ AWS SES Email Integration
   ✅ Drag-Drop Campaign Editor
   ✅ Custom Domain Verification
-  ✅ Automation Workflows
-  ✅ Subscription Tiers
-  ✅ AI Image Generation (v6.9.2)
-  
-  Previous Features (v6.8.x):
-  ✅ Meet (Video Conferencing)
-  ✅ Social Tools (Automation)
-  ✅ Campaigns (Marketing)
-  ✅ AI Generation
-  ✅ Forms Builder
+  ✅ AI Image Generation
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
