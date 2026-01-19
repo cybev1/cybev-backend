@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
-// CYBEV Enhanced Campaign API
-// VERSION: 2.0.0 - Full Email Marketing Platform
+// CYBEV Enhanced Campaign API - FIXED
+// VERSION: 2.1.0 - Fixed populate errors
 // ============================================
 
 const express = require('express');
@@ -29,7 +29,7 @@ const auth = (req, res, next) => {
 };
 
 // ==========================================
-// CAMPAIGN CRUD
+// CAMPAIGN CRUD - FIXED (no populate errors)
 // ==========================================
 
 // Get all campaigns
@@ -42,12 +42,13 @@ router.get('/', auth, async (req, res) => {
     if (status) query.status = status;
     if (type) query.type = type;
     
+    // FIXED: Removed problematic populate - sender data is already embedded
     const [campaigns, total] = await Promise.all([
       Campaign.find(query)
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(parseInt(limit))
-        .populate('sender.emailAddress', 'email displayName'),
+        .lean(),
       Campaign.countDocuments(query)
     ]);
     
@@ -68,7 +69,7 @@ router.get('/stats', auth, async (req, res) => {
     
     const [totalCampaigns, campaigns, contacts] = await Promise.all([
       Campaign.countDocuments({ user: userId }),
-      Campaign.find({ user: userId }),
+      Campaign.find({ user: userId }).lean(),
       EmailContact.countDocuments({ user: userId, subscribed: true })
     ]);
     
@@ -106,17 +107,24 @@ router.get('/stats', auth, async (req, res) => {
   }
 });
 
-// Get single campaign
+// Get single campaign - FIXED
 router.get('/:id', auth, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
     
-    const campaign = await Campaign.findOne({ _id: req.params.id, user: userId })
-      .populate('sender.emailAddress', 'email displayName')
-      .populate('audience.contactList', 'name subscriberCount');
+    // FIXED: Removed problematic populates
+    const campaign = await Campaign.findOne({ _id: req.params.id, user: userId }).lean();
     
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
+    }
+    
+    // Manually fetch contact list if needed
+    if (campaign.audience?.contactList) {
+      try {
+        const list = await ContactList.findById(campaign.audience.contactList).select('name subscriberCount').lean();
+        if (list) campaign.audience.contactListData = list;
+      } catch (e) {}
     }
     
     res.json({ campaign });
@@ -139,7 +147,14 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'Campaign name is required' });
     }
     
-    let senderData = {};
+    // Build sender data directly (no reference)
+    let senderData = {
+      email: sender?.email || process.env.SES_FROM_EMAIL || 'info@cybev.io',
+      name: sender?.name || 'CYBEV',
+      replyTo: sender?.replyTo
+    };
+    
+    // If emailAddressId provided, fetch the email
     if (sender?.emailAddressId) {
       const emailAddr = await EmailAddress.findOne({ 
         _id: sender.emailAddressId, 
@@ -148,14 +163,14 @@ router.post('/', auth, async (req, res) => {
       });
       if (emailAddr) {
         senderData = {
-          emailAddress: emailAddr._id,
           email: emailAddr.email,
-          name: sender.name || emailAddr.displayName,
+          name: sender.name || emailAddr.displayName || 'CYBEV',
           replyTo: sender.replyTo || emailAddr.email
         };
       }
     }
     
+    // Calculate recipient count
     let recipientCount = 0;
     if (audience?.type === 'all') {
       recipientCount = await EmailContact.countDocuments({ user: userId, subscribed: true });
@@ -179,7 +194,8 @@ router.post('/', auth, async (req, res) => {
       content: {
         html: content?.html || '',
         text: content?.text || '',
-        json: content?.json
+        json: content?.json,
+        blocks: content?.blocks || []
       },
       sender: senderData,
       audience: {
@@ -263,26 +279,25 @@ router.post('/:id/duplicate', auth, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
     
-    const original = await Campaign.findOne({ _id: req.params.id, user: userId });
+    const original = await Campaign.findOne({ _id: req.params.id, user: userId }).lean();
     if (!original) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
     
-    const duplicate = await Campaign.create({
-      user: userId,
+    const copy = {
+      ...original,
+      _id: undefined,
       name: `${original.name} (Copy)`,
-      type: original.type,
-      subject: original.subject,
-      previewText: original.previewText,
-      content: original.content,
-      sender: original.sender,
-      audience: original.audience,
-      tracking: original.tracking,
-      abTest: original.abTest,
-      status: 'draft'
-    });
+      status: 'draft',
+      createdAt: undefined,
+      updatedAt: undefined,
+      sentAt: undefined,
+      stats: { recipientCount: original.stats?.recipientCount || 0 },
+      sending: undefined
+    };
     
-    res.json({ ok: true, campaign: duplicate });
+    const campaign = await Campaign.create(copy);
+    res.json({ ok: true, campaign });
   } catch (err) {
     console.error('Duplicate campaign error:', err);
     res.status(500).json({ error: 'Failed to duplicate campaign' });
@@ -290,10 +305,50 @@ router.post('/:id/duplicate', auth, async (req, res) => {
 });
 
 // ==========================================
-// CAMPAIGN SENDING
+// SENDING
 // ==========================================
 
-// Send campaign
+// Send test email
+router.post('/:id/test', auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+    const { emails } = req.body;
+    
+    const testEmails = Array.isArray(emails) ? emails : [emails];
+    if (!testEmails.length || !testEmails[0]) {
+      return res.status(400).json({ error: 'Test email address required' });
+    }
+    
+    const campaign = await Campaign.findOne({ _id: req.params.id, user: userId });
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+    
+    const results = [];
+    for (const email of testEmails) {
+      try {
+        const result = await sesService.sendEmail({
+          to: email,
+          subject: `[TEST] ${campaign.subject || 'Test Campaign'}`,
+          html: campaign.content?.html || '<p>Test email content</p>',
+          text: campaign.content?.text,
+          from: `${campaign.sender?.name || 'CYBEV'} <${campaign.sender?.email || process.env.SES_FROM_EMAIL}>`,
+          replyTo: campaign.sender?.replyTo
+        });
+        results.push({ email, success: true, messageId: result.messageId });
+      } catch (err) {
+        results.push({ email, success: false, error: err.message });
+      }
+    }
+    
+    res.json({ ok: true, results });
+  } catch (err) {
+    console.error('Test email error:', err);
+    res.status(500).json({ error: 'Failed to send test email' });
+  }
+});
+
+// Send campaign now
 router.post('/:id/send', auth, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
@@ -302,134 +357,116 @@ router.post('/:id/send', auth, async (req, res) => {
       _id: req.params.id, 
       user: userId,
       status: { $in: ['draft', 'scheduled'] }
-    }).populate('sender.emailAddress');
+    });
     
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found or already sent' });
     }
     
-    if (!campaign.sender?.email) {
-      return res.status(400).json({ error: 'No sender email configured' });
+    if (!campaign.subject) {
+      return res.status(400).json({ error: 'Subject line is required' });
     }
     
-    if (!campaign.content?.html && !campaign.content?.text) {
-      return res.status(400).json({ error: 'Campaign has no content' });
+    if (!campaign.content?.html && !campaign.content?.blocks?.length) {
+      return res.status(400).json({ error: 'Email content is required' });
     }
     
-    let recipients = [];
-    const unsubscribed = await Unsubscribe.find({ user: userId }).distinct('email');
+    // Build recipient list
+    let query = { user: new mongoose.Types.ObjectId(userId), subscribed: true };
     
-    if (campaign.audience.type === 'all') {
-      recipients = await EmailContact.find({ 
-        user: userId, 
-        subscribed: true,
-        email: { $nin: unsubscribed }
-      }).select('email name customFields');
-    } else if (campaign.audience.contactList) {
-      recipients = await EmailContact.find({ 
-        user: userId,
-        subscribed: true,
-        email: { $nin: unsubscribed }
-      }).select('email name customFields');
-    } else if (campaign.audience.tags?.length > 0) {
-      recipients = await EmailContact.find({ 
-        user: userId, 
-        subscribed: true,
-        tags: { $in: campaign.audience.tags },
-        email: { $nin: unsubscribed }
-      }).select('email name customFields');
+    if (campaign.audience?.type === 'tags' && campaign.audience.tags?.length) {
+      query.tags = { $in: campaign.audience.tags };
+    }
+    if (campaign.audience?.excludeTags?.length) {
+      query.tags = { ...(query.tags || {}), $nin: campaign.audience.excludeTags };
     }
     
-    if (campaign.audience.excludeTags?.length > 0) {
-      const excludeEmails = await EmailContact.find({
-        user: userId,
-        tags: { $in: campaign.audience.excludeTags }
-      }).distinct('email');
-      recipients = recipients.filter(r => !excludeEmails.includes(r.email));
+    const contacts = await EmailContact.find(query).select('email name firstName lastName').lean();
+    
+    if (!contacts.length) {
+      return res.status(400).json({ error: 'No recipients found' });
     }
     
-    if (recipients.length === 0) {
-      return res.status(400).json({ error: 'No recipients found for this campaign' });
-    }
-    
+    // Update campaign status
     campaign.status = 'sending';
     campaign.sending = {
       startedAt: new Date(),
       progress: 0,
-      totalBatches: Math.ceil(recipients.length / 50)
+      totalBatches: Math.ceil(contacts.length / 50),
+      currentBatch: 0
     };
-    campaign.stats.recipientCount = recipients.length;
+    campaign.stats.recipientCount = contacts.length;
     await campaign.save();
     
-    const recipientDocs = recipients.map(r => ({
+    // Create recipient records
+    const recipients = contacts.map(c => ({
       campaign: campaign._id,
-      contact: r._id,
-      email: r.email,
-      name: r.name,
-      mergeData: r.customFields,
-      status: 'pending'
+      contact: c._id,
+      email: c.email,
+      name: c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim(),
+      status: 'queued'
     }));
     
-    await CampaignRecipient.insertMany(recipientDocs, { ordered: false });
+    await CampaignRecipient.insertMany(recipients, { ordered: false }).catch(() => {});
     
-    sendCampaignEmails(campaign._id).catch(err => {
-      console.error('Background send error:', err);
-    });
+    // Start sending in background
+    processCampaignSending(campaign._id, userId).catch(console.error);
     
     res.json({ 
       ok: true, 
       message: 'Campaign sending started',
-      recipientCount: recipients.length
+      recipientCount: contacts.length
     });
   } catch (err) {
     console.error('Send campaign error:', err);
-    res.status(500).json({ error: 'Failed to send campaign' });
+    res.status(500).json({ error: 'Failed to start sending' });
   }
 });
 
-// Background sending function
-async function sendCampaignEmails(campaignId) {
-  const campaign = await Campaign.findById(campaignId);
-  if (!campaign) return;
-  
-  const BATCH_SIZE = 50;
-  let currentBatch = 0;
-  let sent = 0;
-  let failed = 0;
-  
+// Background sending process
+async function processCampaignSending(campaignId, userId) {
   try {
-    const recipients = await CampaignRecipient.find({ 
-      campaign: campaignId, 
-      status: 'pending' 
-    });
+    const campaign = await Campaign.findById(campaignId);
+    if (!campaign || campaign.status !== 'sending') return;
     
-    const totalBatches = Math.ceil(recipients.length / BATCH_SIZE);
+    const batchSize = 50;
+    const totalBatches = campaign.sending.totalBatches || 1;
+    let currentBatch = campaign.sending.currentBatch || 0;
+    let sent = campaign.stats?.sent || 0;
+    let failed = campaign.stats?.bounced || 0;
     
-    for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-      currentBatch++;
-      const batch = recipients.slice(i, i + BATCH_SIZE);
+    while (currentBatch < totalBatches) {
+      // Check if paused
+      const current = await Campaign.findById(campaignId);
+      if (current.status !== 'sending') break;
       
-      const emailBatch = batch.map(r => ({
+      currentBatch++;
+      const recipients = await CampaignRecipient.find({
+        campaign: campaignId,
+        status: 'queued'
+      }).limit(batchSize);
+      
+      if (!recipients.length) break;
+      
+      // Prepare batch
+      const batch = recipients.map(r => ({
         email: r.email,
         name: r.name,
-        data: {
-          name: r.name || 'there',
-          email: r.email,
-          ...r.mergeData
-        }
+        data: { firstName: r.name?.split(' ')[0] || 'there' }
       }));
       
-      const result = await sesService.sendBulkEmail({
-        recipients: emailBatch,
-        from: campaign.sender.email,
-        fromName: campaign.sender.name,
+      // Send batch
+      const result = await sesService.sendBulkEmails({
+        recipients: batch,
         subject: campaign.subject,
         html: campaign.content.html,
         text: campaign.content.text,
+        from: `${campaign.sender?.name || 'CYBEV'} <${campaign.sender?.email || process.env.SES_FROM_EMAIL}>`,
         campaignId: campaignId.toString()
       });
       
-      for (const res of result.results) {
+      // Update recipient statuses
+      for (const res of result.results || []) {
         const status = res.success ? 'sent' : 'failed';
         await CampaignRecipient.findOneAndUpdate(
           { campaign: campaignId, email: res.email },
@@ -445,6 +482,7 @@ async function sendCampaignEmails(campaignId) {
         else failed++;
       }
       
+      // Update progress
       const progress = Math.round((currentBatch / totalBatches) * 100);
       await Campaign.findByIdAndUpdate(campaignId, {
         'sending.progress': progress,
@@ -453,9 +491,11 @@ async function sendCampaignEmails(campaignId) {
         'stats.bounced': failed
       });
       
+      // Rate limit
       await new Promise(resolve => setTimeout(resolve, 200));
     }
     
+    // Mark complete
     await Campaign.findByIdAndUpdate(campaignId, {
       status: 'sent',
       sentAt: new Date(),
@@ -475,6 +515,49 @@ async function sendCampaignEmails(campaignId) {
     });
   }
 }
+
+// Pause campaign
+router.post('/:id/pause', auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+    
+    const campaign = await Campaign.findOneAndUpdate(
+      { _id: req.params.id, user: userId, status: 'sending' },
+      { status: 'paused', 'sending.pausedAt': new Date() },
+      { new: true }
+    );
+    
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found or not sending' });
+    }
+    
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to pause campaign' });
+  }
+});
+
+// Resume campaign
+router.post('/:id/resume', auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+    
+    const campaign = await Campaign.findOneAndUpdate(
+      { _id: req.params.id, user: userId, status: 'paused' },
+      { status: 'sending' },
+      { new: true }
+    );
+    
+    if (!campaign) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+    
+    processCampaignSending(campaign._id, userId).catch(console.error);
+    res.json({ ok: true, campaign });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to resume campaign' });
+  }
+});
 
 // Schedule campaign
 router.post('/:id/schedule', auth, async (req, res) => {
@@ -639,18 +722,88 @@ router.get('/templates', auth, async (req, res) => {
   }
 });
 
+router.get('/templates/:id', auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+    const template = await EmailTemplate.findOne({
+      _id: req.params.id,
+      $or: [{ user: userId }, { type: 'system' }]
+    });
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    res.json({ template });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch template' });
+  }
+});
+
 router.post('/templates', auth, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
-    const { name, description, category, subject, previewText, content, design } = req.body;
+    const { name, description, category, subject, previewText, content, design, blocks } = req.body;
     
     const template = await EmailTemplate.create({
-      user: userId, name, description, category, subject, previewText, content, design, type: 'user'
+      user: userId, 
+      name, 
+      description, 
+      category, 
+      subject, 
+      previewText, 
+      content: {
+        ...content,
+        blocks: blocks || content?.blocks || []
+      },
+      design, 
+      type: 'user'
     });
     
     res.json({ ok: true, template });
   } catch (err) {
     res.status(500).json({ error: 'Failed to create template' });
+  }
+});
+
+router.put('/templates/:id', auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+    const updates = req.body;
+    
+    const template = await EmailTemplate.findOneAndUpdate(
+      { _id: req.params.id, user: userId, type: 'user' },
+      { $set: updates },
+      { new: true }
+    );
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found or cannot be edited' });
+    }
+    
+    res.json({ ok: true, template });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update template' });
+  }
+});
+
+router.delete('/templates/:id', auth, async (req, res) => {
+  try {
+    const userId = req.user.userId || req.user.id;
+    
+    const template = await EmailTemplate.findOneAndDelete({ 
+      _id: req.params.id, 
+      user: userId,
+      type: 'user'
+    });
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete template' });
   }
 });
 
@@ -675,11 +828,28 @@ router.get('/unsubscribe', async (req, res) => {
     
     res.send(`
       <!DOCTYPE html>
-      <html><head><title>Unsubscribed</title></head>
-      <body style="font-family:Arial;text-align:center;padding:50px;">
-        <h1>You've been unsubscribed</h1>
-        <p>You will no longer receive emails from this sender.</p>
-      </body></html>
+      <html>
+      <head>
+        <title>Unsubscribed</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f3f4f6; }
+          .card { background: white; padding: 48px; border-radius: 16px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 400px; }
+          h1 { color: #10b981; margin: 0 0 16px; font-size: 24px; }
+          p { color: #6b7280; margin: 0; }
+          .check { width: 64px; height: 64px; background: #d1fae5; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 24px; }
+          .check svg { width: 32px; height: 32px; color: #10b981; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <div class="check">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+          </div>
+          <h1>You've been unsubscribed</h1>
+          <p>You will no longer receive marketing emails from this sender.</p>
+        </div>
+      </body>
+      </html>
     `);
   } catch { res.status(500).send('Error'); }
 });
