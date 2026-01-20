@@ -117,16 +117,38 @@ if (!EmailAddress) {
   EmailAddress = mongoose.models.EmailAddress || mongoose.model('EmailAddress', addressSchema);
 }
 
-// SES Service fallback
-let sesService;
+// Multi-Provider Email Service (SES + Brevo + Mailgun)
+let emailService;
 try {
-  sesService = require('../services/ses.service');
+  emailService = require('../services/email-multi-provider.service');
+  console.log('📧 Multi-provider email service loaded');
+  console.log('   Available providers:', emailService.getAvailableProviders().map(p => p.name).join(', ') || 'None configured');
 } catch (e) {
-  sesService = {
-    sendEmail: async (opts) => ({ messageId: `mock_${Date.now()}`, success: true }),
-    sendBulkEmails: async (opts) => ({ results: opts.recipients.map(r => ({ email: r.email, success: true, messageId: `mock_${Date.now()}` })) })
-  };
+  // Fallback to SES service if multi-provider not found
+  try {
+    const sesService = require('../services/ses.service');
+    emailService = {
+      sendEmail: sesService.sendEmail,
+      sendBulkEmails: sesService.sendBulkEmails,
+      getAvailableProviders: () => [{ name: 'ses', displayName: 'Amazon SES' }]
+    };
+    console.log('📧 Using SES-only email service');
+  } catch (e2) {
+    // Mock service for development
+    emailService = {
+      sendEmail: async (opts) => ({ messageId: `mock_${Date.now()}`, success: true, provider: 'mock' }),
+      sendBulkEmails: async (opts) => ({ 
+        results: opts.recipients.map(r => ({ email: r.email, success: true, messageId: `mock_${Date.now()}`, provider: 'mock' })),
+        provider: 'mock'
+      }),
+      getAvailableProviders: () => [{ name: 'mock', displayName: 'Mock (Development)' }]
+    };
+    console.log('⚠️ Using mock email service (no providers configured)');
+  }
 }
+
+// Alias for backward compatibility
+const sesService = emailService;
 
 // Auth middleware
 const auth = (req, res, next) => {
@@ -145,6 +167,22 @@ const auth = (req, res, next) => {
 // ==========================================
 // STATIC ROUTES FIRST (before /:id)
 // ==========================================
+
+// Get email provider status
+router.get('/providers', auth, async (req, res) => {
+  try {
+    const providers = emailService.getAvailableProviders ? emailService.getAvailableProviders() : [];
+    res.json({ 
+      providers,
+      activeProvider: providers[0]?.name || 'none',
+      message: providers.length === 0 
+        ? 'No email providers configured. Add BREVO_API_KEY or MAILGUN_API_KEY to your environment.'
+        : `${providers.length} provider(s) available`
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get provider status' });
+  }
+});
 
 router.get('/stats', auth, async (req, res) => {
   try {
