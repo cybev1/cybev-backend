@@ -301,6 +301,7 @@ const routes = [
   ['campaigns', '/api/campaigns', './routes/campaigns.routes'],
   ['contacts', '/api/contacts', './routes/contacts.routes'],
   ['ai-generate', '/api/ai-generate', './routes/ai-generate.routes'],
+  ['content', '/api/content', './routes/content.routes'],
   
   // ==========================================
   // v6.9.0+ - Email Platform (Phase 6)
