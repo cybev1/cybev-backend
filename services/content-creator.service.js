@@ -214,9 +214,49 @@ class ContentCreatorService {
     }
   }
   
-  // Get featured image with fallbacks
-  async getFeaturedImage(query, niche = 'general') {
-    const searchQuery = `${query} ${niche}`.trim();
+  // Extract keywords from topic/description for better image search
+  extractImageKeywords(topic, description = '', niche = 'general') {
+    // Common words to filter out
+    const stopWords = new Set([
+      'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
+      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought',
+      'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
+      'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between',
+      'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where',
+      'why', 'how', 'all', 'each', 'few', 'more', 'most', 'other', 'some', 'such',
+      'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just',
+      'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'its',
+      'still', 'feels', 'feel', 'about', 'really', 'actually', 'here', 'your', 'my'
+    ]);
+    
+    // Combine topic and description
+    const text = `${topic} ${description}`.toLowerCase();
+    
+    // Extract words, filter stop words, get unique
+    const words = text
+      .replace(/[^a-zA-Z\s]/g, ' ')  // Remove special chars
+      .split(/\s+/)
+      .filter(w => w.length > 2 && !stopWords.has(w));
+    
+    // Get unique keywords, prioritize longer words (more specific)
+    const unique = [...new Set(words)].sort((a, b) => b.length - a.length);
+    
+    // Take top 3-4 keywords + niche
+    const keywords = unique.slice(0, 4);
+    if (niche && niche !== 'general' && !keywords.includes(niche)) {
+      keywords.push(niche);
+    }
+    
+    console.log(`🔑 Extracted keywords: ${keywords.join(', ')}`);
+    return keywords.slice(0, 4).join(' ');
+  }
+
+  // Get featured image with fallbacks - IMPROVED with keyword extraction
+  async getFeaturedImage(query, niche = 'general', description = '') {
+    // Extract better search keywords
+    const searchQuery = this.extractImageKeywords(query, description, niche);
+    console.log(`🖼️ Image search query: "${searchQuery}"`);
     
     // Try Pexels first (higher quality)
     if (this.pexelsKey) {
@@ -236,7 +276,7 @@ class ContentCreatorService {
       }
     }
     
-    // Return placeholder
+    // Return placeholder with keywords
     return {
       url: `https://source.unsplash.com/1200x630/?${encodeURIComponent(searchQuery)}`,
       thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(searchQuery)}`,
@@ -246,16 +286,41 @@ class ContentCreatorService {
     };
   }
   
-  // Get multiple content images
-  async getContentImages(query, count = 3) {
+  // Get multiple content images - IMPROVED with keyword variations
+  async getContentImages(topic, description = '', niche = 'general', count = 3) {
     const images = [];
-    const variations = [query, `${query} concept`, `${query} illustration`];
+    
+    // Extract base keywords
+    const baseKeywords = this.extractImageKeywords(topic, description, niche);
+    const keywordArray = baseKeywords.split(' ').filter(k => k.length > 2);
+    
+    // Create variations for different images
+    const variations = [
+      baseKeywords,  // Full keywords
+      keywordArray.slice(0, 2).join(' ') + ' people',  // Add people context
+      keywordArray[0] + ' culture tradition'  // Cultural context
+    ];
     
     for (let i = 0; i < count; i++) {
       try {
         const searchQuery = variations[i % variations.length];
-        const image = await this.getFeaturedImage(searchQuery);
-        images.push(image);
+        console.log(`🖼️ Content image ${i + 1} search: "${searchQuery}"`);
+        
+        // Call Pexels/Unsplash directly with this query
+        let image = null;
+        if (this.pexelsKey) {
+          try {
+            image = await this.getPexelsImage(searchQuery);
+          } catch (e) {}
+        }
+        if (!image && this.unsplashKey) {
+          try {
+            image = await this.getUnsplashImage(searchQuery);
+          } catch (e) {}
+        }
+        if (image) {
+          images.push(image);
+        }
       } catch (e) {
         console.log(`Failed to get image ${i + 1}:`, e.message);
       }
@@ -273,6 +338,7 @@ class ContentCreatorService {
     
     console.log('📝 Creating complete blog post...');
     console.log(`   Topic: ${topic}`);
+    console.log(`   Description: ${description || 'none'}`);
     console.log(`   Niche: ${niche}`);
     console.log(`   Tone: ${tone || 'professional'}`);
     
@@ -281,14 +347,14 @@ class ContentCreatorService {
       console.log('📝 Step 1: Generating blog content...');
       const blogContent = await this.generateBlogContent(topic, description, tone, length, niche);
       
-      // Step 2: Get featured image
+      // Step 2: Get featured image - NOW USES TOPIC + DESCRIPTION for better results
       console.log('🖼️ Step 2: Fetching featured image...');
-      const featuredImage = await this.getFeaturedImage(topic, niche);
+      const featuredImage = await this.getFeaturedImage(topic, niche, description);
       console.log(`✅ Featured image: ${featuredImage.url}`);
       
-      // Step 3: Get content images
+      // Step 3: Get content images - NOW USES TOPIC + DESCRIPTION for better results
       console.log('🖼️ Step 3: Fetching content images...');
-      const contentImages = await this.getContentImages(topic, 3);
+      const contentImages = await this.getContentImages(topic, description, niche, 3);
       console.log(`✅ Got ${contentImages.length} content images`);
       
       // Step 4: Generate hashtags
