@@ -149,6 +149,18 @@ router.post('/create-blog', verifyToken, async (req, res) => {
       throw new Error('Blog generation returned empty result');
     }
 
+    // Get author info for authorName
+    let authorName = 'Anonymous';
+    try {
+      const User = mongoose.models.User || require('../models/user.model');
+      const author = await User.findById(req.user.id || req.user.userId).select('name username displayName');
+      if (author) {
+        authorName = author.displayName || author.name || author.username || 'Anonymous';
+      }
+    } catch (e) {
+      console.log('Could not fetch author name:', e.message);
+    }
+
     // Create blog in database
     const blog = new Blog({
       title: result.title,
@@ -157,6 +169,7 @@ router.post('/create-blog', verifyToken, async (req, res) => {
       tags: result.hashtags || result.seo?.keywords || [niche],
       category: niche,
       author: req.user.id || req.user.userId,
+      authorName: authorName,
       status: autoPublish ? 'published' : 'draft',
       featuredImage: result.featuredImage?.url || null,
       coverImage: result.featuredImage?.url || null,
