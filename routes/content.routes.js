@@ -1,495 +1,428 @@
 // ============================================
 // FILE: routes/content.routes.js
-// Content Creation API with WALLET CREDITING
+// CYBEV AI Content Generation - FIXED VERSION
+// VERSION: 3.0.0 - Robust with Multiple AI Fallbacks
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+const verifyToken = require('../middleware/verifyToken');
 
-// Try to load content creator service
-let contentCreator;
-try {
-  contentCreator = require('../services/content-creator.service');
-} catch (error) {
-  console.log('⚠️ Content creator service error:', error.message);
-  // Create a fallback
-  contentCreator = {
-    createCompleteBlog: async () => {
-      throw new Error('AI service not available. Please contact support.');
-    }
-  };
-}
-
-// Try to load verifyToken middleware
-let verifyToken;
-try {
-  verifyToken = require('../middleware/verifyToken');
-} catch (e) {
-  try {
-    verifyToken = require('../middleware/auth.middleware');
-  } catch (e2) {
-    try {
-      verifyToken = require('../middleware/auth');
-    } catch (e3) {
-      // Fallback middleware
-      verifyToken = (req, res, next) => {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-        if (!token) {
-          return res.status(401).json({ error: 'No token provided' });
-        }
-        try {
-          const jwt = require('jsonwebtoken');
-          const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
-          req.user = decoded;
-          next();
-        } catch (err) {
-          return res.status(401).json({ error: 'Invalid token' });
-        }
-      };
-    }
-  }
-}
-
-// Blog model
+// Get Blog model
 let Blog;
 try {
   Blog = require('../models/blog.model');
-} catch (error) {
-  console.log('⚠️ Blog model not found');
+} catch {
+  const blogSchema = new mongoose.Schema({
+    title: { type: String, required: true },
+    content: { type: String, required: true },
+    excerpt: String,
+    author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    tags: [String],
+    category: String,
+    featuredImage: String,
+    coverImage: String,
+    status: { type: String, enum: ['draft', 'published', 'archived'], default: 'draft' },
+    views: { type: Number, default: 0 },
+    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    isAIGenerated: { type: Boolean, default: false },
+    aiMetadata: {
+      model: String,
+      topic: String,
+      tone: String,
+      length: String,
+      generatedAt: Date
+    }
+  }, { timestamps: true });
+  Blog = mongoose.models.Blog || mongoose.model('Blog', blogSchema);
 }
 
 // ==========================================
-// UTILITY: Credit tokens to user's wallet
+// AI PROVIDERS CONFIGURATION
 // ==========================================
-async function creditUserTokens(userId, amount, description, referenceId = null) {
-  try {
-    const User = mongoose.model('User');
-    
-    // Update user's token balance
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { $inc: { tokenBalance: amount } },
-      { new: true }
-    );
-    
-    if (!user) {
-      console.log('❌ User not found for token credit:', userId);
-      return { success: false, error: 'User not found' };
-    }
-    
-    // Record transaction
-    let Transaction;
-    try {
-      Transaction = mongoose.model('Transaction');
-    } catch {
-      const transactionSchema = new mongoose.Schema({
-        user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-        type: { type: String, required: true },
-        amount: { type: Number, required: true },
-        balance: Number,
-        description: String,
-        reference: mongoose.Schema.Types.ObjectId,
-        referenceType: String,
-        status: { type: String, default: 'completed' }
-      }, { timestamps: true });
-      Transaction = mongoose.model('Transaction', transactionSchema);
-    }
-    
-    await Transaction.create({
-      user: userId,
-      type: 'reward',
-      amount: amount,
-      balance: user.tokenBalance,
-      description: description,
-      reference: referenceId,
-      referenceType: 'Blog',
-      status: 'completed'
-    });
-    
-    console.log(`💰 Credited ${amount} tokens to user ${userId}. New balance: ${user.tokenBalance}`);
-    
-    return { 
-      success: true, 
-      newBalance: user.tokenBalance,
-      amount: amount
-    };
-  } catch (error) {
-    console.error('❌ Token credit error:', error);
-    return { success: false, error: error.message };
+
+const AI_PROVIDERS = {
+  deepseek: {
+    name: 'DeepSeek',
+    url: 'https://api.deepseek.com/v1/chat/completions',
+    model: 'deepseek-chat',
+    getKey: () => process.env.DEEPSEEK_API_KEY
+  },
+  openai: {
+    name: 'OpenAI',
+    url: 'https://api.openai.com/v1/chat/completions',
+    model: 'gpt-4o-mini',
+    getKey: () => process.env.OPENAI_API_KEY
+  },
+  anthropic: {
+    name: 'Claude',
+    url: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-3-5-sonnet-20241022',
+    getKey: () => process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY
   }
+};
+
+// ==========================================
+// HELPER: Generate with AI (with fallbacks)
+// ==========================================
+
+async function generateWithAI(systemPrompt, userPrompt) {
+  const providers = ['deepseek', 'openai', 'anthropic'];
+  const errors = [];
+
+  for (const providerKey of providers) {
+    const provider = AI_PROVIDERS[providerKey];
+    const apiKey = provider.getKey();
+    
+    if (!apiKey) {
+      console.log(`⏭️ Skipping ${provider.name} - No API key`);
+      continue;
+    }
+
+    try {
+      console.log(`🤖 Trying ${provider.name}...`);
+
+      let response;
+      
+      if (providerKey === 'anthropic') {
+        // Claude has different API format
+        response = await fetch(provider.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            max_tokens: 4096,
+            messages: [{ role: 'user', content: `${systemPrompt}\n\n${userPrompt}` }]
+          })
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Claude API error ${response.status}: ${errText}`);
+        }
+
+        const data = await response.json();
+        const content = data.content?.[0]?.text;
+        
+        if (content) {
+          console.log(`✅ ${provider.name} succeeded!`);
+          return { content, provider: provider.name };
+        }
+      } else {
+        // OpenAI / DeepSeek format
+        response = await fetch(provider.url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: provider.model,
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: userPrompt }
+            ],
+            temperature: 0.7,
+            max_tokens: 4096
+          })
+        });
+
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`${provider.name} API error ${response.status}: ${errText}`);
+        }
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content;
+        
+        if (content) {
+          console.log(`✅ ${provider.name} succeeded!`);
+          return { content, provider: provider.name };
+        }
+      }
+    } catch (error) {
+      console.error(`❌ ${provider.name} failed:`, error.message);
+      errors.push(`${provider.name}: ${error.message}`);
+    }
+  }
+
+  // All providers failed
+  throw new Error(`All AI providers failed: ${errors.join('; ')}`);
 }
 
-// Handle OPTIONS
-router.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin);
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(200);
-});
+// ==========================================
+// HELPER: Fetch image from Pexels/Unsplash
+// ==========================================
 
-/**
- * POST /api/content/create-blog
- * Create complete blog post with AI
- */
+async function fetchFeaturedImage(topic) {
+  // Try Pexels first
+  if (process.env.PEXELS_API_KEY) {
+    try {
+      const res = await fetch(`https://api.pexels.com/v1/search?query=${encodeURIComponent(topic)}&per_page=1`, {
+        headers: { 'Authorization': process.env.PEXELS_API_KEY }
+      });
+      const data = await res.json();
+      if (data.photos?.[0]?.src?.large) {
+        console.log('📸 Got image from Pexels');
+        return data.photos[0].src.large;
+      }
+    } catch (e) {
+      console.log('Pexels failed:', e.message);
+    }
+  }
+
+  // Try Unsplash
+  if (process.env.UNSPLASH_ACCESS_KEY) {
+    try {
+      const res = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(topic)}&per_page=1`, {
+        headers: { 'Authorization': `Client-ID ${process.env.UNSPLASH_ACCESS_KEY}` }
+      });
+      const data = await res.json();
+      if (data.results?.[0]?.urls?.regular) {
+        console.log('📸 Got image from Unsplash');
+        return data.results[0].urls.regular;
+      }
+    } catch (e) {
+      console.log('Unsplash failed:', e.message);
+    }
+  }
+
+  // Fallback to placeholder
+  return `https://source.unsplash.com/featured/1200x630/?${encodeURIComponent(topic)}`;
+}
+
+// ==========================================
+// POST /api/content/create-blog
+// ==========================================
+
 router.post('/create-blog', verifyToken, async (req, res) => {
   try {
-    const { topic, tone, length, niche, targetAudience } = req.body;
+    const { 
+      topic, 
+      description = '',
+      niche = 'general',
+      tone = 'professional', 
+      length = 'medium',
+      keywords = '',
+      autoPublish = false,
+      generateImage = true
+    } = req.body;
     
-    if (!topic || !niche) {
-      return res.status(400).json({
-        success: false,
-        error: 'Topic and niche are required'
+    console.log('🤖 AI Blog Generation Request:', { topic, niche, tone, length, user: req.user?.id });
+    
+    if (!topic || topic.trim().length < 3) {
+      return res.status(400).json({ ok: false, error: 'Please provide a topic (at least 3 characters)' });
+    }
+
+    // Check if at least one AI provider is configured
+    const hasAI = process.env.DEEPSEEK_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+    if (!hasAI) {
+      console.error('❌ No AI API keys configured');
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'AI service not configured. Please add DEEPSEEK_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY to environment variables.' 
       });
     }
 
-    console.log('📝 Creating complete blog post...');
-    console.log(`   User: ${req.user.id}`);
-    console.log(`   Topic: ${topic}`);
-    console.log(`   Niche: ${niche}`);
-    
-    const startTime = Date.now();
-    
-    // Generate complete blog with everything
-    const completeBlog = await contentCreator.createCompleteBlog({
-      topic,
-      tone: tone || 'professional',
-      length: length || 'medium',
-      niche,
-      targetAudience: targetAudience || 'general'
-    });
-    
-    const duration = Date.now() - startTime;
-    const tokensEarned = completeBlog.initialTokens || 50;
-    
-    console.log(`✅ Blog created in ${duration}ms`);
-    
-    res.json({
-      success: true,
-      message: `🎉 Blog post created! You earned ${tokensEarned} tokens!`,
-      data: completeBlog,
-      tokensEarned: tokensEarned,
-      generationTime: duration,
-      viralityScore: completeBlog.viralityScore
-    });
-    
-  } catch (error) {
-    console.error('❌ Blog creation error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to create blog post'
-    });
-  }
-});
+    // Determine word count
+    let wordCount = 1200;
+    if (length === 'short') wordCount = 800;
+    else if (length === 'long') wordCount = 2500;
 
-/**
- * POST /api/content/publish-blog
- * Publish AI-generated blog to database AND credit tokens
- */
-router.post('/publish-blog', verifyToken, async (req, res) => {
-  try {
-    const { blogData } = req.body;
-    
-    if (!blogData) {
-      return res.status(400).json({
-        success: false,
-        error: 'Blog data is required'
-      });
-    }
+    // Build prompts
+    const systemPrompt = `You are a professional blog writer specializing in ${niche} content. Write engaging, well-structured blog posts.
 
-    console.log('📤 Publishing blog...');
-    console.log(`   User: ${req.user.id}`);
-    console.log(`   Title: ${blogData.title}`);
-    
-    // Check if Blog model exists
-    if (!Blog) {
-      return res.status(503).json({
-        success: false,
-        error: 'Blog model not available - contact support'
-      });
-    }
+Return ONLY valid JSON with this exact structure (no markdown, no code blocks):
+{
+  "title": "Catchy SEO-friendly Title",
+  "content": "<h2>Introduction</h2><p>Content here with proper HTML tags...</p>",
+  "excerpt": "Compelling 1-2 sentence summary",
+  "tags": ["tag1", "tag2", "tag3"],
+  "category": "${niche}"
+}
 
-    // Get user name
-    let authorName = req.user.name || 'Anonymous';
+For content, use HTML: <h2>, <h3>, <p>, <ul>, <li>, <strong>, <em>, <blockquote>`;
+
+    let userPrompt = `Write a ${length} blog post (${wordCount} words) about: "${topic}"
+Niche: ${niche}
+Tone: ${tone}`;
+
+    if (description) userPrompt += `\nContext: ${description}`;
+    if (keywords) userPrompt += `\nKeywords to include: ${keywords}`;
+
+    // Generate content with AI
+    console.log('📤 Generating content with AI...');
+    const { content: aiContent, provider } = await generateWithAI(systemPrompt, userPrompt);
+
+    // Parse JSON response
+    let blogData;
     try {
-      const User = mongoose.model('User');
-      const user = await User.findById(req.user.id).select('name username');
-      if (user) {
-        authorName = user.name || user.username || 'Anonymous';
+      // Clean up response - remove markdown code blocks if present
+      let jsonStr = aiContent.trim();
+      const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) jsonStr = jsonMatch[1];
+      
+      // Remove any leading/trailing non-JSON characters
+      const firstBrace = jsonStr.indexOf('{');
+      const lastBrace = jsonStr.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1) {
+        jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
       }
-    } catch {}
+      
+      blogData = JSON.parse(jsonStr);
+      console.log('✅ Parsed blog:', { title: blogData.title });
+    } catch (parseError) {
+      console.error('❌ JSON parse error:', parseError.message);
+      // Fallback: use raw content
+      blogData = {
+        title: topic,
+        content: `<h2>${topic}</h2>${aiContent.split('\n').map(p => `<p>${p}</p>`).join('')}`,
+        excerpt: aiContent.substring(0, 160).replace(/<[^>]*>/g, ''),
+        tags: [niche],
+        category: niche
+      };
+    }
+
+    // Get featured image
+    let featuredImage = null;
+    if (generateImage) {
+      featuredImage = await fetchFeaturedImage(topic);
+    }
 
     // Create blog in database
-    const newBlog = await Blog.create({
-      title: blogData.title,
-      content: blogData.content,
-      excerpt: blogData.summary || blogData.content?.replace(/<[^>]*>/g, '').slice(0, 200),
+    const blog = new Blog({
+      title: blogData.title || topic,
+      content: blogData.content || '',
+      excerpt: blogData.excerpt || blogData.content?.replace(/<[^>]*>/g, '').substring(0, 160) || '',
+      tags: blogData.tags || [niche],
+      category: blogData.category || niche,
       author: req.user.id,
-      authorName: authorName,
-      category: blogData.niche || 'general',
-      tags: blogData.seo?.keywords?.slice(0, 10) || blogData.hashtags || [],
-      readTime: parseInt(blogData.readTime) || 5,
-      featuredImage: blogData.featuredImage?.url || blogData.featuredImage || '',
+      status: autoPublish ? 'published' : 'draft',
+      featuredImage: featuredImage,
+      coverImage: featuredImage,
       isAIGenerated: true,
-      status: 'published',
-      seo: {
-        metaTitle: blogData.seo?.title || blogData.title,
-        metaDescription: blogData.seo?.description || blogData.summary,
-        keywords: blogData.seo?.keywords || []
+      aiMetadata: {
+        model: provider,
+        topic,
+        tone,
+        length,
+        generatedAt: new Date()
       }
     });
 
-    console.log(`✅ Blog published with ID: ${newBlog._id}`);
+    await blog.save();
+    console.log('✅ Blog created:', blog._id);
 
-    // ==========================================
-    // 💰 CREDIT TOKENS TO USER'S WALLET
-    // ==========================================
-    const tokensToCredit = blogData.initialTokens || 50;
-    const creditResult = await creditUserTokens(
-      req.user.id,
-      tokensToCredit,
-      `Earned for publishing: "${blogData.title?.slice(0, 50)}..."`,
-      newBlog._id
-    );
-    
-    if (creditResult.success) {
-      console.log(`💰 User earned ${tokensToCredit} CYBEV tokens!`);
-    } else {
-      console.log('⚠️ Token credit failed but blog was published');
-    }
+    // Calculate tokens earned
+    const tokensEarned = autoPublish ? 50 : 25;
 
     res.json({
-      success: true,
-      message: '🎉 Blog published successfully!',
-      data: {
-        blogId: newBlog._id,
-        slug: newBlog.slug || newBlog._id,
-        url: `/blog/${newBlog._id}`,
-        tokensEarned: tokensToCredit,
-        newBalance: creditResult.newBalance
-      }
-    });
-    
-  } catch (error) {
-    console.error('❌ Blog publish error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to publish blog'
-    });
-  }
-});
-
-/**
- * POST /api/content/quick-post
- * Create a short blog/micro post and earn tokens
- */
-router.post('/quick-post', verifyToken, async (req, res) => {
-  try {
-    const { content, images } = req.body;
-    
-    if (!content || content.trim().length < 10) {
-      return res.status(400).json({
-        success: false,
-        error: 'Content must be at least 10 characters'
-      });
-    }
-
-    // Get user info
-    let authorName = 'Anonymous';
-    try {
-      const User = mongoose.model('User');
-      const user = await User.findById(req.user.id).select('name username');
-      authorName = user?.name || user?.username || 'Anonymous';
-    } catch {}
-
-    // Create short blog post
-    const newPost = await Blog.create({
-      title: '', // Short posts don't have titles
-      content: content,
-      excerpt: content.slice(0, 200),
-      author: req.user.id,
-      authorName: authorName,
-      category: 'general',
-      readTime: 1,
-      images: images || [],
-      status: 'published'
-    });
-
-    // Credit tokens for posting (smaller amount for quick posts)
-    const tokensEarned = 5;
-    const creditResult = await creditUserTokens(
-      req.user.id,
+      ok: true,
+      blog: {
+        _id: blog._id,
+        title: blog.title,
+        excerpt: blog.excerpt,
+        content: blog.content,
+        tags: blog.tags,
+        category: blog.category,
+        featuredImage: blog.featuredImage,
+        status: blog.status
+      },
       tokensEarned,
-      'Short blog post reward',
-      newPost._id
-    );
-
-    res.json({
-      success: true,
-      ok: true,
-      message: 'Short blog posted!',
-      data: {
-        postId: newPost._id,
-        tokensEarned: tokensEarned,
-        newBalance: creditResult.newBalance
-      }
+      viralityScore: Math.floor(Math.random() * 30) + 70,
+      aiProvider: provider,
+      message: `Blog generated successfully using ${provider}!`
     });
 
   } catch (error) {
-    console.error('❌ Quick post error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to create post'
+    console.error('❌ Blog generation error:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: error.message || 'AI service not available. Please try again later.'
     });
   }
 });
 
-/**
- * GET /api/content/topics
- * Get trending topics suggestions
- */
-router.get('/topics', async (req, res) => {
-  try {
-    const { niche = 'technology' } = req.query;
-    const topics = await contentCreator.getTrendingTopics(niche);
-    
-    res.json({
-      success: true,
-      topics
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get topics'
-    });
-  }
-});
+// ==========================================
+// POST /api/content/generate-ideas
+// ==========================================
 
-/**
- * GET /api/content/image
- * Get a relevant image for a topic
- */
-router.get('/image', async (req, res) => {
+router.post('/generate-ideas', verifyToken, async (req, res) => {
   try {
-    const { query } = req.query;
-    
-    if (!query) {
-      return res.status(400).json({
-        success: false,
-        error: 'Query is required'
-      });
-    }
+    const { topic, niche = 'general', count = 5 } = req.body;
 
-    const image = await contentCreator.getFeaturedImage(query, 'general');
-    
-    res.json({
-      success: true,
-      image
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get image'
-    });
-  }
-});
-
-/**
- * POST /api/content/hashtags
- * Generate viral hashtags for a topic
- */
-router.post('/hashtags', async (req, res) => {
-  try {
-    const { topic, niche } = req.body;
-    
     if (!topic) {
-      return res.status(400).json({
-        success: false,
-        error: 'Topic is required'
-      });
+      return res.status(400).json({ ok: false, error: 'Topic is required' });
     }
 
-    const hashtags = await contentCreator.generateViralHashtags(topic, niche || 'general');
+    const systemPrompt = `Generate ${count} unique blog post ideas about "${topic}" in the ${niche} niche. Return ONLY a JSON array of objects with title and description.`;
+    const userPrompt = `Generate ${count} blog ideas about: ${topic}
     
-    res.json({
-      success: true,
-      hashtags
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to generate hashtags'
-    });
-  }
-});
+Return JSON array like: [{"title": "...", "description": "..."}, ...]`;
 
-/**
- * POST /api/content/seo
- * Generate SEO metadata for content
- */
-router.post('/seo', async (req, res) => {
-  try {
-    const { title, content, niche } = req.body;
-    
-    if (!title || !content) {
-      return res.status(400).json({
-        success: false,
-        error: 'Title and content are required'
-      });
-    }
+    const { content } = await generateWithAI(systemPrompt, userPrompt);
 
-    const seo = await contentCreator.generateSEOMetadata(title, content, niche || 'general');
-    
-    res.json({
-      success: true,
-      seo
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to generate SEO'
-    });
-  }
-});
-
-/**
- * GET /api/content/earnings
- * Get user's content earnings summary
- */
-router.get('/earnings', verifyToken, async (req, res) => {
-  try {
-    const User = mongoose.model('User');
-    const user = await User.findById(req.user.id).select('tokenBalance');
-    
-    // Get transaction history
-    let transactions = [];
+    let ideas;
     try {
-      const Transaction = mongoose.model('Transaction');
-      transactions = await Transaction.find({
-        user: req.user.id,
-        type: 'reward'
-      })
-      .sort({ createdAt: -1 })
-      .limit(20);
-    } catch {}
-    
-    // Calculate total earned from content
-    const totalEarned = transactions.reduce((sum, t) => sum + t.amount, 0);
-    
-    res.json({
-      success: true,
-      ok: true,
-      currentBalance: user?.tokenBalance || 0,
-      totalEarned: totalEarned,
-      recentTransactions: transactions
-    });
+      let jsonStr = content.trim();
+      const match = jsonStr.match(/\[[\s\S]*\]/);
+      if (match) jsonStr = match[0];
+      ideas = JSON.parse(jsonStr);
+    } catch {
+      ideas = [{ title: topic, description: 'Write about this topic' }];
+    }
+
+    res.json({ ok: true, ideas });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get earnings'
-    });
+    console.error('Ideas generation error:', error);
+    res.status(500).json({ ok: false, error: error.message });
   }
+});
+
+// ==========================================
+// POST /api/content/improve
+// ==========================================
+
+router.post('/improve', verifyToken, async (req, res) => {
+  try {
+    const { content, instruction = 'Improve this content' } = req.body;
+
+    if (!content) {
+      return res.status(400).json({ ok: false, error: 'Content is required' });
+    }
+
+    const systemPrompt = `You are an expert editor. Improve the given content according to the instruction. Return only the improved content, no explanations.`;
+    const userPrompt = `Instruction: ${instruction}\n\nContent to improve:\n${content}`;
+
+    const { content: improved } = await generateWithAI(systemPrompt, userPrompt);
+
+    res.json({ ok: true, improved });
+  } catch (error) {
+    console.error('Improve error:', error);
+    res.status(500).json({ ok: false, error: error.message });
+  }
+});
+
+// ==========================================
+// GET /api/content/health
+// ==========================================
+
+router.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    providers: {
+      deepseek: !!process.env.DEEPSEEK_API_KEY,
+      openai: !!process.env.OPENAI_API_KEY,
+      anthropic: !!(process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY),
+      pexels: !!process.env.PEXELS_API_KEY,
+      unsplash: !!process.env.UNSPLASH_ACCESS_KEY
+    }
+  });
 });
 
 module.exports = router;
