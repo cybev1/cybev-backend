@@ -273,6 +273,9 @@ const routes = [
   ['moderation', '/api/moderation', './routes/moderation.routes'],
   
   // Church
+  // Church management (order matters: mount sub-routers BEFORE /api/church)
+  ['foundation-school', '/api/church/foundation', './routes/foundation-school.routes'],
+  ['bible', '/api/church/bible', './routes/bible.routes'],
   ['church', '/api/church', './routes/church.routes'],
   ['prayer', '/api/church/prayers', './routes/prayer.routes'],
   ['giving', '/api/church/giving', './routes/giving.routes'],

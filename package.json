@@ -31,7 +31,8 @@
     "@aws-sdk/client-ses": "^3.490.0",
     "@aws-sdk/client-s3": "^3.490.0",
     "@aws-sdk/client-sns": "^3.490.0",
-    "mailparser": "^3.6.5"
+    "mailparser": "^3.6.5",
+    "jimp": "^0.22.10"
   },
   "optionalDependencies": {
     "@getbrevo/brevo": "^1.0.1",

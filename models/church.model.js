@@ -22,6 +22,8 @@ const ChurchOrgSchema = new Schema({
     enum: ['zone', 'church', 'fellowship', 'cell', 'biblestudy'],
     index: true
   },
+  // Mode: "church" follows Christ Embassy structure; "organization" enables generic org hierarchy
+  structureMode: { type: String, enum: ['church', 'organization'], default: 'church', index: true },
   description: { type: String, default: '' },
   motto: { type: String, default: '' },
   
@@ -68,6 +70,18 @@ const ChurchOrgSchema = new Schema({
     isOnline: { type: Boolean, default: false },
     streamUrl: String
   }],
+
+  // Cell Ministry (Capacity & Growth)
+  cellSettings: {
+    maxCapacity: { type: Number, default: 15 },
+    splitThreshold: { type: Number, default: 15 },
+    allowAutoSplitSuggestion: { type: Boolean, default: true }
+  },
+
+  // Cell tools integration
+  linkedGroupId: { type: Schema.Types.ObjectId, ref: 'Group' },
+  // Meet feature uses the "Meeting" model in routes/meet.routes.js
+  linkedMeetRoomId: { type: Schema.Types.ObjectId, ref: 'Meeting' },
   
   // Branding
   logo: String,
@@ -105,7 +119,9 @@ const ChurchOrgSchema = new Schema({
     requireApproval: { type: Boolean, default: true },
     enableSoulTracker: { type: Boolean, default: true },
     enableFoundationSchool: { type: Boolean, default: true },
-    enableStreaming: { type: Boolean, default: true }
+    enableStreaming: { type: Boolean, default: true },
+    // If enabled, new souls added to this org are auto-enrolled into an active batch (if configured)
+    autoEnrollNewSoulsToFoundation: { type: Boolean, default: true }
   },
   
   // Metadata
@@ -257,52 +273,147 @@ const FoundationModuleSchema = new Schema({
 // Track individual progress through Foundation School
 // ==========================================
 const FoundationEnrollmentSchema = new Schema({
-  // Student
+  // ===============================
+  // NOTE: This schema supports BOTH:
+  // 1) Legacy enrollment flow (church.routes.js)
+  // 2) March 2025 manual flow (foundation-school.routes.js)
+  // ===============================
+
+  // Legacy identifiers (Soul tracker based)
   soul: { type: Schema.Types.ObjectId, ref: 'Soul' },
   user: { type: Schema.Types.ObjectId, ref: 'User' },
-  
-  // Organization
-  church: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true },
+  church: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
   mentor: { type: Schema.Types.ObjectId, ref: 'User' },
-  
-  // Progress
-  enrolledAt: { type: Date, default: Date.now },
   currentModule: { type: Number, default: 1 },
-  
   moduleProgress: [{
     moduleNumber: Number,
     startedAt: Date,
     completedAt: Date,
     lessonsCompleted: [Number],
     quizScore: Number,
-    quizAttempts: Number,
+    quizAttempts: { type: Number, default: 0 },
     passed: Boolean,
     notes: String
   }],
-  
-  // Attendance (for in-person classes)
   attendance: [{
     date: Date,
     moduleNumber: Number,
     present: Boolean,
-    notes: String
+    notes: String,
+    markedBy: { type: Schema.Types.ObjectId, ref: 'User' }
   }],
-  
-  // Completion
+
+  // March 2025 manual identifiers (User based)
+  student: { type: Schema.Types.ObjectId, ref: 'User', index: true },
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', index: true },
+  batch: { type: Schema.Types.ObjectId, ref: 'FSBatch', index: true },
+
+  // Unified dates & status
+  enrolledAt: { type: Date, default: Date.now },
   status: {
     type: String,
-    enum: ['enrolled', 'in_progress', 'completed', 'graduated', 'dropped'],
+    enum: ['enrolled', 'in_progress', 'active', 'completed', 'graduated', 'dropped', 'withdrawn'],
     default: 'enrolled'
   },
   completedAt: Date,
   graduatedAt: Date,
+
+  // Certificate (issued by teacher/principal)
   certificateUrl: String,
   certificateNumber: String,
-  
+  certificateIssuedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  certificateIssuedAt: Date,
+
+  // Progress (manual flow)
+  progress: {
+    currentModule: { type: Number, default: 1 },
+    completedModules: [{ type: Number }],
+    completedLessons: [{ type: String }], // `${moduleNumber}-${lessonId}`
+    totalModules: { type: Number, default: 0 },
+    quizScores: [{
+      moduleNumber: Number,
+      score: Number,
+      passed: Boolean,
+      attemptDate: { type: Date, default: Date.now }
+    }],
+    assignments: [{
+      moduleNumber: Number,
+      assignmentId: String,
+      submissionId: { type: Schema.Types.ObjectId, ref: 'FSAssignmentSubmission' },
+      status: { type: String, enum: ['submitted', 'graded', 'resubmit'], default: 'submitted' },
+      grade: Number,
+      submittedAt: Date
+    }]
+  },
+
   // Metadata
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
+
+FoundationEnrollmentSchema.index({ student: 1, batch: 1 }, { unique: false });
+FoundationEnrollmentSchema.index({ church: 1, status: 1 });
+FoundationEnrollmentSchema.index({ organization: 1, status: 1 });
+
+// ==========================================
+// FOUNDATION SCHOOL BATCH (Semester/Session)
+// Quarterly admissions, graduation dates, teachers
+// ==========================================
+const FSBatchSchema = new Schema({
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true, index: true },
+  batchNumber: { type: Number, required: true },
+  name: { type: String, default: '' },
+  sessionYear: { type: Number, default: () => new Date().getFullYear(), index: true },
+  quarter: { type: Number, enum: [1, 2, 3, 4], index: true },
+
+  registrationOpenDate: Date,
+  registrationCloseDate: Date,
+  startDate: { type: Date, required: true },
+  endDate: Date,
+  graduationDate: Date,
+
+  principal: { type: Schema.Types.ObjectId, ref: 'User', index: true },
+  teachers: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+
+  status: {
+    type: String,
+    enum: ['draft', 'registration_open', 'in_progress', 'completed', 'graduated', 'archived'],
+    default: 'registration_open',
+    index: true
+  },
+
+  notes: String,
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+FSBatchSchema.index({ organization: 1, batchNumber: 1 }, { unique: true });
+
+// ==========================================
+// FOUNDATION SCHOOL ASSIGNMENT SUBMISSIONS
+// ==========================================
+const FSAssignmentSubmissionSchema = new Schema({
+  enrollment: { type: Schema.Types.ObjectId, ref: 'FoundationEnrollment', required: true, index: true },
+  moduleNumber: { type: Number, required: true, index: true },
+  assignmentId: { type: String, required: true },
+  student: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  content: { type: String, default: '' },
+  attachments: [{
+    title: String,
+    url: String,
+    type: { type: String, enum: ['pdf', 'image', 'video', 'audio', 'link'], default: 'link' }
+  }],
+  submittedAt: { type: Date, default: Date.now },
+  status: { type: String, enum: ['submitted', 'graded', 'resubmit'], default: 'submitted', index: true },
+  grade: Number,
+  feedback: String,
+  gradedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  gradedAt: Date,
+  resubmissionAllowed: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+
+FSAssignmentSubmissionSchema.index({ student: 1, status: 1 });
 
 // ==========================================
 // CHURCH EVENT SCHEMA
@@ -425,6 +536,8 @@ module.exports = {
   Soul: mongoose.model('Soul', SoulSchema),
   FoundationModule: mongoose.model('FoundationModule', FoundationModuleSchema),
   FoundationEnrollment: mongoose.model('FoundationEnrollment', FoundationEnrollmentSchema),
+  FSBatch: mongoose.model('FSBatch', FSBatchSchema),
+  FSAssignmentSubmission: mongoose.model('FSAssignmentSubmission', FSAssignmentSubmissionSchema),
   ChurchEvent: mongoose.model('ChurchEvent', ChurchEventSchema),
   AttendanceRecord: mongoose.model('AttendanceRecord', AttendanceRecordSchema)
 };

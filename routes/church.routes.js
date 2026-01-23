@@ -68,7 +68,7 @@ async function canManageOrg(userId, orgId) {
 router.post('/org', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    const { name, type, description, motto, parentId, contact, meetingSchedule, colorTheme } = req.body;
+    const { name, type, description, motto, parentId, contact, meetingSchedule, colorTheme, structureMode } = req.body;
     
     if (!name || !type) {
       return res.status(400).json({ ok: false, error: 'Name and type are required' });
@@ -115,6 +115,7 @@ router.post('/org', verifyToken, async (req, res) => {
       name,
       slug,
       type,
+      ...(structureMode ? { structureMode } : {}),
       description,
       motto,
       parent: parentId || null,
@@ -321,6 +322,209 @@ router.put('/org/:id', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// POST /api/church/org/:id/split - Split a cell into two cells
+// Rules: only for type='cell'. Creates two new child cells under same parent.
+// ==========================================
+router.post('/org/:id/split', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    if (!await canManageOrg(userId, req.params.id)) {
+      return res.status(403).json({ ok: false, error: 'Not authorized to manage this organization' });
+    }
+
+    const cell = await ChurchOrg.findById(req.params.id);
+    if (!cell) return res.status(404).json({ ok: false, error: 'Cell not found' });
+    if (cell.type !== 'cell') {
+      return res.status(400).json({ ok: false, error: 'Only cells can be split' });
+    }
+
+    const { nameA, nameB, leaderA, leaderB, deactivateOriginal = true } = req.body || {};
+
+    // Create new cells under same parent (fellowship)
+    const parentId = cell.parent;
+    if (!parentId) {
+      return res.status(400).json({ ok: false, error: 'Cell has no parent fellowship. Please set parent first.' });
+    }
+
+    const baseA = (nameA || `${cell.name} A`).toString();
+    const baseB = (nameB || `${cell.name} B`).toString();
+
+    const makeSlug = async (name) => {
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').slice(0, 50);
+      let slug = base;
+      let c = 1;
+      while (await ChurchOrg.findOne({ slug, type: 'cell' })) slug = `${base}-${c++}`;
+      return slug;
+    };
+
+    const slugA = await makeSlug(baseA);
+    const slugB = await makeSlug(baseB);
+
+    // Split members roughly in half (active members only)
+    const activeMembers = (cell.members || []).filter(m => m.status === 'active');
+    const half = Math.ceil(activeMembers.length / 2);
+    const membersA = activeMembers.slice(0, half);
+    const membersB = activeMembers.slice(half);
+
+    const now = new Date();
+    const cellA = new ChurchOrg({
+      name: baseA,
+      slug: slugA,
+      type: 'cell',
+      description: cell.description,
+      motto: cell.motto,
+      parent: parentId,
+      zone: cell.zone,
+      church: cell.church,
+      fellowship: cell.fellowship || parentId,
+      leader: leaderA || cell.leader,
+      admins: [leaderA || cell.leader].filter(Boolean),
+      assistantLeaders: [],
+      members: membersA,
+      memberCount: membersA.length,
+      contact: cell.contact,
+      meetingSchedule: cell.meetingSchedule,
+      socialLinks: cell.socialLinks,
+      settings: cell.settings,
+      cellSettings: cell.cellSettings,
+      linkedGroupId: cell.linkedGroupId,
+      linkedMeetRoomId: cell.linkedMeetRoomId,
+      logo: cell.logo,
+      coverImage: cell.coverImage,
+      bannerImage: cell.bannerImage,
+      colorTheme: cell.colorTheme,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    const cellB = new ChurchOrg({
+      name: baseB,
+      slug: slugB,
+      type: 'cell',
+      description: cell.description,
+      motto: cell.motto,
+      parent: parentId,
+      zone: cell.zone,
+      church: cell.church,
+      fellowship: cell.fellowship || parentId,
+      leader: leaderB || cell.leader,
+      admins: [leaderB || cell.leader].filter(Boolean),
+      assistantLeaders: [],
+      members: membersB,
+      memberCount: membersB.length,
+      contact: cell.contact,
+      meetingSchedule: cell.meetingSchedule,
+      socialLinks: cell.socialLinks,
+      settings: cell.settings,
+      cellSettings: cell.cellSettings,
+      linkedGroupId: cell.linkedGroupId,
+      linkedMeetRoomId: cell.linkedMeetRoomId,
+      logo: cell.logo,
+      coverImage: cell.coverImage,
+      bannerImage: cell.bannerImage,
+      colorTheme: cell.colorTheme,
+      createdBy: userId,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    await cellA.save();
+    await cellB.save();
+
+    if (deactivateOriginal) {
+      cell.isActive = false;
+      cell.updatedAt = new Date();
+      await cell.save();
+    }
+
+    res.json({ ok: true, message: 'Cell split successfully', originalCellId: cell._id, newCells: [cellA, cellB] });
+  } catch (err) {
+    console.error('Split cell error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
+// POST /api/church/org/:id/ensure-tools - Create/link Group & Meet room for a cell
+// ==========================================
+router.post('/org/:id/ensure-tools', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    if (!await canManageOrg(userId, req.params.id)) {
+      return res.status(403).json({ ok: false, error: 'Not authorized to manage this organization' });
+    }
+
+    const org = await ChurchOrg.findById(req.params.id);
+    if (!org) return res.status(404).json({ ok: false, error: 'Organization not found' });
+
+    // Group
+    if (!org.linkedGroupId) {
+      const Group = require('../models/group.model');
+      const group = await Group.create({
+        name: org.name,
+        description: org.description || `${org.name} group`,
+        category: 'church',
+        createdBy: userId,
+        admins: [userId],
+        members: [{ user: userId, role: 'admin', joinedAt: new Date() }],
+        isPrivate: true,
+        churchOrgId: org._id
+      }).catch(async () => {
+        // Some schemas may differ; fall back to minimal
+        return await Group.create({ name: org.name, createdBy: userId });
+      });
+      org.linkedGroupId = group._id;
+    }
+
+    // Meeting (Jitsi)
+    if (!org.linkedMeetRoomId) {
+      const mongoose = require('mongoose');
+      let Meeting;
+      try {
+        Meeting = mongoose.model('Meeting');
+      } catch {
+        const meetingSchema = new mongoose.Schema({
+          roomId: { type: String, required: true, unique: true },
+          title: { type: String, default: 'Meeting' },
+          host: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+          participants: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+          scheduledAt: Date,
+          duration: { type: Number, default: 60 },
+          status: { type: String, enum: ['scheduled', 'active', 'ended'], default: 'scheduled' },
+          provider: { type: String, default: 'jitsi' }
+        }, { timestamps: true });
+        Meeting = mongoose.model('Meeting', meetingSchema);
+      }
+
+      const crypto = require('crypto');
+      const roomId = crypto.randomBytes(4).toString('hex') + '-' + crypto.randomBytes(2).toString('hex') + '-' + crypto.randomBytes(2).toString('hex');
+      const meeting = await Meeting.create({
+        roomId,
+        title: `${org.name} Meeting`,
+        host: userId,
+        status: 'scheduled',
+        provider: 'jitsi'
+      });
+      org.linkedMeetRoomId = meeting._id;
+    }
+
+    org.updatedAt = new Date();
+    await org.save();
+
+    res.json({
+      ok: true,
+      org,
+      groupId: org.linkedGroupId,
+      meetingId: org.linkedMeetRoomId
+    });
+  } catch (err) {
+    console.error('Ensure tools error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
 // POST /api/church/org/:id/join - Request to join
 // ==========================================
 router.post('/org/:id/join', verifyToken, async (req, res) => {
@@ -452,6 +656,44 @@ router.post('/souls', verifyToken, async (req, res) => {
     });
     
     await soul.save();
+
+    // Auto-enroll new soul into Foundation School (if enabled and an active batch exists)
+    try {
+      if (churchId) {
+        const church = await ChurchOrg.findById(churchId).select('settings enableFoundationSchool');
+        const enabled = church?.settings?.enableFoundationSchool !== false;
+        if (enabled) {
+          const { FSBatch } = require('../models/church.model');
+          const activeBatch = await FSBatch.findOne({
+            organization: churchId,
+            status: { $in: ['registration_open', 'in_progress'] }
+          }).sort({ startDate: -1 });
+
+          if (activeBatch) {
+            // Create enrollment tied to soul (legacy flow)
+            const existingEnroll = await FoundationEnrollment.findOne({ soul: soul._id, status: { $ne: 'withdrawn' } });
+            if (!existingEnroll) {
+              const enrollment = new FoundationEnrollment({
+                soul: soul._id,
+                church: churchId,
+                organization: churchId,
+                batch: activeBatch._id,
+                status: 'enrolled'
+              });
+              await enrollment.save();
+              await Soul.findByIdAndUpdate(soul._id, {
+                status: 'foundation_school',
+                'foundationSchool.enrolled': true,
+                'foundationSchool.enrolledAt': new Date()
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Best-effort; never block soul creation
+      console.warn('Auto-enroll soul failed:', e?.message || e);
+    }
     
     // Update org stats
     if (churchId) {
