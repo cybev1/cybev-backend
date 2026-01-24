@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 1.0.0
+// VERSION: 1.1.0 - Added /organizations alias endpoint
 // ============================================
 
 const express = require('express');
@@ -209,6 +209,34 @@ router.get('/org/my', verifyToken, async (req, res) => {
     res.json({ ok: true, orgs });
   } catch (err) {
     console.error('My orgs error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
+// GET /api/church/organizations - Alias for frontend compatibility
+// Returns user's organizations (same as /org/my but different response format)
+// ==========================================
+router.get('/organizations', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    const organizations = await ChurchOrg.find({
+      $or: [
+        { leader: userId },
+        { admins: userId },
+        { assistantLeaders: userId },
+        { 'members.user': userId }
+      ],
+      isActive: true
+    })
+    .populate('leader', 'name username profilePicture')
+    .populate('parent', 'name type slug')
+    .sort({ type: 1, name: 1 });
+    
+    res.json({ ok: true, organizations });
+  } catch (err) {
+    console.error('Organizations error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
