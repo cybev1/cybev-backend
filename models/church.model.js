@@ -1,7 +1,11 @@
 // ============================================
-// FILE: models/church.model.js
-// Online Church Management System
-// VERSION: 1.0.0
+// FILE: church.model.js
+// PATH: cybev-backend-main/models/church.model.js
+// VERSION: 1.1.0 - Foundation School Schema Update
+// UPDATED: 2026-01-24
+// CHANGES: Added subtitle, icon, color, totalLessons,
+//          lessons (direct array) to FoundationModuleSchema
+// PREVIOUS: 1.0.0 - Original schema
 // Hierarchy: Zone → Church → Fellowship → Cell → Bible Study
 // ============================================
 
