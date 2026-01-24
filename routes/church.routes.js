@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 1.1.0 - Added /organizations alias endpoint
+// VERSION: 1.2.0 - Added /organizations and /organizations/:id endpoints
 // ============================================
 
 const express = require('express');
@@ -237,6 +237,62 @@ router.get('/organizations', verifyToken, async (req, res) => {
     res.json({ ok: true, organizations });
   } catch (err) {
     console.error('Organizations error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
+// GET /api/church/organizations/:id - Get single organization (alias)
+// ==========================================
+router.get('/organizations/:id', optionalAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid organization ID' });
+    }
+    
+    const org = await ChurchOrg.findById(id)
+      .populate('leader', 'name username profilePicture email')
+      .populate('admins', 'name username profilePicture')
+      .populate('assistantLeaders', 'name username profilePicture')
+      .populate('parent', 'name type slug')
+      .populate('zone', 'name slug')
+      .populate('church', 'name slug')
+      .populate('members.user', 'name username profilePicture');
+    
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    // Get children organizations
+    const children = await ChurchOrg.find({ parent: id, isActive: true })
+      .populate('leader', 'name username')
+      .select('name type slug memberCount soulsWon');
+    
+    // Get recent souls for this org
+    const recentSouls = await Soul.find({ organization: id })
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select('name phone email status createdAt');
+    
+    // Get stats
+    const totalSouls = await Soul.countDocuments({ organization: id });
+    const totalMembers = org.members?.length || 0;
+    
+    res.json({
+      ok: true,
+      organization: org,
+      children,
+      recentSouls,
+      stats: {
+        totalMembers,
+        totalSouls,
+        childOrgs: children.length
+      }
+    });
+  } catch (err) {
+    console.error('Get organization error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
