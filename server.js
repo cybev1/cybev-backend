@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.1.0 - Member Management Routes - Admin Analytics Routes Fix
-// PREVIOUS: 6.9.2 - AI Image Generation Route
+// VERSION: 7.2.0 - Church Registration Links + Member Management
+// PREVIOUS: 7.1.0 - Member Management Routes
 // ROLLBACK: If issues, revert to VERSION 6.9.2
 // GITHUB: https://github.com/cybev1/cybev-backend
 // UPDATED: 2026-01-24
@@ -280,6 +280,7 @@ const routes = [
   ['bible', '/api/church/bible', './routes/bible.routes'],
   ['church', '/api/church', './routes/church.routes'],
   ['member-management', '/api/church/members', './routes/member-management.routes'],
+  ['church-registration', '/api/church/register', './routes/church-registration.routes'],
   ['prayer', '/api/church/prayers', './routes/prayer.routes'],
   ['giving', '/api/church/giving', './routes/giving.routes'],
   ['cell-reports', '/api/church/cell-reports', './routes/cell-reports.routes'],
@@ -417,7 +418,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '7.0.0',
+    version: '7.2.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -426,6 +427,7 @@ app.get('/api/health', async (req, res) => {
       aiGeneration: 'enabled',
       aiImageGeneration: 'enabled',
       church: 'enabled',
+      churchRegistration: 'enabled',
       forms: 'enabled',
       emailPlatform: sesStatus.enabled ? 'enabled' : 'not_configured',
       automation: process.env.ENABLE_AUTOMATION_PROCESSOR === 'true' ? 'enabled' : 'disabled',
@@ -447,12 +449,12 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v7.0.0 - Premium Email Marketing',
+    message: 'CYBEV API v7.2.0 - Church Registration + Premium Email',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
     features: [
       'meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 
-      'church', 'forms', 'email-platform', 'automation',
+      'church', 'church-registration', 'forms', 'email-platform', 'automation',
       // v7.0.0 Premium
       'premium-email', 'ab-testing', 'advanced-segmentation', 
       'send-time-optimization', 'automation-workflows'
@@ -523,12 +525,19 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.0.0
-  Premium Email Marketing Platform
+  CYBEV API Server v7.2.0
+  Church Registration + Premium Email
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
+  
+  v7.2.0 Church Features:
+  ✅ Public Registration Links
+  ✅ Auto CYBEV Account Creation
+  ✅ QR Code Generation
+  ✅ Full Member Management
+  ✅ Foundation School Integration
   
   v7.0.0 Premium Email Features:
   ✅ A/B Testing (Subject, Content, Sender)
