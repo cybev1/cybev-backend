@@ -1,16 +1,133 @@
 // ============================================
 // FILE: church.model.js
 // PATH: cybev-backend-main/models/church.model.js
-// VERSION: 1.1.0 - Foundation School Schema Update
+// VERSION: 2.0.0 - Enhanced Member Management
 // UPDATED: 2026-01-24
-// CHANGES: Added subtitle, icon, color, totalLessons,
-//          lessons (direct array) to FoundationModuleSchema
-// PREVIOUS: 1.0.0 - Original schema
-// Hierarchy: Zone → Church → Fellowship → Cell → Bible Study
+// CHANGES:
+//   - Enhanced member schema with titles, profession, social links
+//   - Foundation School enrollment tracking
+//   - Saved status tracking
+//   - Better Soul tracker with follow-up stages
 // ============================================
 
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
+
+// ==========================================
+// MEMBER TITLES ENUM
+// ==========================================
+const MEMBER_TITLES = [
+  'GO', 'General Overseer', 'Bishop', 'Archbishop', 'Rev', 'Reverend',
+  'Pastor', 'Evangelist', 'Prophet', 'Apostle', 'Deacon', 'Deaconess',
+  'Elder', 'Minister', 'Dr', 'Prof', 'Engr', 'Barr', 'Chief',
+  'Mr', 'Mrs', 'Miss', 'Ms', 'Bro', 'Sis', 'Brother', 'Sister'
+];
+
+// ==========================================
+// CHURCH MEMBER SUB-SCHEMA (Enhanced)
+// ==========================================
+const ChurchMemberSchema = new Schema({
+  // Link to platform user (optional - can be non-platform members)
+  user: { type: Schema.Types.ObjectId, ref: 'User' },
+  
+  // Basic Info (for non-platform members)
+  firstName: { type: String, trim: true },
+  lastName: { type: String, trim: true },
+  email: { type: String, lowercase: true, trim: true },
+  phone: { type: String, trim: true },
+  whatsapp: { type: String, trim: true },
+  
+  // Title & Role
+  title: { 
+    type: String, 
+    enum: [...MEMBER_TITLES, 'custom'],
+    default: 'Bro'
+  },
+  customTitle: String, // If title is 'custom'
+  role: { 
+    type: String, 
+    enum: ['member', 'worker', 'leader', 'assistant_leader', 'cell_leader', 'fellowship_leader', 'pastor', 'associate_pastor', 'admin'],
+    default: 'member'
+  },
+  department: String, // e.g., "Choir", "Ushering", "Protocol", "Media"
+  
+  // Spiritual Status
+  isSaved: { type: Boolean, default: true },
+  salvationDate: Date,
+  baptismDate: Date,
+  baptismType: { type: String, enum: ['water', 'holy_spirit', 'both', 'none'], default: 'none' },
+  
+  // Foundation School
+  foundationSchool: {
+    enrolled: { type: Boolean, default: false },
+    enrollmentId: { type: Schema.Types.ObjectId, ref: 'FoundationEnrollment' },
+    status: { type: String, enum: ['not_enrolled', 'enrolled', 'in_progress', 'completed', 'graduated'], default: 'not_enrolled' },
+    graduationDate: Date,
+    batchNumber: String
+  },
+  
+  // Personal Details
+  dateOfBirth: Date,
+  gender: { type: String, enum: ['male', 'female'] },
+  maritalStatus: { type: String, enum: ['single', 'married', 'divorced', 'widowed'] },
+  weddingAnniversary: Date,
+  
+  // Address
+  address: {
+    street: String,
+    city: String,
+    state: String,
+    country: String,
+    postalCode: String
+  },
+  
+  // Professional Info
+  profession: String,
+  employer: String,
+  skills: [String],
+  
+  // Local Church Assignment (for zone/group level)
+  localChurch: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
+  cell: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
+  fellowship: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
+  
+  // Social Media
+  socialMedia: {
+    facebook: String,
+    instagram: String,
+    twitter: String,
+    linkedin: String,
+    tiktok: String,
+    youtube: String
+  },
+  
+  // Emergency Contact
+  emergencyContact: {
+    name: String,
+    relationship: String,
+    phone: String
+  },
+  
+  // Membership Details
+  membershipId: String, // Custom ID assigned by church
+  joinedAt: { type: Date, default: Date.now },
+  joinedHow: { type: String, enum: ['new_convert', 'transfer', 'water_baptism', 'invitation', 'walked_in', 'online'] },
+  previousChurch: String,
+  status: { type: String, enum: ['active', 'inactive', 'transferred', 'deceased'], default: 'active' },
+  
+  // Notes & Tags
+  notes: String,
+  tags: [String], // e.g., ["choir", "first_timer", "volunteer"]
+  
+  // Photos
+  profilePhoto: String,
+  
+  // Metadata
+  addedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  lastUpdatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+}, { _id: true });
 
 // ==========================================
 // CHURCH ORGANIZATION SCHEMA
@@ -26,28 +143,22 @@ const ChurchOrgSchema = new Schema({
     enum: ['zone', 'church', 'fellowship', 'cell', 'biblestudy'],
     index: true
   },
-  // Mode: "church" follows Christ Embassy structure; "organization" enables generic org hierarchy
   structureMode: { type: String, enum: ['church', 'organization'], default: 'church', index: true },
   description: { type: String, default: '' },
   motto: { type: String, default: '' },
   
   // Hierarchy Links
   parent: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', default: null, index: true },
-  zone: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', default: null }, // Quick reference to zone
-  church: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', default: null }, // Quick reference to church
+  zone: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', default: null },
+  church: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', default: null },
   
   // Leadership
-  leader: { type: Schema.Types.ObjectId, ref: 'User', index: true }, // Pastor/Leader
+  leader: { type: Schema.Types.ObjectId, ref: 'User', index: true },
   assistantLeaders: [{ type: Schema.Types.ObjectId, ref: 'User' }],
-  admins: [{ type: Schema.Types.ObjectId, ref: 'User' }], // Can manage this org
+  admins: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   
-  // Members
-  members: [{
-    user: { type: Schema.Types.ObjectId, ref: 'User' },
-    role: { type: String, enum: ['member', 'worker', 'leader', 'pastor', 'admin'], default: 'member' },
-    joinedAt: { type: Date, default: Date.now },
-    status: { type: String, enum: ['active', 'inactive', 'transferred'], default: 'active' }
-  }],
+  // Members (Enhanced)
+  members: [ChurchMemberSchema],
   memberCount: { type: Number, default: 0 },
   
   // Contact & Location
@@ -68,23 +179,22 @@ const ChurchOrgSchema = new Schema({
   // Meeting Schedule
   meetingSchedule: [{
     day: { type: String, enum: ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] },
-    time: String, // "10:00 AM"
-    title: String, // "Sunday Service", "Midweek Service"
+    time: String,
+    title: String,
     type: { type: String, enum: ['service', 'prayer', 'biblestudy', 'meeting', 'special'] },
     isOnline: { type: Boolean, default: false },
     streamUrl: String
   }],
 
-  // Cell Ministry (Capacity & Growth)
+  // Cell Ministry Settings
   cellSettings: {
     maxCapacity: { type: Number, default: 15 },
     splitThreshold: { type: Number, default: 15 },
     allowAutoSplitSuggestion: { type: Boolean, default: true }
   },
 
-  // Cell tools integration
+  // Linked features
   linkedGroupId: { type: Schema.Types.ObjectId, ref: 'Group' },
-  // Meet feature uses the "Meeting" model in routes/meet.routes.js
   linkedMeetRoomId: { type: Schema.Types.ObjectId, ref: 'Meeting' },
   
   // Branding
@@ -93,9 +203,9 @@ const ChurchOrgSchema = new Schema({
   bannerImage: String,
   colorTheme: { type: String, default: 'purple' },
   
-  // Website (linked CYBEV site)
+  // Website
   siteId: { type: Schema.Types.ObjectId, ref: 'Site' },
-  subdomain: String, // Quick reference
+  subdomain: String,
   
   // Social Links
   socialLinks: {
@@ -107,7 +217,7 @@ const ChurchOrgSchema = new Schema({
     website: String
   },
   
-  // Stats
+  // Stats (auto-calculated)
   stats: {
     totalSouls: { type: Number, default: 0 },
     totalMembers: { type: Number, default: 0 },
@@ -124,7 +234,6 @@ const ChurchOrgSchema = new Schema({
     enableSoulTracker: { type: Boolean, default: true },
     enableFoundationSchool: { type: Boolean, default: true },
     enableStreaming: { type: Boolean, default: true },
-    // If enabled, new souls added to this org are auto-enrolled into an active batch (if configured)
     autoEnrollNewSoulsToFoundation: { type: Boolean, default: true }
   },
   
@@ -140,9 +249,20 @@ ChurchOrgSchema.index({ type: 1, parent: 1 });
 ChurchOrgSchema.index({ zone: 1, type: 1 });
 ChurchOrgSchema.index({ slug: 1, type: 1 }, { unique: true });
 ChurchOrgSchema.index({ 'members.user': 1 });
+ChurchOrgSchema.index({ 'members.email': 1 });
+ChurchOrgSchema.index({ 'members.phone': 1 });
+
+// Pre-save: Update memberCount
+ChurchOrgSchema.pre('save', function(next) {
+  if (this.members) {
+    this.memberCount = this.members.filter(m => m.status === 'active').length;
+  }
+  this.updatedAt = new Date();
+  next();
+});
 
 // ==========================================
-// SOUL TRACKER SCHEMA
+// SOUL TRACKER SCHEMA (Enhanced)
 // Track new converts and follow-up
 // ==========================================
 const SoulSchema = new Schema({
@@ -151,14 +271,20 @@ const SoulSchema = new Schema({
   lastName: { type: String, trim: true },
   phone: { type: String, required: true },
   email: String,
+  whatsapp: String,
+  
+  // Address
   address: String,
   city: String,
+  state: String,
+  country: String,
   
   // Demographics
   gender: { type: String, enum: ['male', 'female', 'other'] },
   ageGroup: { type: String, enum: ['child', 'teen', 'young_adult', 'adult', 'senior'] },
+  dateOfBirth: Date,
   maritalStatus: { type: String, enum: ['single', 'married', 'divorced', 'widowed'] },
-  occupation: String,
+  profession: String,
   
   // Salvation Info
   salvationDate: { type: Date, default: Date.now },
@@ -167,413 +293,499 @@ const SoulSchema = new Schema({
     enum: ['first_time', 'rededication', 'transfer', 'water_baptism'],
     default: 'first_time'
   },
-  howTheyHeard: { type: String, enum: ['service', 'crusade', 'online', 'friend', 'outreach', 'social_media', 'other'] },
+  howTheyHeard: { type: String, enum: ['service', 'crusade', 'online', 'friend', 'outreach', 'social_media', 'tv', 'radio', 'other'] },
+  howTheyHeardDetails: String,
   referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
   witnessedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  prayerRequest: String,
   
   // Organization Assignment
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', index: true },
   zone: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
   church: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
   fellowship: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
   cell: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
-  assignedTo: { type: Schema.Types.ObjectId, ref: 'User' }, // Follow-up person
+  assignedTo: { type: Schema.Types.ObjectId, ref: 'User', index: true },
   
   // Status Tracking
   status: {
     type: String,
     enum: ['new', 'contacted', 'followup', 'attending', 'member', 'foundation_school', 'graduated', 'inactive', 'lost'],
-    default: 'new'
+    default: 'new',
+    index: true
+  },
+  
+  // Follow-up Pipeline Stage
+  pipelineStage: {
+    type: String,
+    enum: [
+      'new_convert',      // Just saved
+      'first_contact',    // Initial call/message made
+      'first_visit',      // Visited church/cell
+      'regular_attendee', // Attending regularly
+      'enrolled_fs',      // Enrolled in Foundation School
+      'graduated_fs',     // Graduated Foundation School
+      'full_member',      // Full church member
+      'active_worker'     // Serving in ministry
+    ],
+    default: 'new_convert'
   },
   
   // Follow-up History
   followUps: [{
     date: { type: Date, default: Date.now },
-    type: { type: String, enum: ['call', 'visit', 'message', 'service_attendance', 'cell_attendance'] },
+    type: { type: String, enum: ['call', 'visit', 'message', 'whatsapp', 'email', 'service_attendance', 'cell_attendance'] },
     notes: String,
-    outcome: { type: String, enum: ['successful', 'no_answer', 'scheduled', 'declined', 'wrong_number'] },
+    outcome: { type: String, enum: ['successful', 'no_answer', 'scheduled', 'declined', 'wrong_number', 'busy', 'not_interested'] },
     followedUpBy: { type: Schema.Types.ObjectId, ref: 'User' },
-    nextFollowUpDate: Date
+    nextFollowUpDate: Date,
+    duration: Number // Call duration in minutes
   }],
+  
+  nextFollowUpDate: Date,
+  lastContactDate: Date,
+  totalFollowUps: { type: Number, default: 0 },
   
   // Foundation School Progress
   foundationSchool: {
     enrolled: { type: Boolean, default: false },
-    enrolledAt: Date,
-    currentModule: { type: Number, default: 0 },
-    completedModules: [Number],
-    graduated: { type: Boolean, default: false },
-    graduatedAt: Date,
-    certificate: String
+    enrollmentId: { type: Schema.Types.ObjectId, ref: 'FoundationEnrollment' },
+    batchId: { type: Schema.Types.ObjectId },
+    status: { type: String, enum: ['not_enrolled', 'enrolled', 'in_progress', 'completed', 'graduated'], default: 'not_enrolled' },
+    enrollmentDate: Date,
+    graduationDate: Date,
+    certificateNumber: String
   },
   
-  // Linked User Account (if they create CYBEV account)
-  userId: { type: Schema.Types.ObjectId, ref: 'User' },
+  // Converted to member?
+  convertedToMember: { type: Boolean, default: false },
+  memberRecord: { type: Schema.Types.ObjectId }, // Reference to member in ChurchOrg.members
+  conversionDate: Date,
   
-  // Notes
+  // Social Media
+  socialMedia: {
+    facebook: String,
+    instagram: String,
+    twitter: String,
+    linkedin: String
+  },
+  
+  // Tags & Notes
+  tags: [String],
   notes: String,
-  prayerRequests: [String],
+  internalNotes: String, // Only visible to leaders
+  
+  // Photos
+  photo: String,
   
   // Metadata
-  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  addedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  lastUpdatedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  source: { type: String, enum: ['manual', 'form', 'crusade', 'online', 'import'], default: 'manual' },
+  sourceDetails: String,
+  isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
 
 // Indexes
-SoulSchema.index({ church: 1, status: 1 });
-SoulSchema.index({ cell: 1, status: 1 });
+SoulSchema.index({ organization: 1, status: 1 });
 SoulSchema.index({ assignedTo: 1, status: 1 });
 SoulSchema.index({ phone: 1 });
-SoulSchema.index({ salvationDate: -1 });
+SoulSchema.index({ createdAt: -1 });
+SoulSchema.index({ nextFollowUpDate: 1 });
 
-// ==========================================
-// FOUNDATION SCHOOL MODULE SCHEMA
-// Course structure for new believers
-// Updated: Supports March 2025 Manual structure
-// ==========================================
-const FoundationModuleSchema = new Schema({
-  // Basic Info
-  title: { type: String, required: true },
-  subtitle: String,
-  description: String,
-  moduleNumber: { type: Number, required: true, unique: true },
-  
-  // UI/Display
-  icon: { type: String, default: 'BookOpen' },
-  color: { type: String, default: '#8B5CF6' },
-  totalLessons: { type: Number, default: 0 },
-  
-  // Lessons (direct array - March 2025 structure)
-  lessons: [{
-    lessonNumber: Number,
-    title: String,
-    content: String,
-    scriptureReferences: [String],
-    keyPoints: [String],
-    memoryVerse: String,
-    duration: String,
-    videoUrl: String,
-    audioUrl: String,
-    resources: [{
-      title: String,
-      type: { type: String, enum: ['pdf', 'video', 'audio', 'link'] },
-      url: String
-    }]
-  }],
-  
-  // Legacy content structure (backward compatibility)
-  content: {
-    introduction: String,
-    lessons: [{
-      title: String,
-      content: String,
-      videoUrl: String,
-      audioUrl: String,
-      duration: Number,
-      resources: [{
-        title: String,
-        type: { type: String, enum: ['pdf', 'video', 'audio', 'link'] },
-        url: String
-      }]
-    }],
-    scriptures: [String],
-    memoryVerse: String
-  },
-  
-  // Quiz
-  quiz: [{
-    question: String,
-    options: [String],
-    correctAnswer: Number,
-    explanation: String
-  }],
-  passingScore: { type: Number, default: 70 },
-  
-  // Assignment
-  assignment: {
-    title: String,
-    description: String,
-    type: { type: String, enum: ['written', 'practical', 'reflection'] },
-    dueInDays: Number
-  },
-  
-  // Metadata
-  duration: String, // "2-3 hours" or legacy Number for days
-  isRequired: { type: Boolean, default: true },
-  order: { type: Number, default: 0 },
-  isActive: { type: Boolean, default: true }
-}, { timestamps: true });
-
-// ==========================================
-// FOUNDATION SCHOOL ENROLLMENT SCHEMA
-// Track individual progress through Foundation School
-// ==========================================
-const FoundationEnrollmentSchema = new Schema({
-  // ===============================
-  // NOTE: This schema supports BOTH:
-  // 1) Legacy enrollment flow (church.routes.js)
-  // 2) March 2025 manual flow (foundation-school.routes.js)
-  // ===============================
-
-  // Legacy identifiers (Soul tracker based)
-  soul: { type: Schema.Types.ObjectId, ref: 'Soul' },
-  user: { type: Schema.Types.ObjectId, ref: 'User' },
-  church: { type: Schema.Types.ObjectId, ref: 'ChurchOrg' },
-  mentor: { type: Schema.Types.ObjectId, ref: 'User' },
-  currentModule: { type: Number, default: 1 },
-  moduleProgress: [{
-    moduleNumber: Number,
-    startedAt: Date,
-    completedAt: Date,
-    lessonsCompleted: [Number],
-    quizScore: Number,
-    quizAttempts: { type: Number, default: 0 },
-    passed: Boolean,
-    notes: String
-  }],
-  attendance: [{
-    date: Date,
-    moduleNumber: Number,
-    present: Boolean,
-    notes: String,
-    markedBy: { type: Schema.Types.ObjectId, ref: 'User' }
-  }],
-
-  // March 2025 manual identifiers (User based)
-  student: { type: Schema.Types.ObjectId, ref: 'User', index: true },
-  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', index: true },
-  batch: { type: Schema.Types.ObjectId, ref: 'FSBatch', index: true },
-
-  // Unified dates & status
-  enrolledAt: { type: Date, default: Date.now },
-  status: {
-    type: String,
-    enum: ['enrolled', 'in_progress', 'active', 'completed', 'graduated', 'dropped', 'withdrawn'],
-    default: 'enrolled'
-  },
-  completedAt: Date,
-  graduatedAt: Date,
-
-  // Certificate (issued by teacher/principal)
-  certificateUrl: String,
-  certificateNumber: String,
-  certificateIssuedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  certificateIssuedAt: Date,
-
-  // Progress (manual flow)
-  progress: {
-    currentModule: { type: Number, default: 1 },
-    completedModules: [{ type: Number }],
-    completedLessons: [{ type: String }], // `${moduleNumber}-${lessonId}`
-    totalModules: { type: Number, default: 0 },
-    quizScores: [{
-      moduleNumber: Number,
-      score: Number,
-      passed: Boolean,
-      attemptDate: { type: Date, default: Date.now }
-    }],
-    assignments: [{
-      moduleNumber: Number,
-      assignmentId: String,
-      submissionId: { type: Schema.Types.ObjectId, ref: 'FSAssignmentSubmission' },
-      status: { type: String, enum: ['submitted', 'graded', 'resubmit'], default: 'submitted' },
-      grade: Number,
-      submittedAt: Date
-    }]
-  },
-
-  // Metadata
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
+// Pre-save: Update counters
+SoulSchema.pre('save', function(next) {
+  if (this.followUps) {
+    this.totalFollowUps = this.followUps.length;
+    if (this.followUps.length > 0) {
+      this.lastContactDate = this.followUps[this.followUps.length - 1].date;
+    }
+  }
+  this.updatedAt = new Date();
+  next();
 });
-
-FoundationEnrollmentSchema.index({ student: 1, batch: 1 }, { unique: false });
-FoundationEnrollmentSchema.index({ church: 1, status: 1 });
-FoundationEnrollmentSchema.index({ organization: 1, status: 1 });
-
-// ==========================================
-// FOUNDATION SCHOOL BATCH (Semester/Session)
-// Quarterly admissions, graduation dates, teachers
-// ==========================================
-const FSBatchSchema = new Schema({
-  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true, index: true },
-  batchNumber: { type: Number, required: true },
-  name: { type: String, default: '' },
-  sessionYear: { type: Number, default: () => new Date().getFullYear(), index: true },
-  quarter: { type: Number, enum: [1, 2, 3, 4], index: true },
-
-  registrationOpenDate: Date,
-  registrationCloseDate: Date,
-  startDate: { type: Date, required: true },
-  endDate: Date,
-  graduationDate: Date,
-
-  principal: { type: Schema.Types.ObjectId, ref: 'User', index: true },
-  teachers: [{ type: Schema.Types.ObjectId, ref: 'User' }],
-
-  status: {
-    type: String,
-    enum: ['draft', 'registration_open', 'in_progress', 'completed', 'graduated', 'archived'],
-    default: 'registration_open',
-    index: true
-  },
-
-  notes: String,
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-});
-
-FSBatchSchema.index({ organization: 1, batchNumber: 1 }, { unique: true });
-
-// ==========================================
-// FOUNDATION SCHOOL ASSIGNMENT SUBMISSIONS
-// ==========================================
-const FSAssignmentSubmissionSchema = new Schema({
-  enrollment: { type: Schema.Types.ObjectId, ref: 'FoundationEnrollment', required: true, index: true },
-  moduleNumber: { type: Number, required: true, index: true },
-  assignmentId: { type: String, required: true },
-  student: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-  content: { type: String, default: '' },
-  attachments: [{
-    title: String,
-    url: String,
-    type: { type: String, enum: ['pdf', 'image', 'video', 'audio', 'link'], default: 'link' }
-  }],
-  submittedAt: { type: Date, default: Date.now },
-  status: { type: String, enum: ['submitted', 'graded', 'resubmit'], default: 'submitted', index: true },
-  grade: Number,
-  feedback: String,
-  gradedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  gradedAt: Date,
-  resubmissionAllowed: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now }
-});
-
-FSAssignmentSubmissionSchema.index({ student: 1, status: 1 });
-
-// ==========================================
-// CHURCH EVENT SCHEMA
-// Services, programs, special events
-// ==========================================
-const ChurchEventSchema = new Schema({
-  // Basic Info
-  title: { type: String, required: true },
-  description: String,
-  type: {
-    type: String,
-    enum: ['service', 'prayer', 'biblestudy', 'outreach', 'conference', 'seminar', 'meeting', 'special', 'crusade'],
-    default: 'service'
-  },
-  
-  // Organization
-  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true },
-  
-  // Schedule
-  startDate: { type: Date, required: true },
-  endDate: Date,
-  isRecurring: { type: Boolean, default: false },
-  recurrence: {
-    frequency: { type: String, enum: ['daily', 'weekly', 'biweekly', 'monthly'] },
-    daysOfWeek: [Number], // 0-6 for Sunday-Saturday
-    endDate: Date
-  },
-  
-  // Location
-  isOnline: { type: Boolean, default: false },
-  location: {
-    name: String,
-    address: String,
-    coordinates: { lat: Number, lng: Number }
-  },
-  streamUrl: String,
-  
-  // Attendance
-  expectedAttendance: Number,
-  actualAttendance: Number,
-  attendees: [{
-    user: { type: Schema.Types.ObjectId, ref: 'User' },
-    checkedInAt: Date,
-    type: { type: String, enum: ['member', 'visitor', 'first_timer'] }
-  }],
-  
-  // Media
-  coverImage: String,
-  bannerImage: String,
-  
-  // Live Stream Integration
-  liveStreamId: { type: Schema.Types.ObjectId, ref: 'LiveStream' },
-  isLive: { type: Boolean, default: false },
-  
-  // Settings
-  isPublic: { type: Boolean, default: true },
-  requireRegistration: { type: Boolean, default: false },
-  
-  // Metadata
-  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now }
-});
-
-// Indexes
-ChurchEventSchema.index({ organization: 1, startDate: -1 });
-ChurchEventSchema.index({ startDate: 1, isPublic: 1 });
 
 // ==========================================
 // ATTENDANCE RECORD SCHEMA
-// Track service/event attendance
 // ==========================================
 const AttendanceRecordSchema = new Schema({
-  // Organization & Event
-  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true },
-  event: { type: Schema.Types.ObjectId, ref: 'ChurchEvent' },
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true, index: true },
   
-  // Date
-  date: { type: Date, required: true },
-  serviceType: { type: String, enum: ['sunday', 'midweek', 'prayer', 'biblestudy', 'special'] },
+  // Event Details
+  date: { type: Date, required: true, index: true },
+  eventType: { 
+    type: String, 
+    enum: ['sunday_service', 'midweek_service', 'cell_meeting', 'prayer_meeting', 'special_program', 'bible_study', 'outreach'],
+    required: true
+  },
+  eventTitle: String,
   
   // Counts
   totalAttendance: { type: Number, default: 0 },
-  members: { type: Number, default: 0 },
-  visitors: { type: Number, default: 0 },
+  maleCount: { type: Number, default: 0 },
+  femaleCount: { type: Number, default: 0 },
+  childrenCount: { type: Number, default: 0 },
   firstTimers: { type: Number, default: 0 },
-  children: { type: Number, default: 0 },
-  online: { type: Number, default: 0 },
+  newConverts: { type: Number, default: 0 },
+  testimonies: { type: Number, default: 0 },
   
-  // Individual Attendance (optional detailed tracking)
+  // Detailed Attendees (optional)
   attendees: [{
-    user: { type: Schema.Types.ObjectId, ref: 'User' },
-    soul: { type: Schema.Types.ObjectId, ref: 'Soul' },
-    type: { type: String, enum: ['member', 'visitor', 'first_timer', 'child'] },
-    checkedInAt: Date,
-    checkedInBy: { type: Schema.Types.ObjectId, ref: 'User' }
+    member: { type: Schema.Types.ObjectId },
+    name: String,
+    type: { type: String, enum: ['member', 'first_timer', 'visitor', 'new_convert'] }
   }],
   
-  // Souls Won
-  soulsWon: { type: Number, default: 0 },
-  newSouls: [{ type: Schema.Types.ObjectId, ref: 'Soul' }],
+  // First Timers Details
+  firstTimersList: [{
+    name: String,
+    phone: String,
+    email: String,
+    invitedBy: String,
+    convertedToSoul: { type: Boolean, default: false },
+    soulId: { type: Schema.Types.ObjectId, ref: 'Soul' }
+  }],
+  
+  // Offering
+  offering: {
+    total: { type: Number, default: 0 },
+    tithes: { type: Number, default: 0 },
+    partnership: { type: Number, default: 0 },
+    other: { type: Number, default: 0 },
+    currency: { type: String, default: 'NGN' }
+  },
   
   // Notes
   notes: String,
   highlights: String,
+  challenges: String,
+  prayerPoints: [String],
+  
+  // Media
+  photos: [String],
   
   // Metadata
   recordedBy: { type: Schema.Types.ObjectId, ref: 'User' },
-  createdAt: { type: Date, default: Date.now }
+  approvedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  status: { type: String, enum: ['draft', 'submitted', 'approved'], default: 'draft' },
+  submittedAt: Date,
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
-// Indexes
 AttendanceRecordSchema.index({ organization: 1, date: -1 });
+AttendanceRecordSchema.index({ organization: 1, eventType: 1 });
 
 // ==========================================
-// EXPORT MODELS
+// CELL REPORT SCHEMA
+// Weekly cell/fellowship reports
 // ==========================================
+const CellReportSchema = new Schema({
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true, index: true },
+  
+  // Report Period
+  weekStartDate: { type: Date, required: true },
+  weekEndDate: { type: Date, required: true },
+  reportMonth: String, // "2026-01"
+  reportWeek: Number, // Week number in month (1-5)
+  
+  // Meeting Details
+  meetingHeld: { type: Boolean, default: true },
+  meetingDate: Date,
+  meetingVenue: String,
+  meetingDuration: Number, // minutes
+  topic: String,
+  
+  // Attendance
+  attendance: {
+    total: { type: Number, default: 0 },
+    members: { type: Number, default: 0 },
+    visitors: { type: Number, default: 0 },
+    firstTimers: { type: Number, default: 0 },
+    children: { type: Number, default: 0 }
+  },
+  
+  // Soul Winning
+  soulWinning: {
+    soulsWon: { type: Number, default: 0 },
+    soulsFollowedUp: { type: Number, default: 0 },
+    soulDetails: [{
+      name: String,
+      phone: String,
+      linkedSoulId: { type: Schema.Types.ObjectId, ref: 'Soul' }
+    }]
+  },
+  
+  // Outreach Activities
+  outreach: {
+    conducted: { type: Boolean, default: false },
+    type: { type: String, enum: ['door_to_door', 'street', 'market', 'campus', 'online', 'other'] },
+    location: String,
+    peopleReached: { type: Number, default: 0 },
+    materialsDistributed: { type: Number, default: 0 }
+  },
+  
+  // Offering
+  offering: {
+    cellOffering: { type: Number, default: 0 },
+    partnership: { type: Number, default: 0 },
+    currency: { type: String, default: 'NGN' }
+  },
+  
+  // Prayer & Testimonies
+  prayerPoints: [String],
+  testimonies: [{
+    summary: String,
+    category: { type: String, enum: ['healing', 'provision', 'salvation', 'breakthrough', 'other'] }
+  }],
+  
+  // Challenges & Needs
+  challenges: String,
+  assistanceNeeded: String,
+  
+  // Notes
+  leaderNotes: String,
+  highlights: String,
+  
+  // Photos
+  photos: [String],
+  
+  // Status
+  status: { type: String, enum: ['draft', 'submitted', 'reviewed', 'approved'], default: 'draft' },
+  submittedAt: Date,
+  reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  reviewedAt: Date,
+  reviewNotes: String,
+  
+  // Metadata
+  submittedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+CellReportSchema.index({ organization: 1, weekStartDate: -1 });
+CellReportSchema.index({ organization: 1, status: 1 });
+
+// ==========================================
+// FOUNDATION MODULE SCHEMA
+// ==========================================
+const FoundationModuleSchema = new Schema({
+  moduleNumber: { type: Number, required: true, unique: true },
+  title: { type: String, required: true },
+  subtitle: { type: String, default: '' },
+  description: { type: String, default: '' },
+  icon: { type: String, default: 'BookOpen' },
+  color: { type: String, default: 'purple' },
+  
+  // Lessons stored directly in the module
+  lessons: [{
+    lessonNumber: { type: Number, required: true },
+    title: { type: String, required: true },
+    subtitle: String,
+    content: { type: String, required: true }, // Rich text / Markdown
+    scriptureReferences: [String],
+    keyPoints: [String],
+    practicalApplication: String,
+    prayerPoints: [String],
+    memoryVerse: {
+      text: String,
+      reference: String
+    },
+    questions: [{
+      question: String,
+      type: { type: String, enum: ['multiple_choice', 'true_false', 'short_answer'], default: 'multiple_choice' },
+      options: [String],
+      correctAnswer: Schema.Types.Mixed,
+      explanation: String,
+      points: { type: Number, default: 10 }
+    }],
+    estimatedMinutes: { type: Number, default: 30 },
+    order: { type: Number, default: 0 }
+  }],
+  totalLessons: { type: Number, default: 0 },
+  
+  // Quiz for entire module
+  quiz: {
+    questions: [{
+      question: String,
+      type: { type: String, enum: ['multiple_choice', 'true_false', 'short_answer'], default: 'multiple_choice' },
+      options: [String],
+      correctAnswer: Schema.Types.Mixed,
+      explanation: String,
+      points: { type: Number, default: 10 }
+    }],
+    passingScore: { type: Number, default: 70 },
+    timeLimit: { type: Number, default: 30 } // minutes
+  },
+  
+  // Assignment
+  assignment: {
+    title: String,
+    instructions: String,
+    dueAfterDays: { type: Number, default: 7 }
+  },
+  
+  isActive: { type: Boolean, default: true },
+  order: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+// ==========================================
+// FOUNDATION ENROLLMENT SCHEMA
+// ==========================================
+const FoundationEnrollmentSchema = new Schema({
+  student: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', index: true },
+  
+  // Batch Info
+  batch: {
+    number: String,
+    name: String,
+    startDate: Date,
+    graduationDate: Date
+  },
+  
+  // Status
+  status: {
+    type: String,
+    enum: ['enrolled', 'active', 'paused', 'completed', 'graduated', 'dropped'],
+    default: 'enrolled'
+  },
+  
+  // Progress
+  progress: {
+    currentModule: { type: Number, default: 1 },
+    currentLesson: { type: Number, default: 1 },
+    completedModules: [Number],
+    completedLessons: [{
+      moduleNumber: Number,
+      lessonNumber: Number,
+      completedAt: Date
+    }],
+    quizScores: [{
+      moduleNumber: Number,
+      score: Number,
+      totalQuestions: Number,
+      passed: Boolean,
+      attemptedAt: Date,
+      answers: Schema.Types.Mixed
+    }],
+    assignments: [{
+      moduleNumber: Number,
+      submittedAt: Date,
+      content: String,
+      grade: Number,
+      feedback: String,
+      gradedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+      gradedAt: Date
+    }],
+    overallProgress: { type: Number, default: 0 }, // 0-100
+    averageQuizScore: { type: Number, default: 0 }
+  },
+  
+  // Certificate
+  certificateNumber: String,
+  certificateIssuedAt: Date,
+  certificateIssuedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  
+  // Metadata
+  enrolledAt: { type: Date, default: Date.now },
+  completedAt: Date,
+  graduatedAt: Date,
+  lastActivityAt: { type: Date, default: Date.now },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+FoundationEnrollmentSchema.index({ student: 1, status: 1 });
+FoundationEnrollmentSchema.index({ organization: 1, status: 1 });
+
+// ==========================================
+// CHURCH EVENT SCHEMA
+// ==========================================
+const ChurchEventSchema = new Schema({
+  organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', required: true, index: true },
+  
+  title: { type: String, required: true },
+  description: String,
+  type: { 
+    type: String, 
+    enum: ['service', 'conference', 'retreat', 'outreach', 'training', 'celebration', 'prayer', 'other'],
+    default: 'service'
+  },
+  
+  // Schedule
+  startDate: { type: Date, required: true },
+  endDate: Date,
+  startTime: String,
+  endTime: String,
+  isAllDay: { type: Boolean, default: false },
+  isRecurring: { type: Boolean, default: false },
+  recurrence: {
+    frequency: { type: String, enum: ['daily', 'weekly', 'monthly', 'yearly'] },
+    interval: { type: Number, default: 1 },
+    endDate: Date
+  },
+  
+  // Location
+  venue: String,
+  address: String,
+  isOnline: { type: Boolean, default: false },
+  streamUrl: String,
+  meetingLink: String,
+  
+  // Media
+  bannerImage: String,
+  photos: [String],
+  
+  // Registration
+  requiresRegistration: { type: Boolean, default: false },
+  maxAttendees: Number,
+  registrationDeadline: Date,
+  registrations: [{
+    user: { type: Schema.Types.ObjectId, ref: 'User' },
+    name: String,
+    email: String,
+    phone: String,
+    registeredAt: { type: Date, default: Date.now },
+    attended: { type: Boolean, default: false }
+  }],
+  
+  // Visibility
+  isPublic: { type: Boolean, default: true },
+  visibleTo: { type: String, enum: ['all', 'members', 'leaders'], default: 'all' },
+  
+  // Metadata
+  createdBy: { type: Schema.Types.ObjectId, ref: 'User' },
+  isActive: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+ChurchEventSchema.index({ organization: 1, startDate: 1 });
+ChurchEventSchema.index({ startDate: 1, isPublic: 1 });
+
+// ==========================================
+// EXPORTS
+// ==========================================
+const ChurchOrg = mongoose.model('ChurchOrg', ChurchOrgSchema);
+const Soul = mongoose.model('Soul', SoulSchema);
+const AttendanceRecord = mongoose.model('AttendanceRecord', AttendanceRecordSchema);
+const CellReport = mongoose.model('CellReport', CellReportSchema);
+const FoundationModule = mongoose.model('FoundationModule', FoundationModuleSchema);
+const FoundationEnrollment = mongoose.model('FoundationEnrollment', FoundationEnrollmentSchema);
+const ChurchEvent = mongoose.model('ChurchEvent', ChurchEventSchema);
+
 module.exports = {
-  ChurchOrg: mongoose.model('ChurchOrg', ChurchOrgSchema),
-  Soul: mongoose.model('Soul', SoulSchema),
-  FoundationModule: mongoose.model('FoundationModule', FoundationModuleSchema),
-  FoundationEnrollment: mongoose.model('FoundationEnrollment', FoundationEnrollmentSchema),
-  FSBatch: mongoose.model('FSBatch', FSBatchSchema),
-  FSAssignmentSubmission: mongoose.model('FSAssignmentSubmission', FSAssignmentSubmissionSchema),
-  ChurchEvent: mongoose.model('ChurchEvent', ChurchEventSchema),
-  AttendanceRecord: mongoose.model('AttendanceRecord', AttendanceRecordSchema)
+  ChurchOrg,
+  Soul,
+  AttendanceRecord,
+  CellReport,
+  FoundationModule,
+  FoundationEnrollment,
+  ChurchEvent,
+  MEMBER_TITLES
 };
