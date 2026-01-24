@@ -2,12 +2,14 @@
  * ============================================
  * FILE: foundation-school.routes.js
  * PATH: cybev-backend-main/routes/foundation-school.routes.js
- * VERSION: 2.1.0 - March 2025 Manual + Admin Seed Endpoint
+ * VERSION: 2.2.0 - March 2025 Manual + Admin Seed Endpoint
  * UPDATED: 2026-01-24
  * CHANGES: 
  *   - Fixed enroll to return existing enrollment (not 400)
  *   - Improved stats endpoint
- *   - Added /admin/run-seed endpoint for easy seeding
+ *   - Added /admin/run-seed endpoint
+ *   - Added /admin/students endpoint
+ *   - Added /leaderboard endpoint
  * PREVIOUS: 2.0.0 - Initial implementation
  * ============================================
  */
@@ -779,6 +781,85 @@ router.post('/admin/seed-modules', verifyToken, async (req, res) => {
     });
   } catch (err) {
     console.error('Seed modules error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/church/foundation/admin/students
+ * Get all enrolled students (Admin dashboard)
+ */
+router.get('/admin/students', verifyToken, async (req, res) => {
+  try {
+    const { organizationId, batchId, status, page = 1, limit = 50 } = req.query;
+    
+    const query = {};
+    if (organizationId) query.organization = organizationId;
+    if (batchId) query.batch = batchId;
+    if (status && status !== 'all') query.status = status;
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const [enrollments, total] = await Promise.all([
+      FoundationEnrollment.find(query)
+        .populate('student', 'name email username avatar')
+        .populate('batch', 'name batchNumber')
+        .populate('organization', 'name slug')
+        .sort({ enrolledAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit)),
+      FoundationEnrollment.countDocuments(query)
+    ]);
+    
+    res.json({
+      ok: true,
+      enrollments,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / parseInt(limit)) }
+    });
+  } catch (err) {
+    console.error('Get admin students error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/church/foundation/leaderboard
+ * Public leaderboard - top students by quiz scores
+ */
+router.get('/leaderboard', async (req, res) => {
+  try {
+    const { organizationId, limit = 50 } = req.query;
+    
+    const query = {
+      'progress.quizScores.0': { $exists: true }
+    };
+    if (organizationId) query.organization = organizationId;
+    
+    const enrollments = await FoundationEnrollment.find(query)
+      .populate('student', 'name username avatar')
+      .select('student progress.quizScores progress.completedModules');
+    
+    // Calculate average score and sort
+    const leaderboard = enrollments
+      .map(e => {
+        const scores = e.progress?.quizScores || [];
+        const avgScore = scores.length > 0 
+          ? Math.round(scores.reduce((a, b) => a + (b.score || 0), 0) / scores.length)
+          : 0;
+        return {
+          _id: e._id,
+          student: e.student,
+          avgScore,
+          quizCount: scores.length,
+          completedModules: e.progress?.completedModules?.length || 0
+        };
+      })
+      .sort((a, b) => b.avgScore - a.avgScore)
+      .slice(0, parseInt(limit));
+    
+    res.json({ ok: true, leaderboard });
+  } catch (err) {
+    console.error('Leaderboard error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
