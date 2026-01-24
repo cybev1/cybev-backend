@@ -2,8 +2,13 @@
  * ============================================
  * FILE: foundation-school.routes.js
  * PATH: cybev-backend-main/routes/foundation-school.routes.js
- * VERSION: 2.0.0 - March 2025 Manual
- * STATUS: NEW FILE - Copy to routes/
+ * VERSION: 2.1.0 - March 2025 Manual + Admin Seed Endpoint
+ * UPDATED: 2026-01-24
+ * CHANGES: 
+ *   - Fixed enroll to return existing enrollment (not 400)
+ *   - Improved stats endpoint
+ *   - Added /admin/run-seed endpoint for easy seeding
+ * PREVIOUS: 2.0.0 - Initial implementation
  * ============================================
  */
 
@@ -890,6 +895,293 @@ router.get('/admin/enrollments', verifyToken, async (req, res) => {
     });
   } catch (err) {
     console.error('Get enrollments error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/church/foundation/admin/run-seed
+ * Run the Foundation School seed (Admin only - requires admin secret or admin role)
+ * Can be called from Railway dashboard or via curl
+ * 
+ * Usage: 
+ * curl -X POST https://api.cybev.io/api/church/foundation/admin/run-seed \
+ *   -H "Authorization: Bearer YOUR_ADMIN_TOKEN" \
+ *   -H "Content-Type: application/json"
+ * 
+ * Or with secret:
+ * curl -X POST https://api.cybev.io/api/church/foundation/admin/run-seed \
+ *   -H "Content-Type: application/json" \
+ *   -d '{"adminSecret": "YOUR_ADMIN_SECRET"}'
+ */
+router.post('/admin/run-seed', async (req, res) => {
+  try {
+    // Check authorization - either admin token or admin secret
+    const { adminSecret } = req.body || {};
+    const authHeader = req.headers.authorization;
+    
+    let authorized = false;
+    
+    // Check admin secret (from env)
+    if (adminSecret && adminSecret === process.env.ADMIN_SECRET) {
+      authorized = true;
+    }
+    
+    // Check JWT token for admin role
+    if (!authorized && authHeader) {
+      try {
+        const token = authHeader.replace('Bearer ', '');
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+        if (decoded.role === 'admin' || decoded.isAdmin) {
+          authorized = true;
+        }
+      } catch (e) {
+        // Invalid token
+      }
+    }
+    
+    if (!authorized) {
+      return res.status(403).json({ 
+        ok: false, 
+        error: 'Admin authorization required. Provide adminSecret or admin JWT token.' 
+      });
+    }
+
+    // March 2025 Foundation School Curriculum - Inline seed data
+    const modules = [
+      {
+        moduleNumber: 1,
+        title: "The New Creature",
+        subtitle: "Understanding Your New Identity in Christ",
+        description: "Discover what it means to be born again and your new identity as a child of God.",
+        icon: "Sparkles",
+        color: "#10B981",
+        duration: "2-3 hours",
+        totalLessons: 5,
+        lessons: [
+          {
+            lessonNumber: 1,
+            title: "What Happened When You Were Born Again",
+            content: "When you received Jesus Christ as your Lord and Savior, something extraordinary happened. You experienced the new birth - you became a new creature entirely! 2 Corinthians 5:17 says: 'Therefore if any man be in Christ, he is a new creature: old things are passed away; behold, all things are become new.'",
+            scriptureReferences: ["2 Corinthians 5:17", "John 3:3-6", "Colossians 1:13"],
+            keyPoints: ["You are a completely new creation", "Your spirit has been born of God", "You have received the divine nature"],
+            memoryVerse: "Therefore if any man be in Christ, he is a new creature: old things are passed away; behold, all things are become new. - 2 Corinthians 5:17",
+            duration: "30 minutes"
+          },
+          {
+            lessonNumber: 2,
+            title: "Your New Nature",
+            content: "As a new creature in Christ, you have received a brand new nature - the divine nature! 2 Peter 1:4 tells us that God has given us 'exceeding great and precious promises: that by these ye might be partakers of the divine nature.'",
+            scriptureReferences: ["2 Peter 1:4", "Romans 5:19", "2 Corinthians 5:21"],
+            keyPoints: ["You have God's nature living inside you", "You are righteous by nature", "You are made righteous, not trying to become righteous"],
+            memoryVerse: "For as by one man's disobedience many were made sinners, so by the obedience of one shall many be made righteous. - Romans 5:19",
+            duration: "30 minutes"
+          },
+          {
+            lessonNumber: 3,
+            title: "Your New Family",
+            content: "When you were born again, you were born into God's family. You now have a new Father - God Himself! Galatians 4:6 says: 'And because ye are sons, God hath sent forth the Spirit of his Son into your hearts, crying, Abba, Father.'",
+            scriptureReferences: ["Galatians 4:6-7", "Romans 8:15-17", "1 John 3:1-2"],
+            keyPoints: ["God is your Father", "You are a son/daughter of God", "You have an inheritance in Christ"],
+            memoryVerse: "Behold, what manner of love the Father hath bestowed upon us, that we should be called the sons of God. - 1 John 3:1",
+            duration: "30 minutes"
+          },
+          {
+            lessonNumber: 4,
+            title: "Your New Name",
+            content: "In Christ, you have been given new names that describe your new identity. You are no longer a sinner but a saint. You are called a believer, a Christian, and a disciple.",
+            scriptureReferences: ["1 Corinthians 1:2", "Acts 11:26", "Ephesians 1:1"],
+            keyPoints: ["You are a saint", "You are a believer", "You are a Christian - a Christ-one"],
+            memoryVerse: "Unto the church of God which is at Corinth, to them that are sanctified in Christ Jesus, called to be saints. - 1 Corinthians 1:2",
+            duration: "30 minutes"
+          },
+          {
+            lessonNumber: 5,
+            title: "Your New Life",
+            content: "As a new creature, you have been given a brand new life - eternal life! 1 John 5:11-12 says: 'And this is the record, that God hath given to us eternal life, and this life is in his Son. He that hath the Son hath life.'",
+            scriptureReferences: ["1 John 5:11-12", "John 10:10", "Romans 6:4"],
+            keyPoints: ["You have eternal life NOW", "This life is in Jesus", "You can walk in newness of life"],
+            memoryVerse: "He that hath the Son hath life; and he that hath not the Son of God hath not life. - 1 John 5:12",
+            duration: "30 minutes"
+          }
+        ],
+        quiz: [
+          { question: "According to 2 Corinthians 5:17, what happens when you are in Christ?", options: ["You become a better person", "You are reformed", "You are a new creature", "You try harder"], correctAnswer: 2, explanation: "The Bible says you become a 'new creature' - not reformed, but completely new!" },
+          { question: "What nature did you receive when you were born again?", options: ["Angelic nature", "Human nature improved", "The divine nature of God", "A sinful nature"], correctAnswer: 2, explanation: "2 Peter 1:4 tells us we have become 'partakers of the divine nature' - God's own nature!" },
+          { question: "According to Galatians 4:6-7, what is your relationship with God now?", options: ["Servant", "Slave", "Stranger", "Son/Daughter"], correctAnswer: 3, explanation: "Galatians 4:6-7 says we are sons, not servants - we can call God 'Abba, Father.'" },
+          { question: "When do you have eternal life according to 1 John 5:12?", options: ["When you die", "When you get to heaven", "Right now if you have the Son", "After you do enough good works"], correctAnswer: 2, explanation: "1 John 5:12 says 'He that hath the Son hath life' - present tense, right now!" }
+        ],
+        assignment: { title: "My New Identity Declaration", description: "Write a personal declaration of who you are in Christ based on the scriptures studied.", type: "written", dueInDays: 7 },
+        passingScore: 70,
+        isActive: true,
+        order: 1
+      },
+      {
+        moduleNumber: 2,
+        title: "The Holy Spirit",
+        subtitle: "Your Helper, Guide, and Empowerer",
+        description: "Learn about the Person and work of the Holy Spirit in your life.",
+        icon: "Flame",
+        color: "#F59E0B",
+        duration: "2-3 hours",
+        totalLessons: 5,
+        lessons: [
+          { lessonNumber: 1, title: "Who Is The Holy Spirit?", content: "The Holy Spirit is the third Person of the Godhead - Father, Son, and Holy Spirit. He is not a force or influence, but a real Person with intellect, emotions, and will.", scriptureReferences: ["John 14:16-17", "Acts 5:3-4", "2 Corinthians 13:14"], keyPoints: ["The Holy Spirit is God", "He is a Person, not a force", "He is the third Person of the Trinity"], memoryVerse: "And I will pray the Father, and he shall give you another Comforter, that he may abide with you for ever. - John 14:16", duration: "30 minutes" },
+          { lessonNumber: 2, title: "The Holy Spirit In You", content: "When you were born again, the Holy Spirit came to live inside you. Your body is now the temple of the Holy Spirit!", scriptureReferences: ["1 Corinthians 6:19", "Romans 8:9-11", "John 14:17"], keyPoints: ["The Holy Spirit lives in you", "Your body is His temple", "He will never leave you"], memoryVerse: "What? know ye not that your body is the temple of the Holy Ghost which is in you? - 1 Corinthians 6:19", duration: "30 minutes" },
+          { lessonNumber: 3, title: "The Baptism of the Holy Spirit", content: "Beyond salvation, there is a distinct experience called the baptism of the Holy Spirit. This empowers you for service and witness.", scriptureReferences: ["Acts 1:8", "Acts 2:4", "Acts 19:6"], keyPoints: ["The baptism is distinct from salvation", "It empowers you for witness", "Speaking in tongues is the initial evidence"], memoryVerse: "But ye shall receive power, after that the Holy Ghost is come upon you: and ye shall be witnesses unto me. - Acts 1:8", duration: "30 minutes" },
+          { lessonNumber: 4, title: "Walking In The Spirit", content: "God wants you to walk in the Spirit daily - to be led by Him, to live by His power, and to bear His fruit.", scriptureReferences: ["Galatians 5:16", "Galatians 5:22-23", "Romans 8:14"], keyPoints: ["Be led by the Spirit daily", "Bear the fruit of the Spirit", "Don't fulfill the lusts of the flesh"], memoryVerse: "This I say then, Walk in the Spirit, and ye shall not fulfil the lust of the flesh. - Galatians 5:16", duration: "30 minutes" },
+          { lessonNumber: 5, title: "Gifts of the Spirit", content: "The Holy Spirit distributes spiritual gifts to every believer for the building up of the church and the work of ministry.", scriptureReferences: ["1 Corinthians 12:4-11", "Romans 12:6-8", "Ephesians 4:11-12"], keyPoints: ["Every believer has spiritual gifts", "Gifts are for edifying the church", "Desire spiritual gifts"], memoryVerse: "But the manifestation of the Spirit is given to every man to profit withal. - 1 Corinthians 12:7", duration: "30 minutes" }
+        ],
+        quiz: [
+          { question: "The Holy Spirit is:", options: ["A force or power", "An influence", "A Person - the third Person of the Godhead", "Just God's breath"], correctAnswer: 2, explanation: "The Holy Spirit is a Person with intellect, emotions, and will - the third Person of the Trinity." },
+          { question: "Where does the Holy Spirit live?", options: ["In heaven only", "In the church building", "Inside every believer", "Nowhere specific"], correctAnswer: 2, explanation: "1 Corinthians 6:19 says your body is the temple of the Holy Spirit - He lives in you!" },
+          { question: "What is the purpose of the baptism of the Holy Spirit?", options: ["To save you", "To make you holy", "To give you power to witness", "To take you to heaven"], correctAnswer: 2, explanation: "Acts 1:8 says you receive power to be witnesses after the Holy Spirit comes upon you." }
+        ],
+        assignment: { title: "My Holy Spirit Journal", description: "Keep a journal for one week documenting how you sense the Holy Spirit leading you.", type: "reflection", dueInDays: 7 },
+        passingScore: 70,
+        isActive: true,
+        order: 2
+      },
+      {
+        moduleNumber: 3,
+        title: "Water Baptism",
+        subtitle: "Identifying with Christ's Death and Resurrection",
+        description: "Understand the significance and importance of water baptism.",
+        icon: "Droplets",
+        color: "#3B82F6",
+        duration: "1-2 hours",
+        totalLessons: 4,
+        lessons: [
+          { lessonNumber: 1, title: "What Is Water Baptism?", content: "Water baptism is an outward expression of an inward reality. It is a public declaration of your faith in Christ.", scriptureReferences: ["Matthew 28:19", "Mark 16:16", "Acts 2:38"], keyPoints: ["Baptism is commanded by Jesus", "It is a public declaration", "It follows salvation"], memoryVerse: "Go ye therefore, and teach all nations, baptizing them in the name of the Father, and of the Son, and of the Holy Ghost. - Matthew 28:19", duration: "30 minutes" },
+          { lessonNumber: 2, title: "The Meaning of Baptism", content: "Baptism symbolizes your identification with Christ in His death, burial, and resurrection. Going under the water represents dying with Christ; coming up represents rising with Him.", scriptureReferences: ["Romans 6:3-4", "Colossians 2:12", "Galatians 3:27"], keyPoints: ["Baptism symbolizes death to the old life", "It symbolizes resurrection to new life", "You are identified with Christ"], memoryVerse: "Therefore we are buried with him by baptism into death: that like as Christ was raised up from the dead, even so we also should walk in newness of life. - Romans 6:4", duration: "30 minutes" },
+          { lessonNumber: 3, title: "Examples of Baptism", content: "Throughout the New Testament, we see examples of believers being baptized immediately after believing.", scriptureReferences: ["Acts 8:36-38", "Acts 16:30-33", "Acts 10:47-48"], keyPoints: ["The Ethiopian was baptized immediately", "The Philippian jailer was baptized the same hour", "Cornelius and his household were baptized"], memoryVerse: "And as they went on their way, they came unto a certain water: and the eunuch said, See, here is water; what doth hinder me to be baptized? - Acts 8:36", duration: "30 minutes" },
+          { lessonNumber: 4, title: "Preparing for Your Baptism", content: "If you haven't been baptized since you believed, you should prepare for this important step of obedience.", scriptureReferences: ["Acts 22:16", "1 Peter 3:21"], keyPoints: ["Baptism is an act of obedience", "Prepare your heart", "Share your testimony"], memoryVerse: "And now why tarriest thou? arise, and be baptized, and wash away thy sins, calling on the name of the Lord. - Acts 22:16", duration: "30 minutes" }
+        ],
+        quiz: [
+          { question: "Water baptism is:", options: ["What saves you", "An outward expression of inward faith", "Optional for Christians", "Only for pastors"], correctAnswer: 1, explanation: "Baptism is an outward expression of the inward reality of salvation - it doesn't save you, but demonstrates your faith." },
+          { question: "Going under the water in baptism represents:", options: ["Getting clean", "Dying with Christ", "Swimming", "Nothing specific"], correctAnswer: 1, explanation: "Romans 6:3-4 teaches that baptism represents our identification with Christ's death - we die with Him." }
+        ],
+        assignment: { title: "My Baptism Testimony", description: "If baptized, write your testimony. If not, write why you want to be baptized.", type: "written", dueInDays: 7 },
+        passingScore: 70,
+        isActive: true,
+        order: 3
+      },
+      {
+        moduleNumber: 4,
+        title: "The Word of God",
+        subtitle: "Your Foundation for Life and Victory",
+        description: "Learn the importance of God's Word and how to study it effectively.",
+        icon: "Book",
+        color: "#8B5CF6",
+        duration: "2-3 hours",
+        totalLessons: 5,
+        lessons: [
+          { lessonNumber: 1, title: "What Is The Bible?", content: "The Bible is God's Word - His inspired, infallible, and authoritative revelation to mankind.", scriptureReferences: ["2 Timothy 3:16-17", "2 Peter 1:20-21", "Hebrews 4:12"], keyPoints: ["The Bible is God-breathed", "It is infallible and authoritative", "It is living and powerful"], memoryVerse: "All scripture is given by inspiration of God, and is profitable for doctrine, for reproof, for correction, for instruction in righteousness. - 2 Timothy 3:16", duration: "30 minutes" },
+          { lessonNumber: 2, title: "The Power of God's Word", content: "God's Word has creative and transforming power. It can change your life, heal your body, and transform your circumstances.", scriptureReferences: ["Isaiah 55:11", "Jeremiah 23:29", "Romans 10:17"], keyPoints: ["God's Word accomplishes what it is sent to do", "It is like fire and a hammer", "Faith comes by hearing the Word"], memoryVerse: "So shall my word be that goeth forth out of my mouth: it shall not return unto me void. - Isaiah 55:11", duration: "30 minutes" },
+          { lessonNumber: 3, title: "Studying The Word", content: "To grow as a Christian, you must study God's Word regularly and systematically.", scriptureReferences: ["2 Timothy 2:15", "Joshua 1:8", "Psalm 1:2-3"], keyPoints: ["Study to show yourself approved", "Meditate on the Word day and night", "Be a doer, not just a hearer"], memoryVerse: "Study to shew thyself approved unto God, a workman that needeth not to be ashamed, rightly dividing the word of truth. - 2 Timothy 2:15", duration: "30 minutes" },
+          { lessonNumber: 4, title: "Meditating On The Word", content: "Biblical meditation is different from Eastern meditation. It means to mutter, ponder, and think deeply on God's Word.", scriptureReferences: ["Joshua 1:8", "Psalm 1:2-3", "Psalm 119:97"], keyPoints: ["Meditate day and night", "Mutter the Word to yourself", "This brings success and prosperity"], memoryVerse: "This book of the law shall not depart out of thy mouth; but thou shalt meditate therein day and night. - Joshua 1:8", duration: "30 minutes" },
+          { lessonNumber: 5, title: "Confessing The Word", content: "Confession is saying what God says. Speaking His Word activates your faith and releases His power.", scriptureReferences: ["Romans 10:8-10", "Mark 11:23", "Proverbs 18:21"], keyPoints: ["Confession brings possession", "Your words have power", "Speak what God says"], memoryVerse: "For with the heart man believeth unto righteousness; and with the mouth confession is made unto salvation. - Romans 10:10", duration: "30 minutes" }
+        ],
+        quiz: [
+          { question: "According to 2 Timothy 3:16, the Bible is:", options: ["Man's ideas about God", "Legends and myths", "God-breathed/inspired by God", "Optional reading"], correctAnswer: 2, explanation: "The Bible is 'given by inspiration of God' - literally God-breathed. It is His Word!" },
+          { question: "What does Joshua 1:8 promise to those who meditate on God's Word?", options: ["Nothing specific", "Success and prosperity", "Instant wealth", "Easy life"], correctAnswer: 1, explanation: "Joshua 1:8 promises that meditation on God's Word brings success and prosperity in all you do." }
+        ],
+        assignment: { title: "My Bible Study Plan", description: "Create a personal Bible study plan for the next month.", type: "practical", dueInDays: 7 },
+        passingScore: 70,
+        isActive: true,
+        order: 4
+      },
+      {
+        moduleNumber: 5,
+        title: "Prayer",
+        subtitle: "Communicating with Your Heavenly Father",
+        description: "Learn how to pray effectively and maintain fellowship with God.",
+        icon: "MessageCircle",
+        color: "#EC4899",
+        duration: "2-3 hours",
+        totalLessons: 5,
+        lessons: [
+          { lessonNumber: 1, title: "What Is Prayer?", content: "Prayer is communication with God. It is talking to your Heavenly Father and listening to Him.", scriptureReferences: ["Matthew 6:9-13", "Philippians 4:6-7", "1 Thessalonians 5:17"], keyPoints: ["Prayer is talking to God", "God hears your prayers", "You can pray about everything"], memoryVerse: "Be careful for nothing; but in every thing by prayer and supplication with thanksgiving let your requests be made known unto God. - Philippians 4:6", duration: "30 minutes" },
+          { lessonNumber: 2, title: "Praying In Jesus' Name", content: "Jesus gave us the authority to use His Name in prayer. When we pray in His Name, it's as if He is making the request.", scriptureReferences: ["John 14:13-14", "John 16:23-24", "Colossians 3:17"], keyPoints: ["Pray in Jesus' Name", "Jesus gave you authority to use His Name", "The Father answers prayers in Jesus' Name"], memoryVerse: "And whatsoever ye shall ask in my name, that will I do, that the Father may be glorified in the Son. - John 14:13", duration: "30 minutes" },
+          { lessonNumber: 3, title: "Praying In The Spirit", content: "Praying in the Spirit (in tongues) is a powerful way to pray. It bypasses your natural understanding and prays perfect prayers.", scriptureReferences: ["1 Corinthians 14:14-15", "Romans 8:26-27", "Jude 1:20"], keyPoints: ["Praying in tongues edifies you", "The Spirit helps your weaknesses", "Build yourself up in faith"], memoryVerse: "But ye, beloved, building up yourselves on your most holy faith, praying in the Holy Ghost. - Jude 1:20", duration: "30 minutes" },
+          { lessonNumber: 4, title: "Types of Prayer", content: "The Bible describes different types of prayer: thanksgiving, petition, intercession, supplication, and more.", scriptureReferences: ["1 Timothy 2:1-2", "Ephesians 6:18", "James 5:16"], keyPoints: ["Pray with thanksgiving", "Make petitions and supplications", "Intercede for others"], memoryVerse: "I exhort therefore, that, first of all, supplications, prayers, intercessions, and giving of thanks, be made for all men. - 1 Timothy 2:1", duration: "30 minutes" },
+          { lessonNumber: 5, title: "Developing A Prayer Life", content: "A consistent prayer life requires discipline and desire. Set aside time daily to commune with God.", scriptureReferences: ["Mark 1:35", "Luke 18:1", "Daniel 6:10"], keyPoints: ["Jesus prayed early in the morning", "Pray without ceasing", "Develop a consistent prayer schedule"], memoryVerse: "And in the morning, rising up a great while before day, he went out, and departed into a solitary place, and there prayed. - Mark 1:35", duration: "30 minutes" }
+        ],
+        quiz: [
+          { question: "What is prayer?", options: ["A religious ritual", "Communication with God", "Reciting memorized words", "Only for emergencies"], correctAnswer: 1, explanation: "Prayer is simply talking to God and listening to Him - it's communication with your Heavenly Father." },
+          { question: "Why do we pray in Jesus' Name?", options: ["It's just tradition", "Jesus gave us authority to use His Name", "It sounds nice", "We don't need to"], correctAnswer: 1, explanation: "John 14:13-14 shows that Jesus gave us authority to use His Name, and the Father answers prayers made in Jesus' Name." }
+        ],
+        assignment: { title: "My Prayer Journal", description: "Keep a prayer journal for one week, recording your prayers and God's answers.", type: "reflection", dueInDays: 7 },
+        passingScore: 70,
+        isActive: true,
+        order: 5
+      },
+      {
+        moduleNumber: 6,
+        title: "Christian Doctrines",
+        subtitle: "Foundations of Faith",
+        description: "Learn the fundamental doctrines of the Christian faith.",
+        icon: "Scroll",
+        color: "#6366F1",
+        duration: "3-4 hours",
+        totalLessons: 5,
+        lessons: [
+          { lessonNumber: 1, title: "The Doctrine of God", content: "There is one God who exists eternally in three Persons: Father, Son, and Holy Spirit.", scriptureReferences: ["Deuteronomy 6:4", "Matthew 28:19", "2 Corinthians 13:14"], keyPoints: ["There is one God", "God exists in three Persons", "The Trinity is a mystery but true"], memoryVerse: "Hear, O Israel: The LORD our God is one LORD. - Deuteronomy 6:4", duration: "40 minutes" },
+          { lessonNumber: 2, title: "The Doctrine of Christ", content: "Jesus Christ is the Son of God, fully God and fully man. He died for our sins and rose again.", scriptureReferences: ["John 1:1-14", "Colossians 2:9", "1 Corinthians 15:3-4"], keyPoints: ["Jesus is fully God", "Jesus is fully man", "He died and rose again for us"], memoryVerse: "For in him dwelleth all the fulness of the Godhead bodily. - Colossians 2:9", duration: "40 minutes" },
+          { lessonNumber: 3, title: "The Doctrine of Salvation", content: "Salvation is by grace through faith in Jesus Christ. It is a gift, not earned by works.", scriptureReferences: ["Ephesians 2:8-9", "Romans 10:9-10", "Titus 3:5"], keyPoints: ["Salvation is by grace", "Through faith in Jesus", "Not of works"], memoryVerse: "For by grace are ye saved through faith; and that not of yourselves: it is the gift of God. - Ephesians 2:8", duration: "40 minutes" },
+          { lessonNumber: 4, title: "The Doctrine of The Church", content: "The Church is the Body of Christ, composed of all believers. It is both universal and local.", scriptureReferences: ["Ephesians 1:22-23", "1 Corinthians 12:27", "Hebrews 10:25"], keyPoints: ["The Church is Christ's Body", "All believers are members", "Gather together regularly"], memoryVerse: "And hath put all things under his feet, and gave him to be the head over all things to the church, which is his body. - Ephesians 1:22-23", duration: "40 minutes" },
+          { lessonNumber: 5, title: "The Doctrine of Last Things", content: "Jesus is coming again! The dead in Christ will rise, and we will be caught up to meet Him.", scriptureReferences: ["1 Thessalonians 4:16-17", "John 14:1-3", "Revelation 21:1-4"], keyPoints: ["Jesus is coming again", "The dead will rise", "We will live with Him forever"], memoryVerse: "For the Lord himself shall descend from heaven with a shout... and the dead in Christ shall rise first. - 1 Thessalonians 4:16", duration: "40 minutes" }
+        ],
+        quiz: [
+          { question: "How many Persons exist in the Godhead?", options: ["One", "Two", "Three", "Many"], correctAnswer: 2, explanation: "The Bible teaches that God exists eternally in three Persons: Father, Son, and Holy Spirit - this is called the Trinity." },
+          { question: "According to Ephesians 2:8-9, salvation is:", options: ["Earned by good works", "Given to good people", "By grace through faith", "For religious people only"], correctAnswer: 2, explanation: "Salvation is by grace through faith - it is a gift from God, not earned by works." }
+        ],
+        assignment: { title: "Doctrine Summary", description: "Summarize each doctrine in your own words with scripture references.", type: "written", dueInDays: 7 },
+        passingScore: 70,
+        isActive: true,
+        order: 6
+      },
+      {
+        moduleNumber: 7,
+        title: "Christian Living",
+        subtitle: "Walking in Victory Every Day",
+        description: "Practical principles for living the Christian life victoriously.",
+        icon: "Heart",
+        color: "#EF4444",
+        duration: "2-3 hours",
+        totalLessons: 5,
+        lessons: [
+          { lessonNumber: 1, title: "Living By Faith", content: "The righteous live by faith. Faith is trusting God and His Word regardless of circumstances.", scriptureReferences: ["Romans 1:17", "Hebrews 11:6", "2 Corinthians 5:7"], keyPoints: ["Live by faith, not by sight", "Without faith, you cannot please God", "Faith comes by hearing God's Word"], memoryVerse: "For therein is the righteousness of God revealed from faith to faith: as it is written, The just shall live by faith. - Romans 1:17", duration: "30 minutes" },
+          { lessonNumber: 2, title: "Overcoming Temptation", content: "God provides a way of escape from every temptation. You can overcome through the Word and the Spirit.", scriptureReferences: ["1 Corinthians 10:13", "James 4:7", "Ephesians 6:11-17"], keyPoints: ["God provides a way out", "Resist the devil and he will flee", "Use the armor of God"], memoryVerse: "There hath no temptation taken you but such as is common to man: but God is faithful. - 1 Corinthians 10:13", duration: "30 minutes" },
+          { lessonNumber: 3, title: "Fellowship With Believers", content: "God did not design you to live the Christian life alone. You need fellowship with other believers.", scriptureReferences: ["Hebrews 10:25", "Acts 2:42-47", "Proverbs 27:17"], keyPoints: ["Don't forsake assembling together", "The early church met regularly", "Iron sharpens iron"], memoryVerse: "Not forsaking the assembling of ourselves together, as the manner of some is. - Hebrews 10:25", duration: "30 minutes" },
+          { lessonNumber: 4, title: "Witnessing For Christ", content: "You are called to be a witness for Jesus Christ. Share your faith with others!", scriptureReferences: ["Acts 1:8", "Mark 16:15", "Matthew 28:19-20"], keyPoints: ["You are a witness", "Go into all the world", "Make disciples"], memoryVerse: "Go ye into all the world, and preach the gospel to every creature. - Mark 16:15", duration: "30 minutes" },
+          { lessonNumber: 5, title: "Giving And Stewardship", content: "Everything you have belongs to God. Be a faithful steward of your time, talents, and treasures.", scriptureReferences: ["Malachi 3:10", "2 Corinthians 9:6-7", "Luke 6:38"], keyPoints: ["Bring tithes to God's house", "Give cheerfully", "Give and it shall be given to you"], memoryVerse: "Bring ye all the tithes into the storehouse, that there may be meat in mine house. - Malachi 3:10", duration: "30 minutes" }
+        ],
+        quiz: [
+          { question: "According to Romans 1:17, how should the righteous live?", options: ["By their feelings", "By circumstances", "By faith", "By their own strength"], correctAnswer: 2, explanation: "The Bible says 'the just shall live by faith' - we walk by faith, not by sight." },
+          { question: "Why is fellowship with other believers important?", options: ["It's not important", "God designed us for community", "Only pastors need it", "It's optional"], correctAnswer: 1, explanation: "Hebrews 10:25 commands us not to forsake assembling together - God designed us for fellowship." }
+        ],
+        assignment: { title: "My Witness Plan", description: "Write a plan for sharing your faith with 3 people this month.", type: "practical", dueInDays: 14 },
+        passingScore: 70,
+        isActive: true,
+        order: 7
+      }
+    ];
+
+    // Clear existing modules and insert new ones
+    await FoundationModule.deleteMany({});
+    const inserted = await FoundationModule.insertMany(modules);
+
+    console.log(`✅ Foundation School seeded: ${inserted.length} modules`);
+
+    res.json({
+      ok: true,
+      message: `Successfully seeded ${inserted.length} Foundation School modules`,
+      modules: inserted.map(m => ({ moduleNumber: m.moduleNumber, title: m.title, lessons: m.lessons?.length || 0 }))
+    });
+  } catch (err) {
+    console.error('Run seed error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
