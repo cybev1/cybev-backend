@@ -225,14 +225,39 @@ SoulSchema.index({ salvationDate: -1 });
 // ==========================================
 // FOUNDATION SCHOOL MODULE SCHEMA
 // Course structure for new believers
+// Updated: Supports March 2025 Manual structure
 // ==========================================
 const FoundationModuleSchema = new Schema({
   // Basic Info
   title: { type: String, required: true },
+  subtitle: String,
   description: String,
-  moduleNumber: { type: Number, required: true },
+  moduleNumber: { type: Number, required: true, unique: true },
   
-  // Content
+  // UI/Display
+  icon: { type: String, default: 'BookOpen' },
+  color: { type: String, default: '#8B5CF6' },
+  totalLessons: { type: Number, default: 0 },
+  
+  // Lessons (direct array - March 2025 structure)
+  lessons: [{
+    lessonNumber: Number,
+    title: String,
+    content: String,
+    scriptureReferences: [String],
+    keyPoints: [String],
+    memoryVerse: String,
+    duration: String,
+    videoUrl: String,
+    audioUrl: String,
+    resources: [{
+      title: String,
+      type: { type: String, enum: ['pdf', 'video', 'audio', 'link'] },
+      url: String
+    }]
+  }],
+  
+  // Legacy content structure (backward compatibility)
   content: {
     introduction: String,
     lessons: [{
@@ -240,7 +265,7 @@ const FoundationModuleSchema = new Schema({
       content: String,
       videoUrl: String,
       audioUrl: String,
-      duration: Number, // minutes
+      duration: Number,
       resources: [{
         title: String,
         type: { type: String, enum: ['pdf', 'video', 'audio', 'link'] },
@@ -260,13 +285,20 @@ const FoundationModuleSchema = new Schema({
   }],
   passingScore: { type: Number, default: 70 },
   
+  // Assignment
+  assignment: {
+    title: String,
+    description: String,
+    type: { type: String, enum: ['written', 'practical', 'reflection'] },
+    dueInDays: Number
+  },
+  
   // Metadata
-  duration: { type: Number, default: 7 }, // days to complete
+  duration: String, // "2-3 hours" or legacy Number for days
   isRequired: { type: Boolean, default: true },
   order: { type: Number, default: 0 },
-  isActive: { type: Boolean, default: true },
-  createdAt: { type: Date, default: Date.now }
-});
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
 
 // ==========================================
 // FOUNDATION SCHOOL ENROLLMENT SCHEMA
