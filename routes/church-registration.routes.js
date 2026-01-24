@@ -256,7 +256,7 @@ router.post('/:slug', async (req, res) => {
       joinedHow: 'online',
       notes,
       tags: ['online_registration'],
-      status: org.settings?.requireApproval ? 'pending' : 'active',
+      status: 'active', // Always active - approval handled separately if needed
       addedBy: null, // Self-registered
       createdAt: new Date(),
       updatedAt: new Date()
@@ -271,9 +271,7 @@ router.post('/:slug', async (req, res) => {
     // Response
     res.status(201).json({
       ok: true,
-      message: org.settings?.requireApproval 
-        ? 'Registration submitted! Awaiting approval from the organization.'
-        : 'Welcome! You have been successfully registered.',
+      message: 'Welcome! You have been successfully registered to ' + org.name,
       member: {
         _id: addedMember._id,
         firstName: addedMember.firstName,
