@@ -20,9 +20,7 @@ const {
 } = require('../models/church.model');
 
 // Middleware
-// NOTE: backend uses middleware/auth.js which exports authenticateToken
-const { authenticateToken } = require('../middleware/auth');
-const verifyToken = authenticateToken;
+const { verifyToken } = require('../middleware/auth');
 
 // ==========================================
 // PUBLIC ROUTES (No Auth Required)
@@ -108,23 +106,12 @@ router.get('/batches', async (req, res) => {
 router.post('/enroll', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    let { organizationId, batchId } = req.body || {};
-
-    // Convenience: if batchId not provided, try auto-pick an active batch
-    if (!batchId) {
-      const query = { status: { $in: ['registration_open', 'in_progress'] } };
-      if (organizationId) query.organization = organizationId;
-      const activeBatch = await FSBatch.findOne(query).sort({ startDate: -1 });
-      if (activeBatch) {
-        batchId = activeBatch._id;
-        organizationId = organizationId || activeBatch.organization;
-      }
-    }
+    const { organizationId, batchId } = req.body;
 
     // Check if already enrolled
     const existingEnrollment = await FoundationEnrollment.findOne({
       student: userId,
-      ...(batchId ? { batch: batchId } : {}),
+      batch: batchId,
       status: { $ne: 'withdrawn' }
     });
 
@@ -503,190 +490,6 @@ router.get('/stats', async (req, res) => {
     });
   } catch (err) {
     console.error('Stats error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// ==========================================
-// CERTIFICATE (Teacher/Principal Issuance)
-// ==========================================
-
-async function loadCertificateTemplate() {
-  const path = require('path');
-  const fs = require('fs');
-
-  const explicit = process.env.FS_CERT_TEMPLATE_PATH;
-  const local = explicit
-    ? path.resolve(explicit)
-    : path.resolve(__dirname, '..', 'assets', 'foundation-school-certificate.jpeg');
-
-  if (fs.existsSync(local)) return local;
-  return null;
-}
-
-async function generateCertificateJpegBuffer({ studentName, issueDate, churchName, locationName }) {
-  const Jimp = require('jimp');
-  const templatePath = await loadCertificateTemplate();
-  if (!templatePath) {
-    throw new Error('Certificate template missing. Place file at assets/foundation-school-certificate.jpeg or set FS_CERT_TEMPLATE_PATH');
-  }
-
-  const img = await Jimp.read(templatePath);
-  const w = img.bitmap.width;
-  const h = img.bitmap.height;
-
-  // Fonts
-  const fontName = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-  const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
-
-  // Helper: centered print
-  const printCentered = (font, text, y, maxWidth) => {
-    const width = maxWidth || Math.floor(w * 0.86);
-    const x = Math.floor((w - width) / 2);
-    img.print(font, x, y, {
-      text,
-      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-      alignmentY: Jimp.VERTICAL_ALIGN_MIDDLE
-    }, width, 80);
-  };
-
-  // Coordinates tuned for the provided template
-  printCentered(fontName, studentName || 'Student Name', Math.floor(h * 0.38));
-
-  // Date line
-  const dateStr = issueDate
-    ? new Date(issueDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-    : new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
-  printCentered(fontSmall, `Issued: ${dateStr}`, Math.floor(h * 0.58), Math.floor(w * 0.6));
-
-  // Location / church
-  const footer = [churchName, locationName].filter(Boolean).join(' • ');
-  if (footer) {
-    printCentered(fontSmall, footer, Math.floor(h * 0.63), Math.floor(w * 0.75));
-  }
-
-  return await img.quality(90).getBufferAsync(Jimp.MIME_JPEG);
-}
-
-/**
- * POST /api/church/foundation/admin/issue-certificate/:enrollmentId
- * Teacher/Principal issues certificate (and stores certificate meta)
- */
-router.post('/admin/issue-certificate/:enrollmentId', verifyToken, async (req, res) => {
-  try {
-    const issuerId = req.user.id || req.user._id;
-    const { enrollmentId } = req.params;
-    const { issueDate, churchName, locationName } = req.body || {};
-
-    const enrollment = await FoundationEnrollment.findById(enrollmentId)
-      .populate('student', 'name username email')
-      .populate('organization', 'name slug')
-      .populate('batch', 'name batchNumber graduationDate principal teachers');
-
-    if (!enrollment) return res.status(404).json({ ok: false, error: 'Enrollment not found' });
-    if (!['completed', 'graduated'].includes(enrollment.status)) {
-      return res.status(400).json({ ok: false, error: 'Student must complete all modules first' });
-    }
-
-    // Basic authorization: principal/teacher of batch OR org leader/admin
-    const { ChurchOrg } = require('../models/church.model');
-    const org = enrollment.organization ? await ChurchOrg.findById(enrollment.organization._id) : null;
-    const issuerStr = issuerId.toString();
-    const isBatchTeacher = enrollment.batch && (
-      enrollment.batch.principal?.toString() === issuerStr ||
-      (enrollment.batch.teachers || []).some(t => t.toString() === issuerStr)
-    );
-    const isOrgAdmin = org && (
-      org.leader?.toString() === issuerStr ||
-      (org.admins || []).some(a => a.toString() === issuerStr) ||
-      (org.assistantLeaders || []).some(a => a.toString() === issuerStr)
-    );
-    if (!isBatchTeacher && !isOrgAdmin) {
-      return res.status(403).json({ ok: false, error: 'Not authorized to issue certificates for this organization/batch' });
-    }
-
-    if (!enrollment.certificateNumber) {
-      enrollment.certificateNumber = `CYBEV-FS-${Date.now().toString(36).toUpperCase()}`;
-    }
-
-    enrollment.status = 'graduated';
-    enrollment.graduatedAt = enrollment.graduatedAt || new Date(issueDate || Date.now());
-    enrollment.certificateIssuedBy = issuerId;
-    enrollment.certificateIssuedAt = new Date(issueDate || Date.now());
-
-    // We generate on-demand via image endpoint; store meta only
-    await enrollment.save();
-
-    res.json({
-      ok: true,
-      message: 'Certificate issued. Use the certificate image endpoint to download/preview.',
-      enrollmentId: enrollment._id,
-      certificateNumber: enrollment.certificateNumber,
-      certificateImageUrl: `/api/church/foundation/certificates/${enrollment._id}/image`
-    });
-  } catch (err) {
-    console.error('Issue certificate error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-/**
- * GET /api/church/foundation/certificates/:enrollmentId/image
- * Streams the generated certificate image with student's name.
- */
-router.get('/certificates/:enrollmentId/image', async (req, res) => {
-  try {
-    // Allow auth via Bearer header OR ?token= (useful for opening in a new tab)
-    const jwt = require('jsonwebtoken');
-    const bearer = req.headers.authorization?.replace('Bearer ', '');
-    const qtok = (req.query.token || '').toString();
-    const token = bearer || qtok;
-    if (!token) return res.status(401).json({ ok: false, error: 'No token provided' });
-
-    let decoded;
-    try {
-      decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
-    } catch {
-      return res.status(401).json({ ok: false, error: 'Invalid token' });
-    }
-
-    const userId = decoded.userId || decoded.id || decoded._id;
-    const { enrollmentId } = req.params;
-    const enrollment = await FoundationEnrollment.findById(enrollmentId)
-      .populate('student', 'name username')
-      .populate('organization', 'name')
-      .populate('batch', 'name');
-
-    if (!enrollment) return res.status(404).json({ ok: false, error: 'Enrollment not found' });
-
-    // Student can view own certificate. Teachers/admins can view too.
-    const viewerStr = userId.toString();
-    const isStudent = enrollment.student && enrollment.student._id.toString() === viewerStr;
-    if (!isStudent) {
-      const { ChurchOrg } = require('../models/church.model');
-      const org = enrollment.organization ? await ChurchOrg.findById(enrollment.organization._id) : null;
-      const isOrgAdmin = org && (
-        org.leader?.toString() === viewerStr ||
-        (org.admins || []).some(a => a.toString() === viewerStr) ||
-        (org.assistantLeaders || []).some(a => a.toString() === viewerStr)
-      );
-      if (!isOrgAdmin) {
-        return res.status(403).json({ ok: false, error: 'Not authorized' });
-      }
-    }
-
-    const buffer = await generateCertificateJpegBuffer({
-      studentName: enrollment.student?.name || enrollment.student?.username || 'Student',
-      issueDate: enrollment.certificateIssuedAt || enrollment.graduatedAt || enrollment.completedAt || new Date(),
-      churchName: enrollment.organization?.name,
-      locationName: process.env.FS_CERT_LOCATION_NAME
-    });
-
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Content-Disposition', `inline; filename="foundation-school-certificate-${enrollment.certificateNumber || enrollment._id}.jpg"`);
-    res.end(buffer);
-  } catch (err) {
-    console.error('Certificate image error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
