@@ -2,11 +2,11 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.0.0 - Premium Email Marketing Platform
+// VERSION: 7.0.1 - Admin Analytics Routes Fix
 // PREVIOUS: 6.9.2 - AI Image Generation Route
 // ROLLBACK: If issues, revert to VERSION 6.9.2
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-19
+// UPDATED: 2026-01-24
 // ============================================
 
 const express = require('express');
@@ -270,6 +270,8 @@ const routes = [
   ['admin-charts', '/api/admin/charts', './routes/admin-charts.routes'],
   ['admin-summary', '/api/admin', './routes/admin-summary.routes'],
   ['admin-insight', '/api/admin', './routes/admin-insight.routes'],
+  ['admin-analytics', '/api/admin-analytics', './routes/admin-analytics.routes'],
+  ['admin', '/api/admin', './routes/admin.routes'],
   ['moderation', '/api/moderation', './routes/moderation.routes'],
   
   // Church
