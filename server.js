@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.0.1 - Admin Analytics Routes Fix
+// VERSION: 7.1.0 - Member Management Routes - Admin Analytics Routes Fix
 // PREVIOUS: 6.9.2 - AI Image Generation Route
 // ROLLBACK: If issues, revert to VERSION 6.9.2
 // GITHUB: https://github.com/cybev1/cybev-backend
@@ -279,6 +279,7 @@ const routes = [
   ['foundation-school', '/api/church/foundation', './routes/foundation-school.routes'],
   ['bible', '/api/church/bible', './routes/bible.routes'],
   ['church', '/api/church', './routes/church.routes'],
+  ['member-management', '/api/church/members', './routes/member-management.routes'],
   ['prayer', '/api/church/prayers', './routes/prayer.routes'],
   ['giving', '/api/church/giving', './routes/giving.routes'],
   ['cell-reports', '/api/church/cell-reports', './routes/cell-reports.routes'],
