@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.7.0 - Combined Feed + Followers in Stats
+// VERSION: 7.8.0 - Creator Studio Followers Fix
 // PREVIOUS: 7.3.0 - Church Registration Links
 // FIXES:
 //   - /api/users/me returns full stats
@@ -493,7 +493,6 @@ app.get('/api/users/username/:username', async (req, res) => {
 app.get('/api/blogs/my', authMiddleware, async (req, res) => {
   try {
     const Blog = getModel('Blog');
-    const User = getModel('User') || mongoose.models.User;
     
     if (!Blog) {
       return res.json({ ok: true, blogs: [], posts: [], count: 0, stats: { total: 0, published: 0, draft: 0, totalViews: 0, followers: 0 } });
@@ -506,23 +505,19 @@ app.get('/api/blogs/my', authMiddleware, async (req, res) => {
       $or: [{ author: userId }, { user: userId }, { userId: userId }] 
     }).sort({ updatedAt: -1 }).lean();
     
-    // Get followers count from User model
-    let followersCount = 0;
-    if (User) {
-      const user = await User.findById(userId).select('followers followersCount').lean();
-      if (user) {
-        followersCount = user.followersCount || user.followers?.length || 0;
-      }
-    }
+    // Get full stats including followers (same as profile)
+    const userStats = await getUserStats(userId);
     
-    // Calculate stats
+    // Calculate blog-specific stats
     const stats = {
       total: blogs.length,
       published: blogs.filter(b => b.status === 'published' || b.isPublished).length,
       draft: blogs.filter(b => b.status !== 'published' && !b.isPublished).length,
       totalViews: blogs.reduce((sum, b) => sum + (b.views || 0), 0),
-      followers: followersCount,
-      followersCount: followersCount
+      followers: userStats.followersCount,
+      followersCount: userStats.followersCount,
+      following: userStats.followingCount,
+      followingCount: userStats.followingCount
     };
     
     res.json({ 
@@ -532,7 +527,8 @@ app.get('/api/blogs/my', authMiddleware, async (req, res) => {
       count: blogs.length,
       total: blogs.length,
       stats,
-      followersCount
+      followersCount: userStats.followersCount,
+      followingCount: userStats.followingCount
     });
   } catch (err) {
     console.error('❌ /api/blogs/my error:', err.message);
@@ -568,7 +564,6 @@ app.get('/api/blogs/stats', authMiddleware, async (req, res) => {
 // GET /api/sites/my - User's sites with stats (BEFORE sites.routes.js)
 app.get('/api/sites/my', authMiddleware, async (req, res) => {
   try {
-    const User = getModel('User') || mongoose.models.User;
     const userId = req.user.userId || req.user.id || req.user._id;
     console.log(`🌐 Fetching sites for user: ${userId}`);
     
@@ -590,23 +585,19 @@ app.get('/api/sites/my', authMiddleware, async (req, res) => {
       }
     }
     
-    // Get followers count from User model
-    let followersCount = 0;
-    if (User) {
-      const user = await User.findById(userId).select('followers followersCount').lean();
-      if (user) {
-        followersCount = user.followersCount || user.followers?.length || 0;
-      }
-    }
+    // Get full stats including followers (same as profile)
+    const userStats = await getUserStats(userId);
     
-    // Calculate stats
+    // Calculate site-specific stats
     const stats = {
       total: sites.length,
       published: sites.filter(s => s.status === 'published').length,
       draft: sites.filter(s => s.status !== 'published').length,
       totalViews: sites.reduce((sum, s) => sum + (s.views || 0), 0),
-      followers: followersCount,
-      followersCount: followersCount
+      followers: userStats.followersCount,
+      followersCount: userStats.followersCount,
+      following: userStats.followingCount,
+      followingCount: userStats.followingCount
     };
     
     res.json({ 
@@ -616,7 +607,8 @@ app.get('/api/sites/my', authMiddleware, async (req, res) => {
       count: sites.length,
       total: sites.length,
       stats,
-      followersCount
+      followersCount: userStats.followersCount,
+      followingCount: userStats.followingCount
     });
   } catch (err) {
     console.error('❌ /api/sites/my error:', err.message);
@@ -1390,7 +1382,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '7.7.0',
+    version: '7.8.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -1422,11 +1414,11 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v7.6.0 - Pagination + Excerpts + Creator Studio',
+    message: 'CYBEV API v7.8.0 - Creator Studio Followers Fix',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
     features: [
-      'feed-pagination', 'posts-excerpts', 'creator-studio-stats',
+      'creator-studio-followers', 'feed-pagination', 'posts-excerpts',
       'feed', 'posts', 'followers', 'vlogs',
       'meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 
       'church', 'church-registration', 'forms', 'email-platform', 'automation'
@@ -1492,23 +1484,21 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.7.0
-  Combined Feed + Followers in Stats
+  CYBEV API Server v7.8.0
+  Creator Studio Followers Fix
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.7.0 Fixes:
-  ✅ Feed combines Posts + Blogs (not OR)
-  ✅ /api/blogs/my includes followersCount
-  ✅ /api/sites/my includes followersCount
-  ✅ /api/users/me/followers endpoint
-  ✅ hasMore pagination working
+  v7.8.0 Fixes:
+  ✅ Creator Studio uses getUserStats() for followers
+  ✅ /api/blogs/my returns correct followersCount
+  ✅ /api/sites/my returns correct followersCount
   
-  v7.6.0 Fixes:
-  ✅ Feed pagination (hasMore, nextPage)
-  ✅ Posts excerpts (stripped HTML)
+  v7.7.0 Fixes:
+  ✅ Feed combines Posts + Blogs (62 items)
+  ✅ hasMore pagination working
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
