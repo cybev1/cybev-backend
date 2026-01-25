@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.6.0 - Pagination, Excerpts, Creator Studio Stats
+// VERSION: 7.7.0 - Combined Feed + Followers in Stats
 // PREVIOUS: 7.3.0 - Church Registration Links
 // FIXES:
 //   - /api/users/me returns full stats
@@ -418,6 +418,60 @@ app.get('/api/users/me/stats', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/users/me/followers - Followers count for Creator Studio
+app.get('/api/users/me/followers', authMiddleware, async (req, res) => {
+  try {
+    const User = getModel('User') || mongoose.models.User;
+    const userId = req.user.userId || req.user.id || req.user._id;
+    
+    let followersCount = 0;
+    let followers = [];
+    
+    if (User) {
+      const user = await User.findById(userId)
+        .select('followers followersCount')
+        .populate('followers', 'name username avatar')
+        .lean();
+      
+      if (user) {
+        followersCount = user.followersCount || user.followers?.length || 0;
+        followers = user.followers || [];
+      }
+    }
+    
+    res.json({ ok: true, followersCount, followers, count: followersCount });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, followersCount: 0, followers: [] });
+  }
+});
+
+// GET /api/users/me/following - Following count
+app.get('/api/users/me/following', authMiddleware, async (req, res) => {
+  try {
+    const User = getModel('User') || mongoose.models.User;
+    const userId = req.user.userId || req.user.id || req.user._id;
+    
+    let followingCount = 0;
+    let following = [];
+    
+    if (User) {
+      const user = await User.findById(userId)
+        .select('following followingCount')
+        .populate('following', 'name username avatar')
+        .lean();
+      
+      if (user) {
+        followingCount = user.followingCount || user.following?.length || 0;
+        following = user.following || [];
+      }
+    }
+    
+    res.json({ ok: true, followingCount, following, count: followingCount });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, followingCount: 0, following: [] });
+  }
+});
+
 // GET /api/users/username/:username - User by username with stats
 app.get('/api/users/username/:username', async (req, res) => {
   try {
@@ -439,8 +493,10 @@ app.get('/api/users/username/:username', async (req, res) => {
 app.get('/api/blogs/my', authMiddleware, async (req, res) => {
   try {
     const Blog = getModel('Blog');
+    const User = getModel('User') || mongoose.models.User;
+    
     if (!Blog) {
-      return res.json({ ok: true, blogs: [], posts: [], count: 0, stats: { total: 0, published: 0, draft: 0, totalViews: 0 } });
+      return res.json({ ok: true, blogs: [], posts: [], count: 0, stats: { total: 0, published: 0, draft: 0, totalViews: 0, followers: 0 } });
     }
     
     const userId = req.user.userId || req.user.id || req.user._id;
@@ -450,21 +506,33 @@ app.get('/api/blogs/my', authMiddleware, async (req, res) => {
       $or: [{ author: userId }, { user: userId }, { userId: userId }] 
     }).sort({ updatedAt: -1 }).lean();
     
+    // Get followers count from User model
+    let followersCount = 0;
+    if (User) {
+      const user = await User.findById(userId).select('followers followersCount').lean();
+      if (user) {
+        followersCount = user.followersCount || user.followers?.length || 0;
+      }
+    }
+    
     // Calculate stats
     const stats = {
       total: blogs.length,
       published: blogs.filter(b => b.status === 'published' || b.isPublished).length,
       draft: blogs.filter(b => b.status !== 'published' && !b.isPublished).length,
-      totalViews: blogs.reduce((sum, b) => sum + (b.views || 0), 0)
+      totalViews: blogs.reduce((sum, b) => sum + (b.views || 0), 0),
+      followers: followersCount,
+      followersCount: followersCount
     };
     
     res.json({ 
       ok: true, 
-      blogs, 
-      posts: blogs, // Alias
+      blogs: addExcerpts(blogs), 
+      posts: addExcerpts(blogs), // Alias
       count: blogs.length,
       total: blogs.length,
-      stats 
+      stats,
+      followersCount
     });
   } catch (err) {
     console.error('❌ /api/blogs/my error:', err.message);
@@ -500,6 +568,7 @@ app.get('/api/blogs/stats', authMiddleware, async (req, res) => {
 // GET /api/sites/my - User's sites with stats (BEFORE sites.routes.js)
 app.get('/api/sites/my', authMiddleware, async (req, res) => {
   try {
+    const User = getModel('User') || mongoose.models.User;
     const userId = req.user.userId || req.user.id || req.user._id;
     console.log(`🌐 Fetching sites for user: ${userId}`);
     
@@ -521,12 +590,23 @@ app.get('/api/sites/my', authMiddleware, async (req, res) => {
       }
     }
     
+    // Get followers count from User model
+    let followersCount = 0;
+    if (User) {
+      const user = await User.findById(userId).select('followers followersCount').lean();
+      if (user) {
+        followersCount = user.followersCount || user.followers?.length || 0;
+      }
+    }
+    
     // Calculate stats
     const stats = {
       total: sites.length,
       published: sites.filter(s => s.status === 'published').length,
       draft: sites.filter(s => s.status !== 'published').length,
-      totalViews: sites.reduce((sum, s) => sum + (s.views || 0), 0)
+      totalViews: sites.reduce((sum, s) => sum + (s.views || 0), 0),
+      followers: followersCount,
+      followersCount: followersCount
     };
     
     res.json({ 
@@ -535,7 +615,8 @@ app.get('/api/sites/my', authMiddleware, async (req, res) => {
       websites: sites, // Alias
       count: sites.length,
       total: sites.length,
-      stats 
+      stats,
+      followersCount
     });
   } catch (err) {
     console.error('❌ /api/sites/my error:', err.message);
@@ -834,6 +915,7 @@ app.get('/api/posts/feed', authMiddleware, async (req, res) => {
 });
 
 // GET /api/feed - Alternative feed endpoint (PUBLIC - no auth required)
+// COMBINES both Posts AND Blogs into one feed
 app.get('/api/feed', async (req, res) => {
   try {
     const Post = getModel('Post');
@@ -844,22 +926,22 @@ app.get('/api/feed', async (req, res) => {
     const limitNum = parseInt(limit);
     const skipNum = parseInt(skip) || ((pageNum - 1) * limitNum);
     
-    let posts = [];
-    let total = 0;
+    let allItems = [];
+    let totalPosts = 0;
+    let totalBlogs = 0;
     
-    // Try Post model first
+    // Get posts
     if (Post) {
-      total = await Post.countDocuments({ 
+      totalPosts = await Post.countDocuments({ 
         $or: [
           { status: 'published' },
           { status: { $exists: false } },
           { isPublished: true }
         ]
       });
-      console.log(`📰 Feed: Found ${total} total posts in Post collection`);
       
-      if (total > 0) {
-        posts = await Post.find({ 
+      if (totalPosts > 0) {
+        const posts = await Post.find({ 
           $or: [
             { status: 'published' },
             { status: { $exists: false } },
@@ -867,46 +949,55 @@ app.get('/api/feed', async (req, res) => {
           ]
         })
           .sort({ createdAt: -1 })
-          .skip(skipNum)
-          .limit(limitNum)
           .populate('author', 'name username avatar')
           .lean();
+        
+        allItems = posts.map(p => ({ ...p, type: 'post', sortDate: new Date(p.createdAt) }));
       }
     }
     
-    // If no posts, fall back to blogs
-    if (posts.length === 0 && Blog) {
-      total = await Blog.countDocuments({ 
+    // ALSO get blogs and add them to the feed
+    if (Blog) {
+      totalBlogs = await Blog.countDocuments({ 
         $or: [
           { status: 'published' }, 
           { isPublished: true },
           { status: { $exists: false } }
         ]
       });
-      console.log(`📰 Feed: Found ${total} total blogs, using as feed`);
       
-      posts = await Blog.find({ 
-        $or: [
-          { status: 'published' }, 
-          { isPublished: true },
-          { status: { $exists: false } }
-        ]
-      })
-        .sort({ createdAt: -1 })
-        .skip(skipNum)
-        .limit(limitNum)
-        .populate('author', 'name username avatar')
-        .lean();
-      
-      posts = posts.map(b => ({ ...b, type: 'blog' }));
+      if (totalBlogs > 0) {
+        const blogs = await Blog.find({ 
+          $or: [
+            { status: 'published' }, 
+            { isPublished: true },
+            { status: { $exists: false } }
+          ]
+        })
+          .sort({ createdAt: -1 })
+          .populate('author', 'name username avatar')
+          .lean();
+        
+        const blogItems = blogs.map(b => ({ ...b, type: 'blog', sortDate: new Date(b.createdAt) }));
+        allItems = [...allItems, ...blogItems];
+      }
     }
     
+    // Sort combined items by date (newest first)
+    allItems.sort((a, b) => b.sortDate - a.sortDate);
+    
+    const total = allItems.length;
+    
+    // Apply pagination
+    const paginatedItems = allItems.slice(skipNum, skipNum + limitNum);
+    
     // Add excerpts for better display
-    posts = addExcerpts(posts);
+    const posts = addExcerpts(paginatedItems);
     
     const hasMore = (skipNum + posts.length) < total;
     
-    console.log(`📰 Feed: Returning ${posts.length} items (page ${pageNum}, hasMore: ${hasMore})`);
+    console.log(`📰 Feed: ${totalPosts} posts + ${totalBlogs} blogs = ${total} total, returning ${posts.length} (page ${pageNum}, hasMore: ${hasMore})`);
+    
     res.json({ 
       ok: true, 
       posts, 
@@ -1299,7 +1390,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '7.6.0',
+    version: '7.7.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -1401,24 +1492,23 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.6.0
-  Pagination + Excerpts + Creator Studio
+  CYBEV API Server v7.7.0
+  Combined Feed + Followers in Stats
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
+  v7.7.0 Fixes:
+  ✅ Feed combines Posts + Blogs (not OR)
+  ✅ /api/blogs/my includes followersCount
+  ✅ /api/sites/my includes followersCount
+  ✅ /api/users/me/followers endpoint
+  ✅ hasMore pagination working
+  
   v7.6.0 Fixes:
   ✅ Feed pagination (hasMore, nextPage)
   ✅ Posts excerpts (stripped HTML)
-  ✅ /api/user-analytics/creator-studio
-  ✅ /api/studio/stats
-  ✅ Follower counts from User model
-  
-  v7.5.0 Fixes:
-  ✅ /api/feed - Returns posts/blogs
-  ✅ /api/vlogs/feed - Returns vlogs
-  ✅ /api/posts/user/:userId - Profile posts
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
