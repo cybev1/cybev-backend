@@ -192,6 +192,7 @@ const countWithFields = async (Model, userId, fields) => {
 // HELPER: Get comprehensive user stats
 // ==========================================
 const getUserStats = async (userId) => {
+  const User = getModel('User') || mongoose.models.User;
   const Post = getModel('Post');
   const Follow = getModel('Follow');
   const Website = getModel('Website');
@@ -200,14 +201,68 @@ const getUserStats = async (userId) => {
   const Vlog = getModel('Vlog');
   const Reward = getModel('Reward');
 
-  // Count posts
-  const postsCount = await countWithFields(Post, userId, ['author', 'user', 'userId', 'createdBy']);
+  // Count posts - also count blogs as posts if Post model is empty
+  let postsCount = await countWithFields(Post, userId, ['author', 'user', 'userId', 'createdBy']);
+  
+  // If no posts found, count blogs as posts (they appear in feed)
+  if (postsCount === 0 && Blog) {
+    postsCount = await countWithFields(Blog, userId, ['author', 'user', 'userId', 'owner']);
+  }
 
-  // Count followers
-  const followersCount = await countWithFields(Follow, userId, ['following', 'followee', 'targetUser']);
-
-  // Count following
-  const followingCount = await countWithFields(Follow, userId, ['follower', 'user', 'sourceUser']);
+  // Count followers/following - try multiple methods
+  let followersCount = 0;
+  let followingCount = 0;
+  
+  // Method 1: Check Follow collection
+  if (Follow) {
+    followersCount = await countWithFields(Follow, userId, ['following', 'followee', 'targetUser', 'followedId']);
+    followingCount = await countWithFields(Follow, userId, ['follower', 'user', 'sourceUser', 'followerId']);
+  }
+  
+  // Method 2: Check User.followers/following arrays (if Follow collection is empty)
+  if ((followersCount === 0 || followingCount === 0) && User) {
+    try {
+      const user = await User.findById(userId).select('followers following followersCount followingCount').lean();
+      if (user) {
+        // Check array lengths
+        if (followersCount === 0) {
+          followersCount = user.followersCount || user.followers?.length || 0;
+        }
+        if (followingCount === 0) {
+          followingCount = user.followingCount || user.following?.length || 0;
+        }
+      }
+    } catch (e) {
+      console.log('User followers check error:', e.message);
+    }
+  }
+  
+  // Method 3: Try native MongoDB follows collection
+  if (followersCount === 0 || followingCount === 0) {
+    try {
+      const followsCollection = mongoose.connection.db.collection('follows');
+      if (followersCount === 0) {
+        followersCount = await followsCollection.countDocuments({ 
+          $or: [
+            { following: new mongoose.Types.ObjectId(userId) },
+            { followee: new mongoose.Types.ObjectId(userId) },
+            { targetUser: new mongoose.Types.ObjectId(userId) },
+            { followedId: new mongoose.Types.ObjectId(userId) }
+          ]
+        });
+      }
+      if (followingCount === 0) {
+        followingCount = await followsCollection.countDocuments({ 
+          $or: [
+            { follower: new mongoose.Types.ObjectId(userId) },
+            { user: new mongoose.Types.ObjectId(userId) },
+            { sourceUser: new mongoose.Types.ObjectId(userId) },
+            { followerId: new mongoose.Types.ObjectId(userId) }
+          ]
+        });
+      }
+    } catch (e) {}
+  }
 
   // Count websites (check both Website and Site models)
   let websitesCount = await countWithFields(Website, userId, ['owner', 'user', 'userId', 'author']);
@@ -567,6 +622,148 @@ app.get('/api/rewards/balance', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/posts/feed - Feed posts (combines posts + blogs)
+app.get('/api/posts/feed', authMiddleware, async (req, res) => {
+  try {
+    const Post = getModel('Post');
+    const Blog = getModel('Blog');
+    const userId = req.user.userId || req.user.id || req.user._id;
+    const { limit = 20, page = 1 } = req.query;
+    
+    let posts = [];
+    
+    // Get posts if model exists
+    if (Post) {
+      const postDocs = await Post.find({ status: { $ne: 'deleted' } })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+      posts = postDocs.map(p => ({ ...p, type: 'post' }));
+    }
+    
+    // If no posts, try blogs
+    if (posts.length === 0 && Blog) {
+      const blogDocs = await Blog.find({ 
+        $or: [{ status: 'published' }, { isPublished: true }] 
+      })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+      posts = blogDocs.map(b => ({ ...b, type: 'blog' }));
+    }
+    
+    res.json({ ok: true, posts, feed: posts, count: posts.length });
+  } catch (err) {
+    console.error('❌ /api/posts/feed error:', err.message);
+    res.status(500).json({ ok: false, error: err.message, posts: [], feed: [] });
+  }
+});
+
+// GET /api/feed - Alternative feed endpoint
+app.get('/api/feed', authMiddleware, async (req, res) => {
+  try {
+    const Post = getModel('Post');
+    const Blog = getModel('Blog');
+    const { limit = 20, page = 1 } = req.query;
+    
+    let posts = [];
+    
+    if (Post) {
+      posts = await Post.find({ status: { $ne: 'deleted' } })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+    }
+    
+    if (posts.length === 0 && Blog) {
+      posts = await Blog.find({ $or: [{ status: 'published' }, { isPublished: true }] })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+    }
+    
+    res.json({ ok: true, posts, feed: posts, count: posts.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, posts: [], feed: [] });
+  }
+});
+
+// GET /api/posts/my - User's posts (combines posts + blogs)
+app.get('/api/posts/my', authMiddleware, async (req, res) => {
+  try {
+    const Post = getModel('Post');
+    const Blog = getModel('Blog');
+    const userId = req.user.userId || req.user.id || req.user._id;
+    
+    let posts = [];
+    
+    if (Post) {
+      posts = await Post.find({ 
+        $or: [{ author: userId }, { user: userId }, { userId: userId }] 
+      }).sort({ createdAt: -1 }).lean();
+    }
+    
+    // Also include blogs as posts
+    if (Blog) {
+      const blogs = await Blog.find({ 
+        $or: [{ author: userId }, { user: userId }, { userId: userId }] 
+      }).sort({ createdAt: -1 }).lean();
+      
+      posts = [...posts, ...blogs.map(b => ({ ...b, type: 'blog' }))];
+    }
+    
+    // Sort combined by createdAt
+    posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    res.json({ ok: true, posts, count: posts.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, posts: [] });
+  }
+});
+
+// GET /api/follows/stats - Followers/following counts
+app.get('/api/follows/stats', authMiddleware, async (req, res) => {
+  try {
+    const User = getModel('User') || mongoose.models.User;
+    const Follow = getModel('Follow');
+    const userId = req.user.userId || req.user.id || req.user._id;
+    
+    let followersCount = 0;
+    let followingCount = 0;
+    
+    // Try Follow model first
+    if (Follow) {
+      followersCount = await Follow.countDocuments({ 
+        $or: [{ following: userId }, { followee: userId }, { targetUser: userId }] 
+      });
+      followingCount = await Follow.countDocuments({ 
+        $or: [{ follower: userId }, { user: userId }, { sourceUser: userId }] 
+      });
+    }
+    
+    // Fallback to User arrays
+    if ((followersCount === 0 || followingCount === 0) && User) {
+      const user = await User.findById(userId).select('followers following followersCount followingCount').lean();
+      if (user) {
+        followersCount = followersCount || user.followersCount || user.followers?.length || 0;
+        followingCount = followingCount || user.followingCount || user.following?.length || 0;
+      }
+    }
+    
+    res.json({ ok: true, followersCount, followingCount, followers: followersCount, following: followingCount });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, followersCount: 0, followingCount: 0 });
+  }
+});
+
 // ==========================================
 // ALL ROUTES - v7.4.0 Fixed Analytics
 // ==========================================
@@ -657,7 +854,10 @@ const routes = [
   ['email-subscription', '/api/email-subscription', './routes/email-subscription.routes'],
   
   // Premium Email
-  ['campaigns-premium', '/api/campaigns-premium', './routes/campaigns-premium.routes']
+  ['campaigns-premium', '/api/campaigns-premium', './routes/campaigns-premium.routes'],
+  
+  // Debug routes (TEMPORARY - remove after fixing)
+  ['debug', '/api/debug', './routes/debug.routes']
   
   // NOTE: blogs-my.routes and sites-my.routes REMOVED - handled by inline routes above
 ];
