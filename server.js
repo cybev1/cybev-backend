@@ -711,7 +711,6 @@ app.get('/api/feed', async (req, res) => {
           .skip((parseInt(page) - 1) * parseInt(limit))
           .limit(parseInt(limit))
           .populate('author', 'name username avatar')
-          .populate('user', 'name username avatar')
           .lean();
       }
     }
