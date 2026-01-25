@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.2.0 - Church Registration Links + Member Management
-// PREVIOUS: 7.1.0 - Member Management Routes
+// VERSION: 7.3.0 - Fixed User Analytics & Stats
+// PREVIOUS: 7.2.0 - Church Registration Links
 // ROLLBACK: If issues, revert to VERSION 6.9.2
 // GITHUB: https://github.com/cybev1/cybev-backend
 // UPDATED: 2026-01-24
@@ -236,6 +236,7 @@ const routes = [
   // Core
   ['auth', '/api/auth', './routes/auth.routes'],
   ['users', '/api/users', './routes/user.routes'],
+  ['user-analytics', '/api/user-analytics', './routes/user-analytics.routes'],
   ['posts', '/api/posts', './routes/post.routes'],
   ['comments', '/api/comments', './routes/comment.routes'],
   ['messages', '/api/messages', './routes/message.routes'],
@@ -418,7 +419,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '7.2.0',
+    version: '7.3.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -525,12 +526,18 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.2.0
-  Church Registration + Premium Email
+  CYBEV API Server v7.3.0
+  User Analytics + Church Registration
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
+  
+  v7.3.0 Analytics Fixes:
+  ✅ Profile Stats (Posts, Followers, Following)
+  ✅ Creator Studio Stats (Websites, Blogs, Views)
+  ✅ Wallet Balance & Transactions
+  ✅ Daily Check-in Rewards
   
   v7.2.0 Church Features:
   ✅ Public Registration Links
@@ -544,16 +551,6 @@ server.listen(PORT, () => {
   ✅ Advanced Segmentation (20+ operators)
   ✅ Send Time Optimization
   ✅ Automation Workflows
-  ✅ Engagement Scoring
-  ✅ Behavioral Targeting
-  ✅ Template Library
-  ✅ Subscription Tiers
-  
-  Previous Features (v6.9.x):
-  ✅ AWS SES Email Integration
-  ✅ Drag-Drop Campaign Editor
-  ✅ Custom Domain Verification
-  ✅ AI Image Generation
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
