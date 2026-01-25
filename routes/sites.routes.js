@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/sites.routes.js
 // Website Builder API - NATIVE MONGODB FIX
-// VERSION: 6.5.0 - With AI Image Generation
+// VERSION: 6.6.0 - Enhanced /my with stats
 // ============================================
 
 const express = require('express');
@@ -250,19 +250,64 @@ async function getTemplateBlocks(template, siteName, description) {
 }
 
 // ==========================================
-// GET /api/sites/my
+// GET /api/sites/my - ENHANCED WITH STATS
+// CRITICAL: Must be BEFORE /:id route
 // ==========================================
 router.get('/my', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
+    
+    console.log(`🌐 Fetching sites for user: ${userId}`);
+    
     const sites = await getSitesCollection()
       .find({ owner: new ObjectId(userId) })
       .sort({ updatedAt: -1 })
       .toArray();
-    res.json({ ok: true, sites });
+    
+    // Calculate stats for Creator Studio dashboard
+    const stats = {
+      total: sites.length,
+      published: sites.filter(s => s.status === 'published').length,
+      draft: sites.filter(s => s.status !== 'published').length,
+      totalViews: sites.reduce((sum, s) => sum + (s.views || 0), 0)
+    };
+    
+    res.json({ 
+      ok: true, 
+      sites,
+      websites: sites, // Alias for frontend compatibility
+      count: sites.length,
+      total: sites.length,
+      stats
+    });
   } catch (err) {
-    console.error('Get sites error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to fetch sites' });
+    console.error('❌ Get sites error:', err);
+    res.status(500).json({ ok: false, error: 'Failed to fetch sites', sites: [], websites: [] });
+  }
+});
+
+// ==========================================
+// GET /api/sites/stats - Get stats only
+// ==========================================
+router.get('/stats', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    
+    const sites = await getSitesCollection()
+      .find({ owner: new ObjectId(userId) })
+      .toArray();
+    
+    const stats = {
+      total: sites.length,
+      published: sites.filter(s => s.status === 'published').length,
+      draft: sites.filter(s => s.status !== 'published').length,
+      totalViews: sites.reduce((sum, s) => sum + (s.views || 0), 0)
+    };
+    
+    res.json({ ok: true, stats });
+  } catch (err) {
+    console.error('❌ Get sites stats error:', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
@@ -302,7 +347,8 @@ router.get('/templates', (req, res) => {
       { id: 'startup', name: 'Startup Launch' },
       { id: 'saas', name: 'SaaS Product' },
       { id: 'music', name: 'Artist/Music' },
-      { id: 'community', name: 'Community Hub' }
+      { id: 'community', name: 'Community Hub' },
+      { id: 'church', name: 'Church/Ministry' }
     ]
   });
 });
@@ -386,12 +432,14 @@ router.post('/', verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// GET /api/sites/:id
+// GET /api/sites/:id - MUST BE AFTER /my, /stats, etc.
 // ==========================================
 router.get('/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     const userId = req.user.id || req.user._id || req.user.userId;
+    
+    console.log(`🌐 Fetching site: ${id}`);
     
     let site;
     if (ObjectId.isValid(id)) {
@@ -410,6 +458,7 @@ router.get('/:id', verifyToken, async (req, res) => {
     
     res.json({ ok: true, site });
   } catch (err) {
+    console.error('❌ Get site error:', err);
     res.status(500).json({ ok: false, error: 'Failed to fetch site' });
   }
 });
@@ -511,6 +560,58 @@ router.put('/:id/publish', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// POST /api/sites/:id/publish (alternative)
+// ==========================================
+router.post('/:id/publish', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id || req.user._id || req.user.userId;
+    
+    const site = await getSitesCollection().findOne({ _id: new ObjectId(id) });
+    if (!site || site.owner.toString() !== userId.toString()) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+    
+    await getSitesCollection().updateOne(
+      { _id: new ObjectId(id) }, 
+      { $set: { status: 'published', publishedAt: new Date(), updatedAt: new Date() } }
+    );
+    
+    res.json({ 
+      ok: true, 
+      message: 'Site published successfully',
+      url: `https://${site.subdomain}.cybev.io`
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Failed to publish' });
+  }
+});
+
+// ==========================================
+// POST /api/sites/:id/unpublish
+// ==========================================
+router.post('/:id/unpublish', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id || req.user._id || req.user.userId;
+    
+    const site = await getSitesCollection().findOne({ _id: new ObjectId(id) });
+    if (!site || site.owner.toString() !== userId.toString()) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+    
+    await getSitesCollection().updateOne(
+      { _id: new ObjectId(id) }, 
+      { $set: { status: 'draft', updatedAt: new Date() } }
+    );
+    
+    res.json({ ok: true, message: 'Site unpublished' });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Failed to unpublish' });
+  }
+});
+
+// ==========================================
 // DELETE /api/sites/:id
 // ==========================================
 router.delete('/:id', verifyToken, async (req, res) => {
@@ -531,6 +632,6 @@ router.delete('/:id', verifyToken, async (req, res) => {
   }
 });
 
-console.log('✅ Sites routes loaded (v6.4.5 - Native MongoDB)');
+console.log('✅ Sites routes loaded (v6.6.0 - Enhanced with stats)');
 
 module.exports = router;
