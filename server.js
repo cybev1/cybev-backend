@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.4.0 - Fixed Analytics & Stats
+// VERSION: 7.5.0 - Fixed Feed, Posts, Followers
 // PREVIOUS: 7.3.0 - Church Registration Links
 // FIXES:
 //   - /api/users/me returns full stats
@@ -554,6 +554,28 @@ app.get('/api/vlogs/my', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/vlogs/feed - Public vlogs feed
+app.get('/api/vlogs/feed', async (req, res) => {
+  try {
+    const Vlog = mongoose.models.Vlog;
+    const { limit = 20, page = 1 } = req.query;
+    
+    let vlogs = [];
+    if (Vlog) {
+      vlogs = await Vlog.find({ $or: [{ status: 'published' }, { isPublished: true }, { status: { $exists: false } }] })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+    }
+    
+    res.json({ ok: true, vlogs, feed: vlogs, count: vlogs.length });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, vlogs: [], feed: [] });
+  }
+});
+
 // GET /api/rewards/wallet - Wallet balance and transactions
 app.get('/api/rewards/wallet', authMiddleware, async (req, res) => {
   try {
@@ -663,8 +685,8 @@ app.get('/api/posts/feed', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/feed - Alternative feed endpoint
-app.get('/api/feed', authMiddleware, async (req, res) => {
+// GET /api/feed - Alternative feed endpoint (PUBLIC - no auth required)
+app.get('/api/feed', async (req, res) => {
   try {
     const Post = getModel('Post');
     const Blog = getModel('Blog');
@@ -672,26 +694,53 @@ app.get('/api/feed', authMiddleware, async (req, res) => {
     
     let posts = [];
     
+    // Try Post model first
     if (Post) {
-      posts = await Post.find({ status: { $ne: 'deleted' } })
-        .sort({ createdAt: -1 })
-        .skip((parseInt(page) - 1) * parseInt(limit))
-        .limit(parseInt(limit))
-        .populate('author', 'name username avatar')
-        .lean();
+      const totalPosts = await Post.countDocuments();
+      console.log(`📰 Feed: Found ${totalPosts} total posts in Post collection`);
+      
+      if (totalPosts > 0) {
+        posts = await Post.find({ 
+          $or: [
+            { status: 'published' },
+            { status: { $exists: false } },
+            { isPublished: true }
+          ]
+        })
+          .sort({ createdAt: -1 })
+          .skip((parseInt(page) - 1) * parseInt(limit))
+          .limit(parseInt(limit))
+          .populate('author', 'name username avatar')
+          .populate('user', 'name username avatar')
+          .lean();
+      }
     }
     
+    // If no posts, fall back to blogs
     if (posts.length === 0 && Blog) {
-      posts = await Blog.find({ $or: [{ status: 'published' }, { isPublished: true }] })
+      const totalBlogs = await Blog.countDocuments();
+      console.log(`📰 Feed: Found ${totalBlogs} total blogs, using as feed`);
+      
+      posts = await Blog.find({ 
+        $or: [
+          { status: 'published' }, 
+          { isPublished: true },
+          { status: { $exists: false } }
+        ]
+      })
         .sort({ createdAt: -1 })
         .skip((parseInt(page) - 1) * parseInt(limit))
         .limit(parseInt(limit))
         .populate('author', 'name username avatar')
         .lean();
+      
+      posts = posts.map(b => ({ ...b, type: 'blog' }));
     }
     
+    console.log(`📰 Feed: Returning ${posts.length} items`);
     res.json({ ok: true, posts, feed: posts, count: posts.length });
   } catch (err) {
+    console.error('❌ /api/feed error:', err.message);
     res.status(500).json({ ok: false, error: err.message, posts: [], feed: [] });
   }
 });
@@ -764,6 +813,97 @@ app.get('/api/follows/stats', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/follow/stats - Alias (frontend uses /api/follow not /api/follows)
+app.get('/api/follow/stats', authMiddleware, async (req, res) => {
+  try {
+    const User = getModel('User') || mongoose.models.User;
+    const Follow = getModel('Follow');
+    const userId = req.user.userId || req.user.id || req.user._id;
+    
+    let followersCount = 0;
+    let followingCount = 0;
+    
+    if (Follow) {
+      followersCount = await Follow.countDocuments({ 
+        $or: [{ following: userId }, { followee: userId }, { targetUser: userId }] 
+      });
+      followingCount = await Follow.countDocuments({ 
+        $or: [{ follower: userId }, { user: userId }, { sourceUser: userId }] 
+      });
+    }
+    
+    if ((followersCount === 0 || followingCount === 0) && User) {
+      const user = await User.findById(userId).select('followers following followersCount followingCount').lean();
+      if (user) {
+        followersCount = followersCount || user.followersCount || user.followers?.length || 0;
+        followingCount = followingCount || user.followingCount || user.following?.length || 0;
+      }
+    }
+    
+    res.json({ ok: true, followersCount, followingCount, followers: followersCount, following: followingCount });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, followersCount: 0, followingCount: 0 });
+  }
+});
+
+// GET /api/posts/user/:userId - Get posts by user ID (for profile page)
+app.get('/api/posts/user/:userId', async (req, res) => {
+  try {
+    const Post = getModel('Post');
+    const Blog = getModel('Blog');
+    const { userId } = req.params;
+    const { limit = 20, page = 1 } = req.query;
+    
+    if (!userId || userId === 'undefined') {
+      return res.json({ ok: true, posts: [], count: 0 });
+    }
+    
+    let posts = [];
+    
+    // Try Post model with multiple field names
+    if (Post) {
+      posts = await Post.find({ 
+        $or: [
+          { author: userId }, 
+          { user: userId }, 
+          { userId: userId },
+          { creator: userId },
+          { createdBy: userId }
+        ]
+      })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+    }
+    
+    // If no posts found, also check blogs (they show in feed)
+    if (posts.length === 0 && Blog) {
+      const blogs = await Blog.find({ 
+        $or: [
+          { author: userId }, 
+          { user: userId }, 
+          { userId: userId },
+          { owner: userId }
+        ]
+      })
+        .sort({ createdAt: -1 })
+        .skip((parseInt(page) - 1) * parseInt(limit))
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar')
+        .lean();
+      
+      posts = blogs.map(b => ({ ...b, type: 'blog' }));
+    }
+    
+    res.json({ ok: true, posts, count: posts.length });
+  } catch (err) {
+    console.error('❌ /api/posts/user error:', err.message);
+    res.status(500).json({ ok: false, error: err.message, posts: [] });
+  }
+});
+
 // ==========================================
 // ALL ROUTES - v7.4.0 Fixed Analytics
 // ==========================================
@@ -778,6 +918,7 @@ const routes = [
   ['messages', '/api/messages', './routes/message.routes'],
   ['notifications', '/api/notifications', './routes/notification.routes'],
   ['follows', '/api/follows', './routes/follow.routes'],
+  ['follow', '/api/follow', './routes/follow.routes'],
   ['search', '/api/search', './routes/search.routes'],
   ['hashtags', '/api/hashtags', './routes/hashtag.routes'],
   ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
@@ -951,7 +1092,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '7.4.0',
+    version: '7.5.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -983,15 +1124,14 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v7.4.0 - Analytics Fixed',
+    message: 'CYBEV API v7.5.0 - Feed + Posts + Followers Fixed',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
     features: [
+      'feed', 'posts', 'followers', 'vlogs',
       'meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 
       'church', 'church-registration', 'forms', 'email-platform', 'automation',
-      'premium-email', 'ab-testing', 'advanced-segmentation', 
-      'send-time-optimization', 'automation-workflows',
-      'analytics-fixed'
+      'premium-email', 'analytics-fixed'
     ]
   });
 });
@@ -1054,30 +1194,25 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.4.0
-  Analytics Fixed + Church Registration
+  CYBEV API Server v7.5.0
+  Feed + Posts + Followers Fixed
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.4.0 Analytics Fixes (INLINE ROUTES):
+  v7.5.0 Fixes:
+  ✅ /api/feed - Returns posts/blogs
+  ✅ /api/vlogs/feed - Returns vlogs
+  ✅ /api/posts/user/:userId - Profile posts
+  ✅ /api/follow/* alias for /api/follows/*
+  ✅ Follower/Following counts
+  
+  v7.4.0 Analytics (INLINE ROUTES):
   ✅ /api/users/me - Full stats
   ✅ /api/blogs/my - Blogs with stats
   ✅ /api/sites/my - Sites with stats
   ✅ /api/rewards/wallet - Balance + transactions
-  ✅ Multiple field name checking
-  ✅ Native MongoDB sites collection
-  
-  v7.2.0 Church Features:
-  ✅ Public Registration Links
-  ✅ Auto CYBEV Account Creation
-  ✅ QR Code Generation
-  
-  v7.0.0 Premium Email Features:
-  ✅ A/B Testing
-  ✅ Advanced Segmentation
-  ✅ Send Time Optimization
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
