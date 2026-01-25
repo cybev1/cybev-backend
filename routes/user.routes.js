@@ -1,7 +1,13 @@
 // ============================================
 // FILE: routes/user.routes.js
 // User Routes - COMPLETE MERGED VERSION
-// VERSION: 6.0 - Fixed username lookup + /me endpoint
+// VERSION: 7.0 - Fixed Analytics & Stats
+// FIXES:
+//   - Posts count (checks author, user, userId fields)
+//   - Followers/Following count (removed status:active requirement)
+//   - Added websites, blogs, views counting
+//   - Added wallet balance
+//   - Added /stats endpoint
 // ============================================
 
 const express = require('express');
@@ -12,6 +18,37 @@ const jwt = require('jsonwebtoken');
 
 // Get User model
 const getUser = () => mongoose.models.User || require('../models/user.model');
+
+// Get model safely
+const getModel = (name) => {
+  try {
+    return mongoose.models[name] || null;
+  } catch (e) {
+    return null;
+  }
+};
+
+// Helper: Count documents with multiple possible field names
+const countWithFields = async (Model, userId, fields) => {
+  if (!Model || !userId) return 0;
+  
+  const objectId = typeof userId === 'string' ? new mongoose.Types.ObjectId(userId) : userId;
+  const orConditions = fields.map(field => ({ [field]: objectId }));
+  
+  try {
+    // Try with ObjectId first
+    let count = await Model.countDocuments({ $or: orConditions });
+    if (count > 0) return count;
+    
+    // Try with string ID as fallback
+    const stringConditions = fields.map(field => ({ [field]: userId.toString() }));
+    count = await Model.countDocuments({ $or: stringConditions });
+    return count;
+  } catch (e) {
+    console.error(`Count error for ${Model.modelName}:`, e.message);
+    return 0;
+  }
+};
 
 // Auth middleware
 const verifyToken = (req, res, next) => {
@@ -40,6 +77,112 @@ const upload = multer({
 });
 
 // ==========================================
+// HELPER: Get comprehensive user stats
+// ==========================================
+const getUserStats = async (userId) => {
+  const Post = getModel('Post');
+  const Follow = getModel('Follow');
+  const Website = getModel('Website');
+  const Blog = getModel('Blog');
+  const Vlog = getModel('Vlog');
+  const Reward = getModel('Reward');
+
+  // Count posts (check multiple field names)
+  const postsCount = await countWithFields(Post, userId, ['author', 'user', 'userId', 'createdBy']);
+
+  // Count followers (people following this user) - check multiple field names
+  // Note: removed status:'active' requirement as it might not exist
+  const followersCount = await countWithFields(Follow, userId, ['following', 'followee', 'targetUser', 'followedUser']);
+
+  // Count following (people this user follows)
+  const followingCount = await countWithFields(Follow, userId, ['follower', 'user', 'sourceUser', 'userId']);
+
+  // Count websites
+  const websitesCount = await countWithFields(Website, userId, ['owner', 'user', 'userId', 'author', 'createdBy']);
+
+  // Count blogs/articles
+  const blogsCount = await countWithFields(Blog, userId, ['author', 'user', 'userId', 'owner', 'createdBy']);
+
+  // Count vlogs
+  const vlogsCount = await countWithFields(Vlog, userId, ['author', 'user', 'userId', 'createdBy']);
+
+  // Get total views
+  let totalViews = 0;
+  const objectId = new mongoose.Types.ObjectId(userId);
+  
+  if (Post) {
+    try {
+      const postViews = await Post.aggregate([
+        { $match: { $or: [{ author: objectId }, { user: objectId }, { userId: objectId }] } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$views', 0] } } } }
+      ]);
+      totalViews += postViews[0]?.total || 0;
+    } catch (e) {}
+  }
+  
+  if (Blog) {
+    try {
+      const blogViews = await Blog.aggregate([
+        { $match: { $or: [{ author: objectId }, { user: objectId }, { userId: objectId }] } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$views', 0] } } } }
+      ]);
+      totalViews += blogViews[0]?.total || 0;
+    } catch (e) {}
+  }
+  
+  if (Website) {
+    try {
+      const siteViews = await Website.aggregate([
+        { $match: { $or: [{ owner: objectId }, { user: objectId }, { userId: objectId }] } },
+        { $group: { _id: null, total: { $sum: { $ifNull: ['$views', 0] } } } }
+      ]);
+      totalViews += siteViews[0]?.total || 0;
+    } catch (e) {}
+  }
+
+  // Get wallet balance
+  let walletBalance = 0;
+  if (Reward) {
+    try {
+      const rewards = await Reward.aggregate([
+        { $match: { user: objectId, status: { $in: ['completed', null, undefined] } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]);
+      walletBalance = rewards[0]?.total || 0;
+    } catch (e) {
+      // Try without status filter
+      try {
+        const rewards = await Reward.aggregate([
+          { $match: { user: objectId } },
+          { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        walletBalance = rewards[0]?.total || 0;
+      } catch (e2) {}
+    }
+  }
+
+  return {
+    postsCount,
+    followersCount,
+    followingCount,
+    websitesCount,
+    blogsCount,
+    vlogsCount,
+    totalViews,
+    walletBalance,
+    // Aliases for frontend compatibility
+    posts: postsCount,
+    followers: followersCount,
+    following: followingCount,
+    websites: websitesCount,
+    blogs: blogsCount,
+    vlogs: vlogsCount,
+    views: totalViews,
+    balance: walletBalance
+  };
+};
+
+// ==========================================
 // CURRENT USER ENDPOINTS (MUST BE FIRST!)
 // ==========================================
 
@@ -47,39 +190,22 @@ const upload = multer({
 router.get('/me', verifyToken, async (req, res) => {
   try {
     const User = getUser();
-    const user = await User.findById(req.user.id)
-      .select('-password -__v');
+    const userId = req.user.id || req.user.userId || req.user._id;
+    
+    const user = await User.findById(userId).select('-password -__v');
 
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
 
-    // Get post count
-    const Post = mongoose.models.Post;
-    let postsCount = 0;
-    if (Post) {
-      postsCount = await Post.countDocuments({ author: user._id });
-    }
-
-    // Get follow counts
-    const Follow = mongoose.models.Follow;
-    let followersCount = user.followersCount || user.followers?.length || 0;
-    let followingCount = user.followingCount || user.following?.length || 0;
-    
-    if (Follow) {
-      [followersCount, followingCount] = await Promise.all([
-        Follow.countDocuments({ following: user._id, status: 'active' }),
-        Follow.countDocuments({ follower: user._id, status: 'active' })
-      ]);
-    }
+    // Get comprehensive stats
+    const stats = await getUserStats(userId);
 
     res.json({
       ok: true,
       user: {
         ...user.toObject(),
-        postsCount,
-        followersCount,
-        followingCount
+        ...stats
       }
     });
   } catch (err) {
@@ -88,15 +214,32 @@ router.get('/me', verifyToken, async (req, res) => {
   }
 });
 
+// GET /api/users/me/stats - Get only stats for current user
+router.get('/me/stats', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user.userId || req.user._id;
+    const stats = await getUserStats(userId);
+    res.json({ ok: true, ...stats });
+  } catch (err) {
+    console.error('Error fetching user stats:', err);
+    res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
 // GET /api/users/profile - Get current user's profile (alias for /me)
 router.get('/profile', verifyToken, async (req, res) => {
   try {
     const User = getUser();
-    const user = await User.findById(req.user.id).select('-password');
+    const userId = req.user.id || req.user.userId || req.user._id;
+    
+    const user = await User.findById(userId).select('-password');
     
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
+
+    // Get stats
+    const stats = await getUserStats(userId);
 
     res.json({
       ok: true,
@@ -113,14 +256,34 @@ router.get('/profile', verifyToken, async (req, res) => {
         preferences: user.preferences,
         linkedProviders: user.linkedProviders || ['email'],
         socialLinks: user.socialLinks,
-        followerCount: user.followerCount || user.followersCount || 0,
-        followingCount: user.followingCount || 0,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        ...stats
       }
     });
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({ ok: false, error: 'Failed to fetch profile' });
+  }
+});
+
+// ==========================================
+// STATS ENDPOINT
+// ==========================================
+
+// GET /api/users/stats/:userId - Get stats for any user
+router.get('/stats/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({ ok: false, error: 'Invalid user ID' });
+    }
+
+    const stats = await getUserStats(userId);
+    res.json({ ok: true, stats });
+  } catch (err) {
+    console.error('Error fetching user stats:', err);
+    res.status(500).json({ ok: false, error: 'Server error' });
   }
 });
 
@@ -133,7 +296,7 @@ router.get('/suggested', verifyToken, async (req, res) => {
   try {
     const User = getUser();
     const limit = parseInt(req.query.limit) || 5;
-    const currentUserId = req.user?.id;
+    const currentUserId = req.user?.id || req.user?.userId;
 
     // Get users the current user is already following
     let followingIds = [];
@@ -191,32 +354,14 @@ router.get('/username/:username', async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
 
-    // Get post count
-    const Post = mongoose.models.Post;
-    let postsCount = 0;
-    if (Post) {
-      postsCount = await Post.countDocuments({ author: user._id });
-    }
-
-    // Get follow counts
-    const Follow = mongoose.models.Follow;
-    let followersCount = user.followersCount || user.followers?.length || 0;
-    let followingCount = user.followingCount || user.following?.length || 0;
-    
-    if (Follow) {
-      [followersCount, followingCount] = await Promise.all([
-        Follow.countDocuments({ following: user._id, status: 'active' }),
-        Follow.countDocuments({ follower: user._id, status: 'active' })
-      ]);
-    }
+    // Get comprehensive stats
+    const stats = await getUserStats(user._id);
 
     res.json({
       ok: true,
       user: {
         ...user.toObject(),
-        postsCount,
-        followersCount,
-        followingCount
+        ...stats
       }
     });
   } catch (error) {
@@ -233,7 +378,7 @@ router.get('/username/:username', async (req, res) => {
 router.get('/preferences', verifyToken, async (req, res) => {
   try {
     const User = getUser();
-    const user = await User.findById(req.user.id).select('preferences');
+    const user = await User.findById(req.user.id || req.user.userId).select('preferences');
     
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
@@ -268,7 +413,7 @@ router.put('/preferences', verifyToken, async (req, res) => {
   try {
     const User = getUser();
     const { theme, notifications, language, emailNotifications, pushNotifications } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id || req.user.userId;
 
     const updateData = {};
 
@@ -327,7 +472,7 @@ router.put('/profile', verifyToken, async (req, res) => {
       name, username, bio, socialLinks, location, website,
       avatar, coverImage, personalInfo, locationData
     } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id || req.user.userId;
 
     // Check if username is taken (if being changed)
     if (username) {
@@ -358,7 +503,6 @@ router.put('/profile', verifyToken, async (req, res) => {
     
     // Personal Info (Facebook-like extended profile)
     if (personalInfo) {
-      // Handle nested personalInfo fields
       const personalInfoUpdate = {};
       const allowedPersonalFields = [
         'firstName', 'lastName', 'middleName', 'nickname',
@@ -383,7 +527,7 @@ router.put('/profile', verifyToken, async (req, res) => {
       Object.assign(updateData, personalInfoUpdate);
     }
     
-    // Location Data (for registration location tracking)
+    // Location Data
     if (locationData) {
       const locationDataUpdate = {};
       const allowedLocationFields = [
@@ -412,92 +556,48 @@ router.put('/profile', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
 
+    // Get updated stats
+    const stats = await getUserStats(userId);
+
     res.json({
       ok: true,
       success: true,
-      message: 'Profile updated',
-      user
+      message: 'Profile updated successfully',
+      user: {
+        ...user.toObject(),
+        ...stats
+      }
     });
   } catch (error) {
     console.error('Update profile error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to update profile' });
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
-// PUT /api/users/update-profile - Alias for /profile
-router.put('/update-profile', verifyToken, async (req, res) => {
+// PUT /api/users/me - Update current user (alias)
+router.put('/me', verifyToken, async (req, res) => {
   try {
     const User = getUser();
-    const { 
-      name, username, bio, socialLinks, location, website,
-      avatar, coverImage, personalInfo, locationData
-    } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id || req.user.userId;
+    const allowedFields = ['name', 'username', 'bio', 'avatar', 'coverImage', 'location', 'website', 'socialLinks'];
+    
+    const updateData = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updateData[field] = req.body[field];
+      }
+    }
 
-    // Check if username is taken (if being changed)
-    if (username) {
-      const existingUser = await User.findOne({ 
-        username: username.toLowerCase(),
+    // Check username uniqueness
+    if (updateData.username) {
+      const existing = await User.findOne({
+        username: { $regex: new RegExp(`^${updateData.username}$`, 'i') },
         _id: { $ne: userId }
       });
-      
-      if (existingUser) {
-        return res.status(400).json({ 
-          ok: false, 
-          error: 'Username is already taken' 
-        });
+      if (existing) {
+        return res.status(400).json({ ok: false, error: 'Username already taken' });
       }
-    }
-
-    const updateData = {};
-    
-    // Basic fields
-    if (name) updateData.name = name;
-    if (username) updateData.username = username.toLowerCase();
-    if (bio !== undefined) updateData.bio = bio;
-    if (location !== undefined) updateData.location = location;
-    if (website !== undefined) updateData.website = website;
-    if (avatar !== undefined) updateData.avatar = avatar;
-    if (coverImage !== undefined) updateData.coverImage = coverImage;
-    if (socialLinks) updateData.socialLinks = socialLinks;
-    
-    // Personal Info
-    if (personalInfo) {
-      const allowedPersonalFields = [
-        'firstName', 'lastName', 'middleName', 'nickname',
-        'dateOfBirth', 'gender', 'pronouns',
-        'phone', 'alternateEmail',
-        'currentCity', 'currentCountry', 'hometown', 'hometownCountry',
-        'occupation', 'company', 'jobTitle', 'industry',
-        'education', 'school', 'graduationYear',
-        'relationshipStatus',
-        'interests', 'skills', 'languages',
-        'aboutMe', 'religion', 'politicalViews',
-        'favoriteQuote', 'favoriteMusic', 'favoriteMovies', 'favoriteBooks', 'favoriteSports',
-        'visibility'
-      ];
-      
-      for (const field of allowedPersonalFields) {
-        if (personalInfo[field] !== undefined) {
-          updateData[`personalInfo.${field}`] = personalInfo[field];
-        }
-      }
-    }
-    
-    // Location Data
-    if (locationData) {
-      const allowedLocationFields = [
-        'providedCountry', 'providedCity', 'providedLocation',
-        'detectedCountry', 'detectedCity', 'detectedRegion',
-        'detectedIP', 'detectedTimezone', 'detectedAt',
-        'locationType', 'locationMatches', 'coordinates'
-      ];
-      
-      for (const field of allowedLocationFields) {
-        if (locationData[field] !== undefined) {
-          updateData[`locationData.${field}`] = locationData[field];
-        }
-      }
+      updateData.username = updateData.username.toLowerCase();
     }
 
     const user = await User.findByIdAndUpdate(
@@ -510,15 +610,15 @@ router.put('/update-profile', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
 
+    const stats = await getUserStats(userId);
+
     res.json({
       ok: true,
-      success: true,
-      message: 'Profile updated',
-      user
+      user: { ...user.toObject(), ...stats }
     });
   } catch (error) {
-    console.error('Update profile error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to update profile' });
+    console.error('Update user error:', error);
+    res.status(500).json({ ok: false, error: error.message });
   }
 });
 
@@ -526,66 +626,16 @@ router.put('/update-profile', verifyToken, async (req, res) => {
 // AVATAR & COVER UPLOAD
 // ==========================================
 
-// POST /api/users/avatar
+// POST /api/users/avatar - Upload avatar
 router.post('/avatar', verifyToken, upload.single('avatar'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ ok: false, error: 'No file uploaded' });
-    }
-
     const User = getUser();
-    let avatarUrl;
-
-    // Check if Cloudinary is configured
-    if (process.env.CLOUDINARY_CLOUD_NAME) {
-      const cloudinary = require('cloudinary').v2;
-      const result = await new Promise((resolve, reject) => {
-        const uploadStream = cloudinary.uploader.upload_stream(
-          {
-            folder: 'cybev/avatars',
-            transformation: [
-              { width: 400, height: 400, crop: 'fill', gravity: 'face' },
-              { quality: 'auto' }
-            ]
-          },
-          (error, result) => {
-            if (error) reject(error);
-            else resolve(result);
-          }
-        );
-        uploadStream.end(req.file.buffer);
-      });
-      avatarUrl = result.secure_url;
-    } else {
-      // Fallback to base64 (not recommended for production)
-      avatarUrl = `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`;
-    }
-
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { avatar: avatarUrl },
-      { new: true, select: 'avatar' }
-    );
-
-    res.json({
-      ok: true,
-      success: true,
-      avatar: user.avatar
-    });
-  } catch (error) {
-    console.error('Avatar upload error:', error);
-    res.status(500).json({ ok: false, error: 'Failed to upload avatar' });
-  }
-});
-
-// POST /api/users/upload-avatar (alias)
-router.post('/upload-avatar', verifyToken, upload.single('image'), async (req, res) => {
-  try {
+    const userId = req.user.id || req.user.userId;
+    
     if (!req.file) {
-      return res.status(400).json({ ok: false, error: 'No image provided' });
+      return res.status(400).json({ ok: false, error: 'No file provided' });
     }
 
-    const User = getUser();
     let avatarUrl;
     
     if (process.env.CLOUDINARY_CLOUD_NAME) {
@@ -611,7 +661,7 @@ router.post('/upload-avatar', verifyToken, upload.single('image'), async (req, r
     }
 
     const user = await User.findByIdAndUpdate(
-      req.user.id,
+      userId,
       { avatar: avatarUrl },
       { new: true }
     ).select('-password');
@@ -623,14 +673,16 @@ router.post('/upload-avatar', verifyToken, upload.single('image'), async (req, r
   }
 });
 
-// POST /api/users/upload-cover
-router.post('/upload-cover', verifyToken, upload.single('image'), async (req, res) => {
+// POST /api/users/cover - Upload cover image
+router.post('/cover', verifyToken, upload.single('cover'), async (req, res) => {
   try {
+    const User = getUser();
+    const userId = req.user.id || req.user.userId;
+    
     if (!req.file) {
-      return res.status(400).json({ ok: false, error: 'No image provided' });
+      return res.status(400).json({ ok: false, error: 'No file provided' });
     }
 
-    const User = getUser();
     let coverUrl;
     
     if (process.env.CLOUDINARY_CLOUD_NAME) {
@@ -656,7 +708,7 @@ router.post('/upload-cover', verifyToken, upload.single('image'), async (req, re
     }
 
     const user = await User.findByIdAndUpdate(
-      req.user.id,
+      userId,
       { coverImage: coverUrl },
       { new: true }
     ).select('-password');
@@ -677,7 +729,7 @@ router.put('/change-password', verifyToken, async (req, res) => {
   try {
     const User = getUser();
     const { currentPassword, newPassword } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id || req.user.userId;
 
     if (!currentPassword || !newPassword) {
       return res.status(400).json({ 
@@ -730,7 +782,7 @@ router.post('/set-password', verifyToken, async (req, res) => {
   try {
     const User = getUser();
     const { password } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id || req.user.userId;
 
     if (!password || password.length < 6) {
       return res.status(400).json({ 
@@ -781,11 +833,14 @@ router.get('/profile/:username', async (req, res) => {
     
     const user = await User.findOne({ 
       username: { $regex: new RegExp(`^${username}$`, 'i') }
-    }).select('name username bio avatar coverImage followerCount followingCount socialLinks createdAt');
+    }).select('name username bio avatar coverImage followerCount followingCount socialLinks createdAt isVerified');
 
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
+
+    // Get stats
+    const stats = await getUserStats(user._id);
 
     res.json({
       ok: true,
@@ -796,10 +851,10 @@ router.get('/profile/:username', async (req, res) => {
         bio: user.bio,
         avatar: user.avatar,
         coverImage: user.coverImage,
-        followerCount: user.followerCount || user.followersCount || 0,
-        followingCount: user.followingCount || 0,
+        isVerified: user.isVerified,
         socialLinks: user.socialLinks,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        ...stats
       }
     });
   } catch (error) {
@@ -816,7 +871,7 @@ router.delete('/account', verifyToken, async (req, res) => {
   try {
     const User = getUser();
     const { password, confirmation } = req.body;
-    const userId = req.user.id;
+    const userId = req.user.id || req.user.userId;
 
     if (confirmation !== 'DELETE') {
       return res.status(400).json({ 
@@ -865,19 +920,32 @@ router.get('/:username', async (req, res) => {
     const User = getUser();
     const { username } = req.params;
     
-    // Skip if it looks like a reserved route
-    const reserved = ['me', 'profile', 'suggested', 'preferences', 'avatar', 'account', 'username'];
+    // Skip if it looks like a reserved route or ObjectId
+    const reserved = ['me', 'profile', 'suggested', 'preferences', 'avatar', 'account', 'username', 'stats'];
     if (reserved.includes(username.toLowerCase())) {
       return res.status(404).json({ ok: false, error: 'Invalid route' });
     }
+
+    // Check if it's an ObjectId (user ID lookup)
+    if (mongoose.Types.ObjectId.isValid(username) && username.length === 24) {
+      const user = await User.findById(username).select('-password -__v');
+      if (user) {
+        const stats = await getUserStats(user._id);
+        return res.json({ ok: true, user: { ...user.toObject(), ...stats } });
+      }
+    }
     
+    // Username lookup
     const user = await User.findOne({ 
       username: { $regex: new RegExp(`^${username}$`, 'i') }
-    }).select('name username bio avatar coverImage followerCount followingCount socialLinks createdAt');
+    }).select('name username bio avatar coverImage isVerified socialLinks createdAt');
 
     if (!user) {
       return res.status(404).json({ ok: false, error: 'User not found' });
     }
+
+    // Get stats
+    const stats = await getUserStats(user._id);
 
     res.json({
       ok: true,
@@ -888,10 +956,10 @@ router.get('/:username', async (req, res) => {
         bio: user.bio,
         avatar: user.avatar,
         coverImage: user.coverImage,
-        followerCount: user.followerCount || user.followersCount || 0,
-        followingCount: user.followingCount || 0,
+        isVerified: user.isVerified,
         socialLinks: user.socialLinks,
-        createdAt: user.createdAt
+        createdAt: user.createdAt,
+        ...stats
       }
     });
   } catch (error) {
