@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/blog.routes.js
-// Blog Routes - FIXED ROUTE ORDER
-// VERSION: 2.0 - Fixed /my route order
+// Blog Routes - FIXED ROUTE ORDER + POPULATE
+// VERSION: 2.1 - Removed website populate (schema mismatch)
 // ISSUE: /my was being caught by /:id route
 // ============================================
 
@@ -95,7 +95,6 @@ router.get('/my', verifyToken, async (req, res) => {
       .skip((parseInt(page) - 1) * parseInt(limit))
       .limit(parseInt(limit))
       .populate('author', 'name username avatar')
-      .populate('website', 'name subdomain')
       .lean();
 
     const total = await Blog.countDocuments(query);
@@ -364,15 +363,15 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
 
     const blog = await Blog.findOne({ slug })
       .populate('author', 'name username avatar bio')
-      .populate('website', 'name subdomain');
+      .lean();
 
     if (!blog) {
       return res.status(404).json({ ok: false, error: 'Blog not found' });
     }
 
     // Increment views
+    await Blog.findByIdAndUpdate(blog._id, { $inc: { views: 1 } });
     blog.views = (blog.views || 0) + 1;
-    await blog.save();
 
     res.json({ ok: true, blog });
   } catch (err) {
@@ -534,11 +533,12 @@ router.get('/:id', optionalAuth, async (req, res) => {
       // Try to find by slug instead
       const blogBySlug = await Blog.findOne({ slug: id })
         .populate('author', 'name username avatar bio')
-        .populate('website', 'name subdomain');
+        .lean();
 
       if (blogBySlug) {
+        // Increment views
+        await Blog.findByIdAndUpdate(blogBySlug._id, { $inc: { views: 1 } });
         blogBySlug.views = (blogBySlug.views || 0) + 1;
-        await blogBySlug.save();
         return res.json({ ok: true, blog: blogBySlug });
       }
 
@@ -547,7 +547,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 
     const blog = await Blog.findById(id)
       .populate('author', 'name username avatar bio')
-      .populate('website', 'name subdomain');
+      .lean();
 
     if (!blog) {
       return res.status(404).json({ ok: false, error: 'Blog not found' });
@@ -555,7 +555,7 @@ router.get('/:id', optionalAuth, async (req, res) => {
 
     // Check access for drafts
     const userId = req.user?.id || req.user?.userId;
-    const isOwner = userId && [blog.author?.toString(), blog.user?.toString(), blog.userId?.toString()]
+    const isOwner = userId && [blog.author?._id?.toString(), blog.user?.toString(), blog.userId?.toString()]
       .includes(userId.toString());
     
     if (blog.status !== 'published' && !isOwner && req.user?.role !== 'admin') {
@@ -563,8 +563,8 @@ router.get('/:id', optionalAuth, async (req, res) => {
     }
 
     // Increment views
+    await Blog.findByIdAndUpdate(id, { $inc: { views: 1 } });
     blog.views = (blog.views || 0) + 1;
-    await blog.save();
 
     res.json({ ok: true, blog });
   } catch (err) {
