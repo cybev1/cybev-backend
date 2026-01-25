@@ -1,12 +1,13 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 2.0.0 - Fixed Routes + Authorization
+// VERSION: 2.1.0 - SECURE Access Control
 // FIXES:
-//   - Added /organizations/* aliases (frontend compatibility)
+//   - CRITICAL: Only show user's own organizations
 //   - Route ordering: /create, /my before /:id
-//   - Authorization: Members vs Owners/Admins
-//   - Role-based access control
+//   - Role-based permissions for members vs admins
+//   - Member management with authorization
+//   - Export only for admins
 // ============================================
 
 const express = require('express');
@@ -209,40 +210,74 @@ router.post('/organizations', verifyToken, async (req, res) => {
   }
 });
 
-// GET /organizations - List all
-router.get('/organizations', optionalAuth, async (req, res) => {
+// GET /organizations - List ONLY user's organizations (not all!)
+router.get('/organizations', verifyToken, async (req, res) => {
   try {
     const { type, parentId, zoneId, churchId, page = 1, limit = 20, search } = req.query;
     const userId = req.user?.id || req.user?._id || req.user?.userId;
     
-    const query = { isActive: true };
-    if (type) query.type = type;
-    if (parentId) query.parent = new ObjectId(parentId);
-    if (zoneId) query.zone = new ObjectId(zoneId);
-    if (churchId) query.church = new ObjectId(churchId);
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } }
-      ];
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'Authentication required' });
     }
     
-    const orgs = await ChurchOrg.find(query)
+    // SECURITY: Only return organizations user is associated with
+    const userQuery = {
+      $or: [
+        { leader: userId },
+        { createdBy: userId },
+        { admins: userId },
+        { assistantLeaders: userId },
+        { 'members.user': userId }
+      ],
+      isActive: true
+    };
+    
+    // Additional filters
+    if (type) userQuery.type = type;
+    if (parentId) userQuery.parent = new ObjectId(parentId);
+    if (zoneId) userQuery.zone = new ObjectId(zoneId);
+    if (churchId) userQuery.church = new ObjectId(churchId);
+    if (search) {
+      userQuery.$and = [
+        { $or: userQuery.$or },
+        { $or: [
+          { name: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } }
+        ]}
+      ];
+      delete userQuery.$or;
+    }
+    
+    const orgs = await ChurchOrg.find(userQuery)
       .populate('leader', 'name username profilePicture')
       .populate('parent', 'name type slug')
       .sort({ name: 1 })
       .skip((page - 1) * limit)
       .limit(parseInt(limit));
     
-    const total = await ChurchOrg.countDocuments(query);
+    const total = await ChurchOrg.countDocuments(userQuery);
     
-    let orgsWithRole = orgs.map(o => o.toObject());
-    if (userId) {
-      orgsWithRole = await Promise.all(orgs.map(async (org) => {
-        const role = await getUserRole(userId, org._id);
-        return { ...org.toObject(), userRole: role, canManage: ['owner', 'admin', 'assistant'].includes(role) };
-      }));
-    }
+    // Add user's role to each org
+    const orgsWithRole = await Promise.all(orgs.map(async (org) => {
+      const role = await getUserRole(userId, org._id);
+      const canManage = ['owner', 'admin', 'assistant'].includes(role);
+      return { 
+        ...org.toObject(), 
+        userRole: role, 
+        canManage,
+        permissions: {
+          canEdit: canManage,
+          canDelete: role === 'owner',
+          canAddMembers: canManage,
+          canRemoveMembers: canManage,
+          canExport: canManage,
+          canViewSettings: canManage,
+          isOwner: role === 'owner',
+          isAdmin: ['owner', 'admin'].includes(role),
+          isMember: role !== null
+        }
+      };
+    }));
     
     res.json({
       ok: true,
@@ -257,7 +292,7 @@ router.get('/organizations', optionalAuth, async (req, res) => {
 });
 
 // GET /organizations/:id - Single org (MUST BE LAST of GET routes)
-router.get('/organizations/:id', optionalAuth, async (req, res) => {
+router.get('/organizations/:id', verifyToken, async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -266,6 +301,10 @@ router.get('/organizations/:id', optionalAuth, async (req, res) => {
     }
     
     const userId = req.user?.id || req.user?._id || req.user?.userId;
+    
+    if (!userId) {
+      return res.status(401).json({ ok: false, error: 'Authentication required' });
+    }
     
     const org = await ChurchOrg.findById(id)
       .populate('leader', 'name username profilePicture bio')
@@ -277,11 +316,19 @@ router.get('/organizations/:id', optionalAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Organization not found' });
     }
     
-    let userRole = null, canManage = false;
-    if (userId) {
-      userRole = await getUserRole(userId, org._id);
-      canManage = ['owner', 'admin', 'assistant'].includes(userRole);
+    // Check user's role
+    const userRole = await getUserRole(userId, org._id);
+    
+    // SECURITY: User must be associated with this org
+    if (!userRole) {
+      return res.status(403).json({ 
+        ok: false, 
+        error: 'You do not have access to this organization',
+        hint: 'You must be a member, admin, or leader to view this organization'
+      });
     }
+    
+    const canManage = ['owner', 'admin', 'assistant'].includes(userRole);
     
     const children = await ChurchOrg.find({ parent: org._id, isActive: true })
       .populate('leader', 'name username profilePicture')
@@ -295,37 +342,56 @@ router.get('/organizations/:id', optionalAuth, async (req, res) => {
     
     const orgData = org.toObject();
     
-    // Hide sensitive data for non-managers
-    if (userRole && !canManage) {
+    // SECURITY: Hide sensitive data for regular members
+    if (!canManage) {
+      // Remove admin-only fields
       delete orgData.admins;
+      delete orgData.settings;
+      delete orgData.contact?.email; // Hide contact email
+      
+      // Only show basic member info (not contact details)
       if (orgData.members) {
         orgData.members = orgData.members.map(m => ({
-          user: m.user,
+          user: { 
+            _id: m.user?._id,
+            name: m.user?.name,
+            username: m.user?.username,
+            profilePicture: m.user?.profilePicture
+          },
           role: m.role,
           joinedAt: m.joinedAt
+          // Hide: email, phone, notes
         }));
       }
     }
     
+    const permissions = {
+      canEdit: canManage,
+      canDelete: userRole === 'owner',
+      canAddMembers: canManage,
+      canRemoveMembers: canManage,
+      canEditMembers: canManage,
+      canExport: canManage,
+      canViewSettings: canManage,
+      canViewAnalytics: canManage,
+      canCreateSubOrg: canManage,
+      canManageFoundationSchool: canManage,
+      canRecordAttendance: canManage,
+      isOwner: userRole === 'owner',
+      isAdmin: ['owner', 'admin'].includes(userRole),
+      isAssistant: userRole === 'assistant',
+      isMember: true // They passed the access check
+    };
+    
     res.json({
       ok: true,
-      org: { ...orgData, userRole, canManage },
-      organization: { ...orgData, userRole, canManage },
+      org: { ...orgData, userRole, canManage, permissions },
+      organization: { ...orgData, userRole, canManage, permissions },
       children,
       recentSouls,
       userRole,
       canManage,
-      permissions: {
-        canEdit: canManage,
-        canDelete: userRole === 'owner',
-        canAddMembers: canManage,
-        canRemoveMembers: canManage,
-        canViewAnalytics: canManage,
-        canCreateSubOrg: canManage,
-        isOwner: userRole === 'owner',
-        isAdmin: ['owner', 'admin'].includes(userRole),
-        isMember: userRole !== null
-      }
+      permissions
     });
   } catch (err) {
     console.error('Get org error:', err);
@@ -392,6 +458,256 @@ router.delete('/organizations/:id', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// MEMBER MANAGEMENT ROUTES (with authorization)
+// ==========================================
+
+// GET /organizations/:id/members - Get members (with role-based filtering)
+router.get('/organizations/:id/members', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id } = req.params;
+    const { page = 1, limit = 20, search, role, status } = req.query;
+    
+    const userRole = await getUserRole(userId, id);
+    if (!userRole) {
+      return res.status(403).json({ ok: false, error: 'Access denied' });
+    }
+    
+    const canManage = ['owner', 'admin', 'assistant'].includes(userRole);
+    
+    const org = await ChurchOrg.findById(id)
+      .populate('members.user', 'name username profilePicture email phone')
+      .lean();
+    
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    let members = org.members || [];
+    
+    // Filter by search
+    if (search) {
+      const searchLower = search.toLowerCase();
+      members = members.filter(m => 
+        m.user?.name?.toLowerCase().includes(searchLower) ||
+        m.user?.username?.toLowerCase().includes(searchLower) ||
+        m.user?.email?.toLowerCase().includes(searchLower)
+      );
+    }
+    
+    // Filter by role
+    if (role) {
+      members = members.filter(m => m.role === role);
+    }
+    
+    // Filter by status
+    if (status) {
+      members = members.filter(m => m.status === status);
+    }
+    
+    // SECURITY: Hide sensitive contact info for regular members
+    if (!canManage) {
+      members = members.map(m => ({
+        user: {
+          _id: m.user?._id,
+          name: m.user?.name,
+          username: m.user?.username,
+          profilePicture: m.user?.profilePicture
+        },
+        role: m.role,
+        joinedAt: m.joinedAt,
+        status: m.status
+      }));
+    }
+    
+    // Pagination
+    const total = members.length;
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const paginatedMembers = members.slice(startIndex, startIndex + parseInt(limit));
+    
+    res.json({
+      ok: true,
+      members: paginatedMembers,
+      pagination: { page: parseInt(page), limit: parseInt(limit), total },
+      canManage,
+      userRole
+    });
+  } catch (err) {
+    console.error('Get members error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /organizations/:id/members - Add member (admin only)
+router.post('/organizations/:id/members', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id } = req.params;
+    const { memberId, role = 'member', email, phone, notes } = req.body;
+    
+    // Check authorization
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only admins can add members' });
+    }
+    
+    if (!memberId) {
+      return res.status(400).json({ ok: false, error: 'Member ID is required' });
+    }
+    
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    // Check if already a member
+    const existingMember = org.members?.find(m => m.user?.toString() === memberId);
+    if (existingMember) {
+      return res.status(400).json({ ok: false, error: 'User is already a member' });
+    }
+    
+    // Add member
+    org.members.push({
+      user: memberId,
+      role: role,
+      joinedAt: new Date(),
+      status: 'active',
+      email,
+      phone,
+      notes,
+      addedBy: userId
+    });
+    org.memberCount = org.members.length;
+    await org.save();
+    
+    console.log(`👥 Member added to ${org.name} by ${userId}`);
+    
+    res.json({ ok: true, message: 'Member added', memberCount: org.memberCount });
+  } catch (err) {
+    console.error('Add member error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /organizations/:id/members/:memberId - Update member (admin only)
+router.put('/organizations/:id/members/:memberId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id, memberId } = req.params;
+    const { role, status, notes } = req.body;
+    
+    // Check authorization
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only admins can edit members' });
+    }
+    
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    const memberIndex = org.members?.findIndex(m => m.user?.toString() === memberId);
+    if (memberIndex === -1) {
+      return res.status(404).json({ ok: false, error: 'Member not found' });
+    }
+    
+    // Update member
+    if (role) org.members[memberIndex].role = role;
+    if (status) org.members[memberIndex].status = status;
+    if (notes !== undefined) org.members[memberIndex].notes = notes;
+    org.members[memberIndex].updatedAt = new Date();
+    org.members[memberIndex].updatedBy = userId;
+    
+    await org.save();
+    
+    res.json({ ok: true, message: 'Member updated' });
+  } catch (err) {
+    console.error('Update member error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /organizations/:id/members/:memberId - Remove member (admin only)
+router.delete('/organizations/:id/members/:memberId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id, memberId } = req.params;
+    
+    // Check authorization
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only owner/admin can remove members' });
+    }
+    
+    // Cannot remove yourself if you're the owner
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    if (org.leader?.toString() === memberId) {
+      return res.status(400).json({ ok: false, error: 'Cannot remove the owner' });
+    }
+    
+    // Remove member
+    org.members = org.members.filter(m => m.user?.toString() !== memberId);
+    org.memberCount = org.members.length;
+    
+    // Also remove from admins/assistants if present
+    org.admins = org.admins?.filter(a => a.toString() !== memberId);
+    org.assistantLeaders = org.assistantLeaders?.filter(a => a.toString() !== memberId);
+    
+    await org.save();
+    
+    console.log(`👥 Member ${memberId} removed from ${org.name} by ${userId}`);
+    
+    res.json({ ok: true, message: 'Member removed', memberCount: org.memberCount });
+  } catch (err) {
+    console.error('Remove member error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /organizations/:id/export - Export members (admin only)
+router.get('/organizations/:id/export', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id } = req.params;
+    
+    // Check authorization - ONLY admins can export
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only owner/admin can export data' });
+    }
+    
+    const org = await ChurchOrg.findById(id)
+      .populate('members.user', 'name username email phone')
+      .lean();
+    
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    // Format for export
+    const exportData = (org.members || []).map(m => ({
+      name: m.user?.name || '',
+      username: m.user?.username || '',
+      email: m.user?.email || m.email || '',
+      phone: m.user?.phone || m.phone || '',
+      role: m.role || 'member',
+      status: m.status || 'active',
+      joinedAt: m.joinedAt
+    }));
+    
+    res.json({ ok: true, data: exportData, total: exportData.length });
+  } catch (err) {
+    console.error('Export error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
 // LEGACY /org/* ROUTES
 // ==========================================
 
@@ -409,12 +725,24 @@ router.post('/org', verifyToken, async (req, res) => {
   return router.handle(req, res);
 });
 
-router.get('/org', optionalAuth, async (req, res) => {
+router.get('/org', verifyToken, async (req, res) => {
+  const userId = req.user?.id || req.user?._id || req.user?.userId;
   const { type, parentId, page = 1, limit = 20, search } = req.query;
-  const query = { isActive: true };
+  
+  // SECURITY: Only return user's organizations
+  const query = { 
+    $or: [
+      { leader: userId },
+      { createdBy: userId },
+      { admins: userId },
+      { assistantLeaders: userId },
+      { 'members.user': userId }
+    ],
+    isActive: true 
+  };
   if (type) query.type = type;
   if (parentId) query.parent = new ObjectId(parentId);
-  if (search) query.$or = [{ name: { $regex: search, $options: 'i' } }];
+  if (search) query.name = { $regex: search, $options: 'i' };
   
   const orgs = await ChurchOrg.find(query).populate('leader', 'name username profilePicture').sort({ name: 1 }).skip((page - 1) * limit).limit(parseInt(limit));
   const total = await ChurchOrg.countDocuments(query);
@@ -601,6 +929,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.0.0 loaded - with /organizations/* routes');
+console.log('⛪ Church Management routes v2.1.0 loaded - SECURE: Only user\'s organizations visible');
 
 module.exports = router;
