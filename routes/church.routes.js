@@ -1,12 +1,12 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 2.7.0 - Member update + Image upload fixes
+// VERSION: 2.8.0 - Direct /members routes for frontend
 // FIXES:
+//   - Added /members/:orgId/:memberId routes (frontend path)
 //   - PUT members accepts all personal fields
 //   - POST upload-logo and upload-cover endpoints
 //   - Leader name/title on create and edit
-//   - Cascading parent organization selection
 // ============================================
 
 const express = require('express');
@@ -1343,6 +1343,165 @@ router.put('/org/:id/members/:memberId', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// DIRECT MEMBER ROUTES (Frontend uses /church/members/:orgId/:memberId)
+// ==========================================
+
+// GET /members/:orgId - Get all members of an organization
+router.get('/members/:orgId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { orgId } = req.params;
+    
+    const userRole = await getUserRole(userId, orgId);
+    if (!userRole) {
+      return res.status(403).json({ ok: false, error: 'Access denied' });
+    }
+    
+    const org = await ChurchOrg.findById(orgId)
+      .populate('members.user', 'name username profilePicture email phone')
+      .lean();
+    
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    res.json({ ok: true, members: org.members || [] });
+  } catch (err) {
+    console.error('Get members error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /members/:orgId/:memberId - Get single member
+router.get('/members/:orgId/:memberId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { orgId, memberId } = req.params;
+    
+    const userRole = await getUserRole(userId, orgId);
+    if (!userRole) {
+      return res.status(403).json({ ok: false, error: 'Access denied' });
+    }
+    
+    const org = await ChurchOrg.findById(orgId)
+      .populate('members.user', 'name username profilePicture email phone')
+      .lean();
+    
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    const member = org.members?.find(m => 
+      m._id?.toString() === memberId || 
+      m.user?._id?.toString() === memberId ||
+      m.user?.toString() === memberId
+    );
+    
+    if (!member) {
+      return res.status(404).json({ ok: false, error: 'Member not found' });
+    }
+    
+    res.json({ ok: true, member });
+  } catch (err) {
+    console.error('Get member error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /members/:orgId/:memberId - Update member (THIS IS WHAT FRONTEND CALLS)
+router.put('/members/:orgId/:memberId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { orgId, memberId } = req.params;
+    
+    console.log(`📝 Updating member ${memberId} in org ${orgId}`);
+    
+    // Check authorization
+    const userRole = await getUserRole(userId, orgId);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only admins can edit members' });
+    }
+    
+    const org = await ChurchOrg.findById(orgId);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    // Find member by _id or user field (support both formats)
+    let memberIndex = org.members?.findIndex(m => 
+      m._id?.toString() === memberId || 
+      m.user?.toString() === memberId ||
+      (m.user?._id && m.user._id.toString() === memberId)
+    );
+    
+    if (memberIndex === -1 || memberIndex === undefined) {
+      console.log('❌ Member not found. memberId:', memberId);
+      console.log('   Available members:', org.members?.map(m => ({ _id: m._id?.toString(), user: m.user?.toString() })));
+      return res.status(404).json({ ok: false, error: 'Member not found in organization' });
+    }
+    
+    // Update all fields from request body
+    const member = org.members[memberIndex];
+    const updates = req.body;
+    
+    // Apply all updates
+    Object.keys(updates).forEach(key => {
+      if (updates[key] !== undefined && key !== '_id' && key !== 'user') {
+        member[key] = updates[key];
+      }
+    });
+    
+    member.updatedAt = new Date();
+    member.updatedBy = userId;
+    
+    await org.save();
+    
+    console.log(`✅ Updated member ${memberId} in org ${org.name}`);
+    
+    res.json({ ok: true, message: 'Member updated successfully', member });
+  } catch (err) {
+    console.error('Update member error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// DELETE /members/:orgId/:memberId - Remove member
+router.delete('/members/:orgId/:memberId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { orgId, memberId } = req.params;
+    
+    const userRole = await getUserRole(userId, orgId);
+    if (!['owner', 'admin'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only owner/admin can remove members' });
+    }
+    
+    const org = await ChurchOrg.findById(orgId);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    if (org.leader?.toString() === memberId) {
+      return res.status(400).json({ ok: false, error: 'Cannot remove the owner' });
+    }
+    
+    // Remove member
+    org.members = org.members.filter(m => 
+      m._id?.toString() !== memberId && 
+      m.user?.toString() !== memberId
+    );
+    org.memberCount = org.members.length;
+    
+    await org.save();
+    
+    res.json({ ok: true, message: 'Member removed' });
+  } catch (err) {
+    console.error('Delete member error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
 // SOULS ROUTES
 // ==========================================
 
@@ -1498,6 +1657,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.7.0 loaded - Member update + Image upload fixes');
+console.log('⛪ Church Management routes v2.8.0 loaded - Direct /members routes added');
 
 module.exports = router;
