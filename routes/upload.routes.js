@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/upload.routes.js
 // PURPOSE: File upload endpoints
-// VERSION: 1.1.0 - Fixed /api/upload endpoint
+// VERSION: 1.2.0 - Added /video endpoint
 // ============================================
 
 const express = require('express');
@@ -270,6 +270,79 @@ router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
   } catch (err) {
     console.error('❌ Cover upload error:', err);
     res.status(500).json({ ok: false, error: err.message || 'Cover upload failed' });
+  }
+});
+
+// ==========================================
+// UPLOAD VIDEO - POST /api/upload/video
+// ==========================================
+const videoUpload = multer({ 
+  storage,
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit for videos
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('video/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only video files allowed'), false);
+    }
+  }
+});
+
+router.post('/video', verifyToken, videoUpload.single('file'), async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    
+    let videoData;
+    
+    // Check if it's a file upload or URL
+    if (req.file) {
+      videoData = req.file.buffer;
+    } else if (req.body.videoUrl) {
+      // Video URL provided
+      console.log(`📤 Video URL provided: ${req.body.videoUrl}`);
+      return res.json({
+        ok: true,
+        url: req.body.videoUrl,
+        message: 'Video URL accepted'
+      });
+    } else {
+      return res.status(400).json({ ok: false, error: 'No video provided' });
+    }
+
+    console.log(`📤 Uploading video for user ${userId} (${req.file?.size} bytes)`);
+
+    const options = {
+      folder: 'cybev/videos',
+      resource_type: 'video',
+      public_id: `video-${userId}-${Date.now()}`,
+      chunk_size: 6000000, // 6MB chunks
+    };
+
+    // Add thumbnail generation
+    options.eager = [
+      { width: 300, height: 300, crop: 'fill', format: 'jpg' },
+      { width: 640, height: 360, crop: 'fill', format: 'jpg' }
+    ];
+    options.eager_async = true;
+
+    const result = await uploadToCloudinary(videoData, options);
+
+    console.log(`✅ Video upload successful: ${result.secure_url}`);
+
+    res.json({
+      ok: true,
+      url: result.secure_url,
+      publicId: result.public_id,
+      duration: result.duration,
+      format: result.format,
+      width: result.width,
+      height: result.height,
+      size: result.bytes,
+      thumbnail: result.eager?.[0]?.secure_url || null
+    });
+  } catch (err) {
+    console.error('❌ Video upload error:', err);
+    res.status(500).json({ ok: false, error: err.message || 'Video upload failed' });
   }
 });
 
