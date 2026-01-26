@@ -1,7 +1,7 @@
 // ============================================
 // FILE: church.model.js
 // PATH: cybev-backend-main/models/church.model.js
-// VERSION: 2.0.0 - Enhanced Member Management
+// VERSION: 2.1.0 - Added leaderName and leaderTitle fields
 // UPDATED: 2026-01-24
 // CHANGES:
 //   - Enhanced member schema with titles, profession, social links
@@ -154,6 +154,8 @@ const ChurchOrgSchema = new Schema({
   
   // Leadership
   leader: { type: Schema.Types.ObjectId, ref: 'User', index: true },
+  leaderName: { type: String, trim: true },      // Actual leader's full name (may differ from CYBEV account)
+  leaderTitle: { type: String, trim: true },     // Pastor, Deacon, Elder, Brother, Sister, etc.
   assistantLeaders: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   admins: [{ type: Schema.Types.ObjectId, ref: 'User' }],
   
