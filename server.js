@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.9.0 - Added missing live, webrtc, groups routes + follow/check endpoint
-// PREVIOUS: 7.8.0 - Creator Studio Followers Fix
+// VERSION: 7.9.1 - Fixed groups route path + added group-enhanced routes
+// PREVIOUS: 7.9.0 - Added missing live, webrtc, groups routes + follow/check endpoint
 // FIXES:
 //   - /api/users/me returns full stats
 //   - /api/blogs/my inline handler (before blog.routes)
@@ -1254,7 +1254,8 @@ const routes = [
   ['reels', '/api/reels', './routes/reels.routes'],
   ['live', '/api/live', './routes/live.routes'],
   ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
-  ['groups', '/api/groups', './routes/groups.routes'],
+  ['groups', '/api/groups', './routes/group.routes'],
+  ['groups-enhanced', '/api/groups', './routes/group-enhanced.routes'],
   
   // Websites & Blogs - SITES ROUTES ADDED
   ['sites', '/api/sites', './routes/sites.routes'],
