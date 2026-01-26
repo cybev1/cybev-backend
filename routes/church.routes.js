@@ -194,7 +194,7 @@ router.get('/organizations/available-parents', verifyToken, async (req, res) => 
     if (type) query.type = type;
     
     const orgs = await ChurchOrg.find(query)
-      .select('_id name type slug leader memberCount parent zone church')
+      .select('_id name type slug leader memberCount parent zone church leaderName leaderTitle')
       .populate('leader', 'name username')
       .sort({ type: 1, name: 1 });
     
@@ -345,7 +345,7 @@ router.get('/organizations/my', verifyToken, async (req, res) => {
 router.post('/organizations', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
-    const { name, type, description, motto, parentId, contact, meetingSchedule, colorTheme, structureMode } = req.body;
+    const { name, type, description, motto, parentId, contact, meetingSchedule, colorTheme, structureMode, leaderName, leaderTitle } = req.body;
     
     if (!name || !type) {
       return res.status(400).json({ ok: false, error: 'Name and type are required' });
@@ -387,6 +387,8 @@ router.post('/organizations', verifyToken, async (req, res) => {
       parent: parentId || null,
       zone, church,
       leader: userId,
+      leaderName: leaderName || '',      // Actual leader's name (may differ from CYBEV account)
+      leaderTitle: leaderTitle || '',    // e.g., Pastor, Deacon, Brother
       admins: [userId],
       members: [{
         user: userId,
@@ -401,7 +403,7 @@ router.post('/organizations', verifyToken, async (req, res) => {
     });
     
     await org.save();
-    console.log(`⛪ Created ${type}: ${name} by user ${userId}`);
+    console.log(`⛪ Created ${type}: ${name} by user ${userId}${leaderName ? ` (Leader: ${leaderTitle || ''} ${leaderName})` : ''}`);
     
     res.status(201).json({ ok: true, org, organization: org });
   } catch (err) {
@@ -660,7 +662,7 @@ router.put('/organizations/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Not authorized', yourRole: userRole });
     }
     
-    const { name, description, motto, contact, meetingSchedule, socialLinks, settings, logo, coverImage, colorTheme } = req.body;
+    const { name, description, motto, contact, meetingSchedule, socialLinks, settings, logo, coverImage, colorTheme, leaderName, leaderTitle } = req.body;
     
     const org = await ChurchOrg.findByIdAndUpdate(id, {
       $set: {
@@ -674,9 +676,15 @@ router.put('/organizations/:id', verifyToken, async (req, res) => {
         ...(logo && { logo }),
         ...(coverImage && { coverImage }),
         ...(colorTheme && { colorTheme }),
+        ...(leaderName !== undefined && { leaderName }),  // Actual leader's name
+        ...(leaderTitle !== undefined && { leaderTitle }), // e.g., Pastor, Deacon
         updatedAt: new Date()
       }
     }, { new: true }).populate('leader', 'name username profilePicture');
+    
+    if (leaderName !== undefined || leaderTitle !== undefined) {
+      console.log(`⛪ Updated leader info for ${org.name}: ${leaderTitle || ''} ${leaderName || ''}`);
+    }
     
     res.json({ ok: true, org, organization: org });
   } catch (err) {
@@ -1204,6 +1212,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.5.0 loaded - Cascading parent selection');
+console.log('⛪ Church Management routes v2.6.0 loaded - Leader name + title support');
 
 module.exports = router;
