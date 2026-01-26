@@ -1520,21 +1520,21 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.8.0
-  Creator Studio Followers Fix
+  CYBEV API Server v7.9.1
+  Live Streaming & Groups Fix
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.8.0 Fixes:
-  ✅ Creator Studio uses getUserStats() for followers
-  ✅ /api/blogs/my returns correct followersCount
-  ✅ /api/sites/my returns correct followersCount
+  v7.9.1 Fixes:
+  ✅ Added /api/live routes (live streaming)
+  ✅ Added /api/webrtc routes (device streaming)
+  ✅ Added /api/groups routes (communities)
+  ✅ Added /api/follow/check/:userId endpoint
   
-  v7.7.0 Fixes:
-  ✅ Feed combines Posts + Blogs (62 items)
-  ✅ hasMore pagination working
+  v7.8.0 Fixes:
+  ✅ Creator Studio followers count
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
