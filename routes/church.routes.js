@@ -1,14 +1,12 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 2.4.0 - Fixed backward compatibility
+// VERSION: 2.4.0 - ALL orgs available as parents
 // FIXES:
-//   - Handle missing isActive field (existing orgs)
-//   - Handle populated vs ObjectId leader field
-//   - Check 'owner' field in addition to 'leader'
-//   - Check 'leader._id' for populated documents
-//   - Admin users can see all organizations
-//   - Improved getUserRole() for all data formats
+//   - /organizations/available-parents shows ALL active orgs
+//   - Create page can select ANY existing org as parent
+//   - Dashboard shows only user's orgs (or all for admins)
+//   - ObjectId vs string comparison fixed
 // ============================================
 
 const express = require('express');
@@ -127,17 +125,12 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     
-    // Get user's existing organizations that can be parents
-    const userOrgs = await ChurchOrg.find({
-      $or: [
-        { leader: userId },
-        { createdBy: userId },
-        { admins: userId }
-      ],
-      isActive: true
-    })
-    .select('_id name type slug')
-    .sort({ type: 1, name: 1 });
+    // Get ALL active organizations that can be parents (not just user's own)
+    // This allows users to create organizations under existing ones
+    const allOrgs = await ChurchOrg.find({ isActive: true })
+      .select('_id name type slug leader')
+      .populate('leader', 'name username')
+      .sort({ type: 1, name: 1 });
     
     // Valid organization types with hierarchy info
     const validTypes = [
@@ -170,7 +163,7 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
       isNew: true,
       formData: {
         validTypes,
-        parentOptions: userOrgs,
+        parentOptions: allOrgs, // ALL organizations, not just user's
         colorThemes,
         defaults: {
           type: 'church',
@@ -178,7 +171,7 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
         }
       },
       validTypes: validTypes.map(t => t.value),
-      parentOrganizations: userOrgs,
+      parentOrganizations: allOrgs, // ALL organizations available as parents
       // Permissions for create page
       permissions: {
         canEdit: true,
@@ -191,21 +184,51 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
   }
 });
 
+// GET /organizations/available-parents - List ALL organizations available as parents
+// This is used by the create form to show all orgs users can build under
+router.get('/organizations/available-parents', verifyToken, async (req, res) => {
+  try {
+    const { type } = req.query; // Optional: filter by type
+    
+    const query = { isActive: true };
+    if (type) query.type = type;
+    
+    const orgs = await ChurchOrg.find(query)
+      .select('_id name type slug leader memberCount')
+      .populate('leader', 'name username')
+      .sort({ type: 1, name: 1 });
+    
+    // Group by type for easier frontend consumption
+    const grouped = {
+      zones: orgs.filter(o => o.type === 'zone'),
+      churches: orgs.filter(o => o.type === 'church'),
+      fellowships: orgs.filter(o => o.type === 'fellowship'),
+      cells: orgs.filter(o => o.type === 'cell'),
+      biblestudies: orgs.filter(o => o.type === 'biblestudy')
+    };
+    
+    res.json({ 
+      ok: true, 
+      organizations: orgs,
+      grouped,
+      total: orgs.length
+    });
+  } catch (err) {
+    console.error('Get available parents error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // GET /org/create - Legacy route (same as above)
 router.get('/org/create', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     
-    const userOrgs = await ChurchOrg.find({
-      $or: [
-        { leader: userId },
-        { createdBy: userId },
-        { admins: userId }
-      ],
-      isActive: true
-    })
-    .select('_id name type slug')
-    .sort({ type: 1, name: 1 });
+    // Get ALL active organizations (not just user's own)
+    const allOrgs = await ChurchOrg.find({ isActive: true })
+      .select('_id name type slug leader')
+      .populate('leader', 'name username')
+      .sort({ type: 1, name: 1 });
     
     const validTypes = [
       { value: 'zone', label: 'Zone', level: 0 },
@@ -232,11 +255,11 @@ router.get('/org/create', verifyToken, async (req, res) => {
       isNew: true,
       formData: {
         validTypes,
-        parentOptions: userOrgs,
+        parentOptions: allOrgs,
         colorThemes: ['purple', 'blue', 'green', 'red', 'orange', 'pink', 'teal', 'indigo']
       },
       validTypes: validTypes.map(t => t.value),
-      parentOrganizations: userOrgs,
+      parentOrganizations: allOrgs,
       permissions: { canEdit: true, canCreate: true }
     });
   } catch (err) {
@@ -1179,6 +1202,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.3.0 loaded - ObjectId fix + Admin access');
+console.log('⛪ Church Management routes v2.4.0 loaded - ALL orgs available as parents');
 
 module.exports = router;
