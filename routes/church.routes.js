@@ -1,12 +1,12 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 2.4.0 - ALL orgs available as parents
+// VERSION: 2.7.0 - Member update + Image upload fixes
 // FIXES:
-//   - /organizations/available-parents shows ALL active orgs
-//   - Create page can select ANY existing org as parent
-//   - Dashboard shows only user's orgs (or all for admins)
-//   - ObjectId vs string comparison fixed
+//   - PUT members accepts all personal fields
+//   - POST upload-logo and upload-cover endpoints
+//   - Leader name/title on create and edit
+//   - Cascading parent organization selection
 // ============================================
 
 const express = require('express');
@@ -715,6 +715,165 @@ router.delete('/organizations/:id', verifyToken, async (req, res) => {
   }
 });
 
+// POST /organizations/:id/upload-logo - Upload organization logo
+router.post('/organizations/:id/upload-logo', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id } = req.params;
+    const { image, logo, url } = req.body; // Accept base64 image or URL
+    
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+    
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    let logoUrl = url || logo || image;
+    
+    // If it's a base64 image, upload to Cloudinary
+    if (logoUrl && logoUrl.startsWith('data:image')) {
+      try {
+        const cloudinary = require('cloudinary').v2;
+        const result = await cloudinary.uploader.upload(logoUrl, {
+          folder: 'church-logos',
+          public_id: `org-${id}-logo`,
+          overwrite: true,
+          transformation: [{ width: 400, height: 400, crop: 'fill' }]
+        });
+        logoUrl = result.secure_url;
+      } catch (uploadErr) {
+        console.error('Cloudinary upload error:', uploadErr);
+        return res.status(500).json({ ok: false, error: 'Failed to upload image' });
+      }
+    }
+    
+    org.logo = logoUrl;
+    org.updatedAt = new Date();
+    await org.save();
+    
+    console.log(`✅ Updated logo for ${org.name}`);
+    res.json({ ok: true, logo: logoUrl, message: 'Logo updated' });
+  } catch (err) {
+    console.error('Upload logo error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /organizations/:id/upload-cover - Upload organization cover image
+router.post('/organizations/:id/upload-cover', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id } = req.params;
+    const { image, coverImage, url } = req.body;
+    
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+    
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    let coverUrl = url || coverImage || image;
+    
+    // If it's a base64 image, upload to Cloudinary
+    if (coverUrl && coverUrl.startsWith('data:image')) {
+      try {
+        const cloudinary = require('cloudinary').v2;
+        const result = await cloudinary.uploader.upload(coverUrl, {
+          folder: 'church-covers',
+          public_id: `org-${id}-cover`,
+          overwrite: true,
+          transformation: [{ width: 1200, height: 400, crop: 'fill' }]
+        });
+        coverUrl = result.secure_url;
+      } catch (uploadErr) {
+        console.error('Cloudinary upload error:', uploadErr);
+        return res.status(500).json({ ok: false, error: 'Failed to upload image' });
+      }
+    }
+    
+    org.coverImage = coverUrl;
+    org.updatedAt = new Date();
+    await org.save();
+    
+    console.log(`✅ Updated cover for ${org.name}`);
+    res.json({ ok: true, coverImage: coverUrl, message: 'Cover image updated' });
+  } catch (err) {
+    console.error('Upload cover error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /organizations/:id/images - Update both logo and cover at once
+router.put('/organizations/:id/images', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id } = req.params;
+    const { logo, coverImage } = req.body;
+    
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+    
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    const cloudinary = require('cloudinary').v2;
+    
+    // Upload logo if base64
+    if (logo && logo.startsWith('data:image')) {
+      try {
+        const result = await cloudinary.uploader.upload(logo, {
+          folder: 'church-logos',
+          public_id: `org-${id}-logo`,
+          overwrite: true,
+          transformation: [{ width: 400, height: 400, crop: 'fill' }]
+        });
+        org.logo = result.secure_url;
+      } catch (e) {
+        console.error('Logo upload error:', e);
+      }
+    } else if (logo) {
+      org.logo = logo;
+    }
+    
+    // Upload cover if base64
+    if (coverImage && coverImage.startsWith('data:image')) {
+      try {
+        const result = await cloudinary.uploader.upload(coverImage, {
+          folder: 'church-covers',
+          public_id: `org-${id}-cover`,
+          overwrite: true,
+          transformation: [{ width: 1200, height: 400, crop: 'fill' }]
+        });
+        org.coverImage = result.secure_url;
+      } catch (e) {
+        console.error('Cover upload error:', e);
+      }
+    } else if (coverImage) {
+      org.coverImage = coverImage;
+    }
+    
+    org.updatedAt = new Date();
+    await org.save();
+    
+    res.json({ ok: true, logo: org.logo, coverImage: org.coverImage, message: 'Images updated' });
+  } catch (err) {
+    console.error('Update images error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // ==========================================
 // MEMBER MANAGEMENT ROUTES (with authorization)
 // ==========================================
@@ -852,7 +1011,6 @@ router.put('/organizations/:id/members/:memberId', verifyToken, async (req, res)
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     const { id, memberId } = req.params;
-    const { role, status, notes } = req.body;
     
     // Check authorization
     const userRole = await getUserRole(userId, id);
@@ -865,21 +1023,90 @@ router.put('/organizations/:id/members/:memberId', verifyToken, async (req, res)
       return res.status(404).json({ ok: false, error: 'Organization not found' });
     }
     
-    const memberIndex = org.members?.findIndex(m => m.user?.toString() === memberId);
-    if (memberIndex === -1) {
-      return res.status(404).json({ ok: false, error: 'Member not found' });
+    // Find member by _id or user field (support both formats)
+    let memberIndex = org.members?.findIndex(m => 
+      m._id?.toString() === memberId || 
+      m.user?.toString() === memberId ||
+      (m.user?._id && m.user._id.toString() === memberId)
+    );
+    
+    if (memberIndex === -1 || memberIndex === undefined) {
+      console.log('Member not found. memberId:', memberId, 'members:', org.members?.map(m => ({ _id: m._id, user: m.user })));
+      return res.status(404).json({ ok: false, error: 'Member not found in organization' });
     }
     
-    // Update member
-    if (role) org.members[memberIndex].role = role;
-    if (status) org.members[memberIndex].status = status;
-    if (notes !== undefined) org.members[memberIndex].notes = notes;
-    org.members[memberIndex].updatedAt = new Date();
-    org.members[memberIndex].updatedBy = userId;
+    // Extract all possible fields from request body
+    const {
+      role, status, notes,
+      // Personal info
+      title, firstName, lastName, name,
+      phone, whatsapp, email,
+      gender, dob, dateOfBirth,
+      maritalStatus, anniversary,
+      // Address
+      address, city, state, country,
+      // Church info
+      department, cellGroup, serviceUnit,
+      // Spiritual info
+      baptized, baptismDate, savedDate, foundationSchool, foundationSchoolDate,
+      // Professional
+      occupation, employer, skills
+    } = req.body;
+    
+    // Update member fields
+    const member = org.members[memberIndex];
+    
+    // Role and status
+    if (role) member.role = role;
+    if (status) member.status = status;
+    if (notes !== undefined) member.notes = notes;
+    
+    // Personal info
+    if (title !== undefined) member.title = title;
+    if (firstName !== undefined) member.firstName = firstName;
+    if (lastName !== undefined) member.lastName = lastName;
+    if (name !== undefined) member.name = name;
+    if (phone !== undefined) member.phone = phone;
+    if (whatsapp !== undefined) member.whatsapp = whatsapp;
+    if (email !== undefined) member.email = email;
+    if (gender !== undefined) member.gender = gender;
+    if (dob !== undefined) member.dob = dob;
+    if (dateOfBirth !== undefined) member.dateOfBirth = dateOfBirth;
+    if (maritalStatus !== undefined) member.maritalStatus = maritalStatus;
+    if (anniversary !== undefined) member.anniversary = anniversary;
+    
+    // Address
+    if (address !== undefined) member.address = address;
+    if (city !== undefined) member.city = city;
+    if (state !== undefined) member.state = state;
+    if (country !== undefined) member.country = country;
+    
+    // Church info
+    if (department !== undefined) member.department = department;
+    if (cellGroup !== undefined) member.cellGroup = cellGroup;
+    if (serviceUnit !== undefined) member.serviceUnit = serviceUnit;
+    
+    // Spiritual info
+    if (baptized !== undefined) member.baptized = baptized;
+    if (baptismDate !== undefined) member.baptismDate = baptismDate;
+    if (savedDate !== undefined) member.savedDate = savedDate;
+    if (foundationSchool !== undefined) member.foundationSchool = foundationSchool;
+    if (foundationSchoolDate !== undefined) member.foundationSchoolDate = foundationSchoolDate;
+    
+    // Professional
+    if (occupation !== undefined) member.occupation = occupation;
+    if (employer !== undefined) member.employer = employer;
+    if (skills !== undefined) member.skills = skills;
+    
+    // Metadata
+    member.updatedAt = new Date();
+    member.updatedBy = userId;
     
     await org.save();
     
-    res.json({ ok: true, message: 'Member updated' });
+    console.log(`✅ Updated member ${memberId} in org ${org.name}`);
+    
+    res.json({ ok: true, message: 'Member updated successfully', member });
   } catch (err) {
     console.error('Update member error:', err);
     res.status(500).json({ ok: false, error: err.message });
@@ -1051,9 +1278,68 @@ router.put('/org/:id', verifyToken, async (req, res) => {
   if (!await canManageOrg(userId, req.params.id)) {
     return res.status(403).json({ ok: false, error: 'Not authorized' });
   }
-  const { name, description } = req.body;
-  const org = await ChurchOrg.findByIdAndUpdate(req.params.id, { $set: { name, description, updatedAt: new Date() } }, { new: true });
+  const { name, description, motto, contact, colorTheme, leaderName, leaderTitle, logo, coverImage } = req.body;
+  const updateFields = { updatedAt: new Date() };
+  if (name) updateFields.name = name;
+  if (description !== undefined) updateFields.description = description;
+  if (motto !== undefined) updateFields.motto = motto;
+  if (contact) updateFields.contact = contact;
+  if (colorTheme) updateFields.colorTheme = colorTheme;
+  if (leaderName !== undefined) updateFields.leaderName = leaderName;
+  if (leaderTitle !== undefined) updateFields.leaderTitle = leaderTitle;
+  if (logo) updateFields.logo = logo;
+  if (coverImage) updateFields.coverImage = coverImage;
+  
+  const org = await ChurchOrg.findByIdAndUpdate(req.params.id, { $set: updateFields }, { new: true });
   res.json({ ok: true, org });
+});
+
+// PUT /org/:id/members/:memberId - Legacy member update
+router.put('/org/:id/members/:memberId', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { id, memberId } = req.params;
+    
+    const userRole = await getUserRole(userId, id);
+    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
+      return res.status(403).json({ ok: false, error: 'Only admins can edit members' });
+    }
+    
+    const org = await ChurchOrg.findById(id);
+    if (!org) {
+      return res.status(404).json({ ok: false, error: 'Organization not found' });
+    }
+    
+    // Find member by _id or user field
+    let memberIndex = org.members?.findIndex(m => 
+      m._id?.toString() === memberId || 
+      m.user?.toString() === memberId ||
+      (m.user?._id && m.user._id.toString() === memberId)
+    );
+    
+    if (memberIndex === -1 || memberIndex === undefined) {
+      return res.status(404).json({ ok: false, error: 'Member not found' });
+    }
+    
+    // Update all fields from request body
+    const member = org.members[memberIndex];
+    const updates = req.body;
+    
+    Object.keys(updates).forEach(key => {
+      if (updates[key] !== undefined) {
+        member[key] = updates[key];
+      }
+    });
+    
+    member.updatedAt = new Date();
+    member.updatedBy = userId;
+    
+    await org.save();
+    res.json({ ok: true, message: 'Member updated', member });
+  } catch (err) {
+    console.error('Legacy member update error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 // ==========================================
@@ -1212,6 +1498,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.6.0 loaded - Leader name + title support');
+console.log('⛪ Church Management routes v2.7.0 loaded - Member update + Image upload fixes');
 
 module.exports = router;
