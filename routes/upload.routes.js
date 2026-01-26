@@ -369,6 +369,6 @@ router.delete('/:publicId', verifyToken, async (req, res) => {
   }
 });
 
-console.log('📤 Upload routes v1.1.0 loaded');
+console.log('📤 Upload routes v1.2.0 loaded');
 
 module.exports = router;
