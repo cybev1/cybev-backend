@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.8.0 - Creator Studio Followers Fix
-// PREVIOUS: 7.3.0 - Church Registration Links
+// VERSION: 7.9.0 - Added missing live, webrtc, groups routes + follow/check endpoint
+// PREVIOUS: 7.8.0 - Creator Studio Followers Fix
 // FIXES:
 //   - /api/users/me returns full stats
 //   - /api/blogs/my inline handler (before blog.routes)
@@ -1107,6 +1107,38 @@ app.get('/api/follow/stats', authMiddleware, async (req, res) => {
   }
 });
 
+// GET /api/follow/check/:userId - Check if current user follows another user
+app.get('/api/follow/check/:userId', authMiddleware, async (req, res) => {
+  try {
+    const Follow = getModel('Follow');
+    const { userId } = req.params;
+    const currentUserId = req.user.userId || req.user.id || req.user._id;
+    
+    if (!userId || userId === 'undefined') {
+      return res.json({ ok: true, isFollowing: false });
+    }
+    
+    let isFollowing = false;
+    
+    if (Follow) {
+      const follow = await Follow.findOne({
+        $or: [
+          { follower: currentUserId, following: userId, status: 'active' },
+          { follower: currentUserId, followee: userId, status: 'active' },
+          { sourceUser: currentUserId, targetUser: userId, status: 'active' },
+          { user: currentUserId, following: userId, status: 'active' }
+        ]
+      });
+      isFollowing = !!follow;
+    }
+    
+    res.json({ ok: true, isFollowing, following: isFollowing });
+  } catch (err) {
+    console.error('/api/follow/check error:', err.message);
+    res.status(500).json({ ok: false, error: err.message, isFollowing: false });
+  }
+});
+
 // GET /api/posts/user/:userId - Get posts by user ID (for profile page)
 app.get('/api/posts/user/:userId', async (req, res) => {
   try {
@@ -1220,6 +1252,9 @@ const routes = [
   ['polls', '/api/polls', './routes/poll.routes'],
   ['reactions', '/api/reactions', './routes/reaction.routes'],
   ['reels', '/api/reels', './routes/reels.routes'],
+  ['live', '/api/live', './routes/live.routes'],
+  ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
+  ['groups', '/api/groups', './routes/groups.routes'],
   
   // Websites & Blogs - SITES ROUTES ADDED
   ['sites', '/api/sites', './routes/sites.routes'],
