@@ -190,11 +190,11 @@ router.get('/organizations/available-parents', verifyToken, async (req, res) => 
   try {
     const { type } = req.query; // Optional: filter by type
     
-    const query = { isActive: true };
+    const query = { isActive: { $ne: false } }; // Include orgs without isActive field
     if (type) query.type = type;
     
     const orgs = await ChurchOrg.find(query)
-      .select('_id name type slug leader memberCount')
+      .select('_id name type slug leader memberCount parent zone church')
       .populate('leader', 'name username')
       .sort({ type: 1, name: 1 });
     
@@ -206,6 +206,8 @@ router.get('/organizations/available-parents', verifyToken, async (req, res) => 
       cells: orgs.filter(o => o.type === 'cell'),
       biblestudies: orgs.filter(o => o.type === 'biblestudy')
     };
+    
+    console.log(`📋 Available parents: ${orgs.length} organizations`);
     
     res.json({ 
       ok: true, 
@@ -1202,6 +1204,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.4.0 loaded - ALL orgs available as parents');
+console.log('⛪ Church Management routes v2.5.0 loaded - Cascading parent selection');
 
 module.exports = router;
