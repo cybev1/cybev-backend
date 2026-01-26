@@ -1,7 +1,7 @@
 // ============================================
 // FILE: services/mux.service.js
 // Mux Live Streaming Service - OPTIMIZED
-// VERSION: 4.0 - Low Latency + High Quality
+// VERSION: 4.1 - Added isAvailable() function
 // ============================================
 
 const Mux = require('@mux/mux-node');
@@ -251,6 +251,13 @@ async function listLiveStreams(limit = 10) {
   }
 }
 
+/**
+ * Check if Mux service is available (credentials configured)
+ */
+function isAvailable() {
+  return !!(process.env.MUX_TOKEN_ID && process.env.MUX_TOKEN_SECRET);
+}
+
 module.exports = {
   createLiveStream,
   getLiveStream,
@@ -261,6 +268,7 @@ module.exports = {
   createPlaybackId,
   getPlaybackUrls,
   listLiveStreams,
+  isAvailable,
   muxClient,
   Video
 };
