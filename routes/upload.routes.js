@@ -1,35 +1,51 @@
 // ============================================
 // FILE: routes/upload.routes.js
 // PURPOSE: File upload endpoints
-// VERSION: 1.2.0 - Added /video endpoint
+// VERSION: 1.2.1 - Fixed auth middleware import
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const jwt = require('jsonwebtoken');
 
-// Import auth middleware
+// Import auth middleware with robust fallback
 let verifyToken;
+
+// Try different import paths
 try {
-  verifyToken = require('../middleware/auth').verifyToken;
-} catch (e) {
+  const authModule = require('../middleware/auth');
+  verifyToken = authModule.verifyToken || authModule.default || authModule;
+} catch (e1) {
   try {
-    verifyToken = require('../middleware/auth.middleware').verifyToken;
+    const authModule = require('../middleware/auth.middleware');
+    verifyToken = authModule.verifyToken || authModule.default || authModule;
   } catch (e2) {
-    // Fallback middleware
-    verifyToken = (req, res, next) => {
-      const token = req.headers.authorization?.split(' ')[1];
-      if (!token) return res.status(401).json({ ok: false, error: 'No token' });
-      try {
-        const jwt = require('jsonwebtoken');
-        req.user = jwt.verify(token, process.env.JWT_SECRET);
-        next();
-      } catch (err) {
-        res.status(401).json({ ok: false, error: 'Invalid token' });
-      }
-    };
+    try {
+      verifyToken = require('../middleware/verifyToken');
+    } catch (e3) {
+      // All imports failed
+    }
   }
+}
+
+// If still not a function, use inline middleware
+if (typeof verifyToken !== 'function') {
+  console.log('📤 Upload routes: Using inline auth middleware');
+  verifyToken = (req, res, next) => {
+    const token = req.headers.authorization?.split(' ')[1] || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) {
+      return res.status(401).json({ ok: false, error: 'No token provided' });
+    }
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+      req.user = decoded;
+      next();
+    } catch (err) {
+      return res.status(401).json({ ok: false, error: 'Invalid token' });
+    }
+  };
 }
 
 // Configure multer for memory storage
@@ -369,6 +385,6 @@ router.delete('/:publicId', verifyToken, async (req, res) => {
   }
 });
 
-console.log('📤 Upload routes v1.2.0 loaded');
+console.log('📤 Upload routes v1.2.1 loaded');
 
 module.exports = router;
