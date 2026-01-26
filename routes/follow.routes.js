@@ -1,7 +1,7 @@
 // ============================================
 // FILE: routes/follow.routes.js
 // Follow System API Routes
-// VERSION: 6.4.2 - Complete Facebook-like Follow System
+// VERSION: 6.4.3 - Added /check/:userId endpoint for frontend compatibility
 // ============================================
 
 const express = require('express');
@@ -78,6 +78,36 @@ const createNotification = async (userId, type, data) => {
 // ==========================================
 // FOLLOW / UNFOLLOW
 // ==========================================
+
+// GET /api/follow/check/:userId - Check if following (MUST BE BEFORE /:userId routes)
+router.get('/check/:userId', verifyToken, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const currentUserId = req.user.id;
+    
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.json({ ok: true, isFollowing: false, following: false });
+    }
+    
+    const Follow = getFollowModel();
+    
+    const following = await Follow.findOne({ 
+      follower: currentUserId, 
+      following: userId, 
+      status: 'active' 
+    });
+    
+    res.json({
+      ok: true,
+      isFollowing: !!following,
+      following: !!following
+    });
+    
+  } catch (error) {
+    console.error('Check follow error:', error);
+    res.json({ ok: true, isFollowing: false, following: false });
+  }
+});
 
 // POST /api/follow/:userId - Follow a user
 router.post('/:userId', verifyToken, async (req, res) => {
