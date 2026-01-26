@@ -1,50 +1,44 @@
 // ============================================
 // FILE: routes/upload.routes.js
-// File Upload API - Images, Videos, Documents
+// PURPOSE: File upload endpoints
+// VERSION: 1.1.0 - Fixed /api/upload endpoint
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const mongoose = require('mongoose');
+const cloudinary = require('cloudinary').v2;
 
-// Auth middleware
+// Import auth middleware
 let verifyToken;
 try {
-  verifyToken = require('../middleware/verifyToken');
+  verifyToken = require('../middleware/auth').verifyToken;
 } catch (e) {
-  try { verifyToken = require('../middleware/auth.middleware'); } catch (e2) {
-    try { verifyToken = require('../middleware/auth'); } catch (e3) {
-      verifyToken = (req, res, next) => {
-        const token = req.headers.authorization?.replace('Bearer ', '');
-        if (!token) return res.status(401).json({ error: 'No token' });
-        try {
-          const jwt = require('jsonwebtoken');
-          req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
-          next();
-        } catch { return res.status(401).json({ error: 'Invalid token' }); }
-      };
-    }
+  try {
+    verifyToken = require('../middleware/auth.middleware').verifyToken;
+  } catch (e2) {
+    // Fallback middleware
+    verifyToken = (req, res, next) => {
+      const token = req.headers.authorization?.split(' ')[1];
+      if (!token) return res.status(401).json({ ok: false, error: 'No token' });
+      try {
+        const jwt = require('jsonwebtoken');
+        req.user = jwt.verify(token, process.env.JWT_SECRET);
+        next();
+      } catch (err) {
+        res.status(401).json({ ok: false, error: 'Invalid token' });
+      }
+    };
   }
 }
 
-// Configure multer for memory storage (for cloud upload)
+// Configure multer for memory storage
 const storage = multer.memoryStorage();
-
-const upload = multer({
+const upload = multer({ 
   storage,
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB max
-  },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      'image/jpeg', 'image/png', 'image/gif', 'image/webp',
-      'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
-      'application/pdf'
-    ];
-    if (allowedTypes.includes(file.mimetype)) {
+    if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype === 'application/pdf') {
       cb(null, true);
     } else {
       cb(new Error('Invalid file type'), false);
@@ -52,353 +46,256 @@ const upload = multer({
   }
 });
 
-// Cloudinary setup (if available)
-let cloudinary;
-try {
-  cloudinary = require('cloudinary').v2;
-  if (process.env.CLOUDINARY_CLOUD_NAME) {
-    cloudinary.config({
-      cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-      api_key: process.env.CLOUDINARY_API_KEY,
-      api_secret: process.env.CLOUDINARY_API_SECRET
-    });
-    console.log('☁️ Cloudinary configured');
-  }
-} catch (e) {
-  console.log('⚠️ Cloudinary not available');
-}
-
-// ==========================================
-// Helper: Upload to Cloudinary
-// ==========================================
-async function uploadToCloudinary(buffer, options = {}) {
+// Helper function to upload to Cloudinary
+const uploadToCloudinary = (buffer, options = {}) => {
   return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        resource_type: options.resource_type || 'auto',
-        folder: options.folder || 'cybev',
-        ...options
-      },
-      (error, result) => {
-        if (error) reject(error);
-        else resolve(result);
-      }
-    );
-    uploadStream.end(buffer);
+    const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
+      if (error) reject(error);
+      else resolve(result);
+    });
+    stream.end(buffer);
   });
-}
+};
 
 // ==========================================
-// POST /api/upload/image - Upload image
+// MAIN UPLOAD ENDPOINT - POST /api/upload
 // ==========================================
-router.post('/image', verifyToken, upload.single('file'), async (req, res) => {
+router.post('/', verifyToken, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
-    }
-
-    console.log(`📷 Image upload: ${req.file.originalname} (${(req.file.size / 1024).toFixed(1)}KB)`);
-
-    let url;
+    console.log('📤 Upload request received');
     
-    if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
-      // Upload to Cloudinary
-      const result = await uploadToCloudinary(req.file.buffer, {
-        folder: 'cybev/images',
-        resource_type: 'image'
-      });
-      url = result.secure_url;
-    } else {
-      // Fallback: Return base64 data URL (not recommended for production)
-      const base64 = req.file.buffer.toString('base64');
-      url = `data:${req.file.mimetype};base64,${base64}`;
+    if (!req.file) {
+      return res.status(400).json({ ok: false, error: 'No file uploaded' });
     }
+
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const { folder = 'uploads', type = 'image' } = req.body;
+
+    console.log(`📤 Uploading file: ${req.file.originalname} (${req.file.size} bytes) for user ${userId}`);
+
+    // Determine resource type
+    let resourceType = 'image';
+    if (req.file.mimetype.startsWith('video/')) {
+      resourceType = 'video';
+    } else if (req.file.mimetype === 'application/pdf') {
+      resourceType = 'raw';
+    }
+
+    // Upload options
+    const options = {
+      folder: `cybev/${folder}`,
+      resource_type: resourceType,
+      public_id: `${userId}-${Date.now()}`,
+    };
+
+    // Add transformations for images
+    if (resourceType === 'image') {
+      if (type === 'avatar' || type === 'profile') {
+        options.transformation = [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }];
+      } else if (type === 'cover') {
+        options.transformation = [{ width: 1200, height: 400, crop: 'fill' }];
+      } else if (type === 'thumbnail') {
+        options.transformation = [{ width: 300, height: 300, crop: 'fill' }];
+      }
+    }
+
+    const result = await uploadToCloudinary(req.file.buffer, options);
+
+    console.log(`✅ Upload successful: ${result.secure_url}`);
 
     res.json({
-      success: true,
-      url,
-      filename: req.file.originalname,
-      size: req.file.size,
-      mimetype: req.file.mimetype
+      ok: true,
+      url: result.secure_url,
+      publicId: result.public_id,
+      format: result.format,
+      width: result.width,
+      height: result.height,
+      size: result.bytes,
+      resourceType: result.resource_type
     });
-
-  } catch (error) {
-    console.error('Image upload error:', error);
-    res.status(500).json({ success: false, error: 'Upload failed: ' + error.message });
+  } catch (err) {
+    console.error('❌ Upload error:', err);
+    res.status(500).json({ ok: false, error: err.message || 'Upload failed' });
   }
 });
 
 // ==========================================
-// POST /api/upload/video - Upload video
+// UPLOAD IMAGE (base64) - POST /api/upload/image
 // ==========================================
-router.post('/video', verifyToken, upload.single('file'), async (req, res) => {
+router.post('/image', verifyToken, async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    const { image, folder = 'images', type = 'image' } = req.body;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
+
+    if (!image) {
+      return res.status(400).json({ ok: false, error: 'No image provided' });
     }
 
-    console.log(`🎬 Video upload: ${req.file.originalname} (${(req.file.size / (1024 * 1024)).toFixed(1)}MB)`);
+    console.log(`📤 Uploading base64 image for user ${userId}`);
 
-    let url, thumbnailUrl;
-    
-    if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
-      // Upload to Cloudinary
-      const result = await uploadToCloudinary(req.file.buffer, {
-        folder: 'cybev/videos',
-        resource_type: 'video',
-        eager: [{ format: 'jpg', transformation: [{ width: 400, height: 400, crop: 'fill' }] }]
-      });
-      
-      url = result.secure_url;
-      thumbnailUrl = result.eager?.[0]?.secure_url || result.secure_url.replace(/\.[^.]+$/, '.jpg');
-      
-      console.log(`✅ Video uploaded: ${url}`);
-    } else {
-      // No cloud storage - return error with helpful message
-      return res.status(503).json({
-        success: false,
-        error: 'Video storage not configured. Please set up Cloudinary.',
-        hint: 'Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET to environment'
-      });
+    const options = {
+      folder: `cybev/${folder}`,
+      public_id: `${userId}-${Date.now()}`,
+    };
+
+    if (type === 'avatar' || type === 'profile') {
+      options.transformation = [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }];
+    } else if (type === 'cover') {
+      options.transformation = [{ width: 1200, height: 400, crop: 'fill' }];
     }
+
+    const result = await cloudinary.uploader.upload(image, options);
+
+    console.log(`✅ Base64 upload successful: ${result.secure_url}`);
 
     res.json({
-      success: true,
-      url,
-      videoUrl: url,
-      thumbnailUrl,
-      filename: req.file.originalname,
-      size: req.file.size,
-      mimetype: req.file.mimetype
+      ok: true,
+      url: result.secure_url,
+      publicId: result.public_id
     });
-
-  } catch (error) {
-    console.error('Video upload error:', error);
-    res.status(500).json({ success: false, error: 'Upload failed: ' + error.message });
+  } catch (err) {
+    console.error('❌ Base64 upload error:', err);
+    res.status(500).json({ ok: false, error: err.message || 'Upload failed' });
   }
 });
 
 // ==========================================
-// POST /api/upload/profile - Upload profile picture
+// UPLOAD AVATAR - POST /api/upload/avatar
 // ==========================================
-router.post('/profile', verifyToken, upload.single('file'), async (req, res) => {
+router.post('/avatar', verifyToken, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
-    }
-
-    console.log(`👤 Profile upload for user: ${req.user.id}`);
-
-    let url;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
     
-    if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
-      const result = await uploadToCloudinary(req.file.buffer, {
-        folder: 'cybev/profiles',
-        resource_type: 'image',
-        transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }]
-      });
-      url = result.secure_url;
-      console.log(`☁️ Profile uploaded to Cloudinary: ${url}`);
+    let imageData;
+    
+    // Check if it's a file upload or base64
+    if (req.file) {
+      imageData = req.file.buffer;
+    } else if (req.body.image) {
+      imageData = req.body.image;
     } else {
-      const base64 = req.file.buffer.toString('base64');
-      url = `data:${req.file.mimetype};base64,${base64}`;
+      return res.status(400).json({ ok: false, error: 'No image provided' });
     }
+
+    console.log(`📤 Uploading avatar for user ${userId}`);
+
+    const options = {
+      folder: 'cybev/avatars',
+      public_id: `avatar-${userId}`,
+      overwrite: true,
+      transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }]
+    };
+
+    let result;
+    if (Buffer.isBuffer(imageData)) {
+      result = await uploadToCloudinary(imageData, options);
+    } else {
+      result = await cloudinary.uploader.upload(imageData, options);
+    }
+
+    console.log(`✅ Avatar upload successful: ${result.secure_url}`);
 
     // Update user's profile picture in database
-    let updatedUser = null;
     try {
-      let User;
-      try { User = require('../models/user.model'); } catch (e) { User = mongoose.model('User'); }
-      
-      updatedUser = await User.findByIdAndUpdate(
-        req.user.id, 
-        { 
-          $set: { 
-            profilePicture: url,
-            avatar: url  // Also update avatar field for compatibility
-          }
-        },
-        { new: true }
-      ).select('-password -refreshToken');
-      
-      if (updatedUser) {
-        console.log(`✅ Profile picture saved to database for user ${req.user.id}`);
-      } else {
-        console.log(`⚠️ User not found: ${req.user.id}`);
-      }
-    } catch (e) {
-      console.error('Could not update user profile in DB:', e.message);
+      const User = require('../models/user.model');
+      await User.findByIdAndUpdate(userId, { 
+        profilePicture: result.secure_url,
+        avatar: result.secure_url 
+      });
+      console.log(`✅ User profile picture updated`);
+    } catch (dbErr) {
+      console.log('⚠️ Could not update user profile:', dbErr.message);
     }
 
     res.json({
-      success: true,
-      url,
-      user: updatedUser,
-      message: 'Profile picture uploaded successfully'
+      ok: true,
+      url: result.secure_url,
+      publicId: result.public_id
     });
-
-  } catch (error) {
-    console.error('Profile upload error:', error);
-    res.status(500).json({ success: false, error: 'Upload failed: ' + error.message });
+  } catch (err) {
+    console.error('❌ Avatar upload error:', err);
+    res.status(500).json({ ok: false, error: err.message || 'Avatar upload failed' });
   }
 });
 
 // ==========================================
-// POST /api/upload/cover - Upload cover image
+// UPLOAD COVER - POST /api/upload/cover
 // ==========================================
 router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
-    }
-
-    console.log(`🖼️ Cover upload for user: ${req.user.id}`);
-
-    let url;
+    const userId = req.user?.id || req.user?._id || req.user?.userId;
     
-    if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
-      const result = await uploadToCloudinary(req.file.buffer, {
-        folder: 'cybev/covers',
-        resource_type: 'image',
-        transformation: [{ width: 1200, height: 400, crop: 'fill' }]
-      });
-      url = result.secure_url;
-      console.log(`☁️ Cover uploaded to Cloudinary: ${url}`);
+    let imageData;
+    
+    if (req.file) {
+      imageData = req.file.buffer;
+    } else if (req.body.image) {
+      imageData = req.body.image;
     } else {
-      const base64 = req.file.buffer.toString('base64');
-      url = `data:${req.file.mimetype};base64,${base64}`;
+      return res.status(400).json({ ok: false, error: 'No image provided' });
     }
+
+    console.log(`📤 Uploading cover for user ${userId}`);
+
+    const options = {
+      folder: 'cybev/covers',
+      public_id: `cover-${userId}`,
+      overwrite: true,
+      transformation: [{ width: 1500, height: 500, crop: 'fill' }]
+    };
+
+    let result;
+    if (Buffer.isBuffer(imageData)) {
+      result = await uploadToCloudinary(imageData, options);
+    } else {
+      result = await cloudinary.uploader.upload(imageData, options);
+    }
+
+    console.log(`✅ Cover upload successful: ${result.secure_url}`);
 
     // Update user's cover image in database
-    let updatedUser = null;
     try {
-      let User;
-      try { User = require('../models/user.model'); } catch (e) { User = mongoose.model('User'); }
-      
-      updatedUser = await User.findByIdAndUpdate(
-        req.user.id, 
-        { $set: { coverImage: url } },
-        { new: true }
-      ).select('-password -refreshToken');
-      
-      if (updatedUser) {
-        console.log(`✅ Cover image saved to database for user ${req.user.id}`);
-      }
-    } catch (e) {
-      console.error('Could not update user cover in DB:', e.message);
+      const User = require('../models/user.model');
+      await User.findByIdAndUpdate(userId, { coverImage: result.secure_url });
+      console.log(`✅ User cover image updated`);
+    } catch (dbErr) {
+      console.log('⚠️ Could not update user cover:', dbErr.message);
     }
 
     res.json({
-      success: true,
-      url,
-      user: updatedUser,
-      message: 'Cover image uploaded successfully'
+      ok: true,
+      url: result.secure_url,
+      publicId: result.public_id
     });
-
-  } catch (error) {
-    console.error('Cover upload error:', error);
-    res.status(500).json({ success: false, error: 'Upload failed: ' + error.message });
+  } catch (err) {
+    console.error('❌ Cover upload error:', err);
+    res.status(500).json({ ok: false, error: err.message || 'Cover upload failed' });
   }
 });
 
 // ==========================================
-// POST /api/upload/document - Upload document
+// DELETE FILE - DELETE /api/upload/:publicId
 // ==========================================
-router.post('/document', verifyToken, upload.single('file'), async (req, res) => {
+router.delete('/:publicId', verifyToken, async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ success: false, error: 'No file uploaded' });
-    }
-
-    console.log(`📄 Document upload: ${req.file.originalname}`);
-
-    let url;
+    const { publicId } = req.params;
     
-    if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
-      const result = await uploadToCloudinary(req.file.buffer, {
-        folder: 'cybev/documents',
-        resource_type: 'raw'
-      });
-      url = result.secure_url;
+    console.log(`🗑️ Deleting file: ${publicId}`);
+    
+    const result = await cloudinary.uploader.destroy(publicId);
+    
+    if (result.result === 'ok') {
+      console.log(`✅ File deleted: ${publicId}`);
+      res.json({ ok: true, message: 'File deleted' });
     } else {
-      return res.status(503).json({
-        success: false,
-        error: 'Document storage not configured'
-      });
+      res.status(404).json({ ok: false, error: 'File not found' });
     }
-
-    res.json({
-      success: true,
-      url,
-      filename: req.file.originalname,
-      size: req.file.size
-    });
-
-  } catch (error) {
-    console.error('Document upload error:', error);
-    res.status(500).json({ success: false, error: 'Upload failed: ' + error.message });
+  } catch (err) {
+    console.error('❌ Delete error:', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// ==========================================
-// POST /api/upload/multiple - Upload multiple files
-// ==========================================
-router.post('/multiple', verifyToken, upload.array('files', 10), async (req, res) => {
-  try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).json({ success: false, error: 'No files uploaded' });
-    }
-
-    console.log(`📦 Multiple upload: ${req.files.length} files`);
-
-    const results = [];
-    
-    for (const file of req.files) {
-      let url;
-      
-      if (cloudinary && process.env.CLOUDINARY_CLOUD_NAME) {
-        const resourceType = file.mimetype.startsWith('video/') ? 'video' : 
-                           file.mimetype.startsWith('image/') ? 'image' : 'raw';
-        const result = await uploadToCloudinary(file.buffer, {
-          folder: 'cybev/uploads',
-          resource_type: resourceType
-        });
-        url = result.secure_url;
-      } else {
-        const base64 = file.buffer.toString('base64');
-        url = `data:${file.mimetype};base64,${base64}`;
-      }
-      
-      results.push({
-        url,
-        filename: file.originalname,
-        size: file.size,
-        mimetype: file.mimetype
-      });
-    }
-
-    res.json({
-      success: true,
-      files: results,
-      count: results.length
-    });
-
-  } catch (error) {
-    console.error('Multiple upload error:', error);
-    res.status(500).json({ success: false, error: 'Upload failed: ' + error.message });
-  }
-});
-
-// Error handler for multer
-router.use((error, req, res, next) => {
-  if (error instanceof multer.MulterError) {
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ success: false, error: 'File too large. Max size is 100MB.' });
-    }
-  }
-  next(error);
-});
-
-console.log('✅ Upload routes loaded');
+console.log('📤 Upload routes v1.1.0 loaded');
 
 module.exports = router;
