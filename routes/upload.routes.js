@@ -1,7 +1,8 @@
 // ============================================
 // FILE: routes/upload.routes.js
 // PURPOSE: File upload endpoints
-// VERSION: 1.2.1 - Fixed auth middleware import
+// VERSION: 1.3.0 - Fixed /image to accept FormData + base64
+// PREVIOUS: 1.2.1 - Fixed auth middleware import
 // ============================================
 
 const express = require('express');
@@ -135,43 +136,80 @@ router.post('/', verifyToken, upload.single('file'), async (req, res) => {
   }
 });
 
-// ==========================================
-// UPLOAD IMAGE (base64) - POST /api/upload/image
-// ==========================================
-router.post('/image', verifyToken, async (req, res) => {
+// ============================================
+// UPLOAD IMAGE - POST /api/upload/image
+// VERSION: 1.3.0 - Now accepts BOTH FormData and base64
+// ============================================
+router.post('/image', verifyToken, upload.single('file'), async (req, res) => {
   try {
-    const { image, folder = 'images', type = 'image' } = req.body;
     const userId = req.user?.id || req.user?._id || req.user?.userId;
+    const { folder = 'images', type = 'image' } = req.body;
 
-    if (!image) {
-      return res.status(400).json({ ok: false, error: 'No image provided' });
+    console.log(`📤 Image upload request from user ${userId}`);
+    console.log(`   Has file: ${!!req.file}, Has base64: ${!!req.body.image}`);
+
+    // Option 1: FormData with file (from blog create, etc.)
+    if (req.file) {
+      console.log(`📤 Processing FormData file: ${req.file.originalname}`);
+      
+      const options = {
+        folder: `cybev/${folder}`,
+        public_id: `${userId}-${Date.now()}`,
+      };
+
+      if (type === 'avatar' || type === 'profile') {
+        options.transformation = [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }];
+      } else if (type === 'cover') {
+        options.transformation = [{ width: 1200, height: 400, crop: 'fill' }];
+      }
+
+      const result = await uploadToCloudinary(req.file.buffer, options);
+      console.log(`✅ FormData upload successful: ${result.secure_url}`);
+
+      return res.json({
+        ok: true,
+        success: true,
+        url: result.secure_url,
+        publicId: result.public_id,
+        format: result.format,
+        width: result.width,
+        height: result.height
+      });
     }
 
-    console.log(`📤 Uploading base64 image for user ${userId}`);
+    // Option 2: JSON body with base64 image
+    const { image } = req.body;
+    if (image) {
+      console.log(`📤 Processing base64 image`);
+      
+      const options = {
+        folder: `cybev/${folder}`,
+        public_id: `${userId}-${Date.now()}`,
+      };
 
-    const options = {
-      folder: `cybev/${folder}`,
-      public_id: `${userId}-${Date.now()}`,
-    };
+      if (type === 'avatar' || type === 'profile') {
+        options.transformation = [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }];
+      } else if (type === 'cover') {
+        options.transformation = [{ width: 1200, height: 400, crop: 'fill' }];
+      }
 
-    if (type === 'avatar' || type === 'profile') {
-      options.transformation = [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }];
-    } else if (type === 'cover') {
-      options.transformation = [{ width: 1200, height: 400, crop: 'fill' }];
+      const result = await cloudinary.uploader.upload(image, options);
+      console.log(`✅ Base64 upload successful: ${result.secure_url}`);
+
+      return res.json({
+        ok: true,
+        success: true,
+        url: result.secure_url,
+        publicId: result.public_id
+      });
     }
 
-    const result = await cloudinary.uploader.upload(image, options);
+    // No image provided
+    return res.status(400).json({ ok: false, success: false, error: 'No image provided (send file in FormData or image as base64)' });
 
-    console.log(`✅ Base64 upload successful: ${result.secure_url}`);
-
-    res.json({
-      ok: true,
-      url: result.secure_url,
-      publicId: result.public_id
-    });
   } catch (err) {
-    console.error('❌ Base64 upload error:', err);
-    res.status(500).json({ ok: false, error: err.message || 'Upload failed' });
+    console.error('❌ Image upload error:', err);
+    res.status(500).json({ ok: false, success: false, error: err.message || 'Upload failed' });
   }
 });
 
@@ -385,6 +423,6 @@ router.delete('/:publicId', verifyToken, async (req, res) => {
   }
 });
 
-console.log('📤 Upload routes v1.2.1 loaded');
+console.log('📤 Upload routes v1.3.0 loaded - FormData + base64 support');
 
 module.exports = router;
