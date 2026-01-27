@@ -1,7 +1,8 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
-// VERSION: 4.0 - January 5, 2026
+// VERSION: 4.1 - Fixed streamKey response for OBS
+// PREVIOUS: 4.0 - January 5, 2026
 // Features: RTMP, thumbnails, auto-feed posting, notifications
 // IMPORTANT: Route order matters! Specific routes before :id routes
 // ============================================
@@ -11,7 +12,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 Live Routes v4.0 loaded - with active streams fix');
+console.log('🔄 Live Routes v4.1 loaded - streamKey at top level for OBS');
 
 // Mux service
 let muxService;
@@ -509,10 +510,17 @@ router.post('/start', verifyToken, async (req, res) => {
     
     console.log(`🔴 Stream started: ${stream._id} - ${stream.title}`);
     
+    // FIXED: Return streamKey at top level for frontend compatibility
     res.json({
       success: true,
       stream,
       streamId: stream._id,
+      // Top-level for frontend compatibility
+      streamKey: muxData?.streamKey || null,
+      rtmpUrl: muxData?.rtmpUrl || 'rtmps://global-live.mux.com:443/app',
+      playbackId: muxData?.playbackId || null,
+      playbackUrl: muxData?.playbackId ? `https://stream.mux.com/${muxData.playbackId}.m3u8` : null,
+      // Also keep nested for backwards compatibility
       mux: muxData ? {
         streamKey: muxData.streamKey,
         rtmpUrl: muxData.rtmpUrl,
