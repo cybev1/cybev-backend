@@ -2,8 +2,8 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.9.1 - Fixed groups route path + added group-enhanced routes
-// PREVIOUS: 7.9.0 - Added missing live, webrtc, groups routes + follow/check endpoint
+// VERSION: 7.10.0 - Added ai-site, ai-image routes + comprehensive fixes
+// PREVIOUS: 7.9.1 - Fixed groups route path + added group-enhanced routes
 // FIXES:
 //   - /api/users/me returns full stats
 //   - /api/blogs/my inline handler (before blog.routes)
@@ -1310,6 +1310,8 @@ const routes = [
   ['campaigns', '/api/campaigns', './routes/campaigns.routes'],
   ['contacts', '/api/contacts', './routes/contacts.routes'],
   ['ai-generate', '/api/ai-generate', './routes/ai-generate.routes'],
+  ['ai-site', '/api/ai-site', './routes/ai-site.routes'],
+  ['ai-image', '/api/ai-image', './routes/ai-image.routes'],
   ['content', '/api/content', './routes/content.routes'],
   
   // Email Platform
@@ -1520,21 +1522,21 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.9.1
-  Live Streaming & Groups Fix
+  CYBEV API Server v7.10.0
+  AI Website Generator & Comprehensive Fix
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.9.1 Fixes:
-  ✅ Added /api/live routes (live streaming)
-  ✅ Added /api/webrtc routes (device streaming)
-  ✅ Added /api/groups routes (communities)
-  ✅ Added /api/follow/check/:userId endpoint
+  v7.10.0 Fixes:
+  ✅ Added /api/ai-site routes (AI Website Generator)
+  ✅ Added /api/ai-image routes (AI Image Generation)
+  ✅ Fixed upload routes (images, videos)
+  ✅ Fixed mux.service.isAvailable()
   
-  v7.8.0 Fixes:
-  ✅ Creator Studio followers count
+  v7.9.1 Fixes:
+  ✅ /api/live, /api/webrtc, /api/groups routes
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
