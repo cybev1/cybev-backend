@@ -1,6 +1,6 @@
 /**
  * AI Generate Routes - Content Generation
- * CYBEV Studio v2.0
+ * CYBEV Studio v2.1 - Added generate-site endpoint
  * GitHub: https://github.com/cybev1/cybev-backend/routes/ai-generate.routes.js
  * 
  * Providers:
@@ -304,6 +304,110 @@ ${tone ? `Target tone: ${tone}` : ''}`;
     res.json({ improved: result, generated: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// GENERATE WEBSITE - POST /api/ai-generate/generate-site
+// ==========================================
+router.post('/generate-site', async (req, res) => {
+  try {
+    const { prompt, template = 'business', siteName } = req.body;
+    
+    console.log('🌐 AI Site Generation:', { prompt, template, siteName });
+    
+    if (!prompt && !siteName) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'Please provide a description or site name' 
+      });
+    }
+    
+    const systemPrompt = `You are a professional website content creator. Generate complete website content in JSON format based on the user's description.`;
+    
+    const userPrompt = `Create website content for: "${prompt || siteName}"
+Template style: ${template}
+
+Return a JSON object with this exact structure:
+{
+  "siteName": "website name",
+  "tagline": "short catchy tagline",
+  "description": "brief site description",
+  "heroTitle": "main headline for hero section",
+  "heroSubtitle": "supporting text for hero",
+  "ctaText": "call to action button text",
+  "features": [
+    {"title": "Feature 1", "description": "description"},
+    {"title": "Feature 2", "description": "description"},
+    {"title": "Feature 3", "description": "description"}
+  ],
+  "aboutTitle": "About section title",
+  "aboutText": "About section content",
+  "contactEmail": "contact@example.com"
+}
+
+Return ONLY the JSON object, no other text.`;
+    
+    const result = await generateWithFallback(userPrompt, {
+      systemPrompt,
+      maxTokens: 1500,
+      temperature: 0.7
+    });
+    
+    if (!result) {
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'AI generation failed. Please fill manually.',
+        generated: false
+      });
+    }
+    
+    // Parse the JSON response
+    let siteData;
+    try {
+      // Try to extract JSON from the response
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        siteData = JSON.parse(jsonMatch[0]);
+      } else {
+        siteData = JSON.parse(result);
+      }
+    } catch (parseError) {
+      console.error('Failed to parse AI response:', parseError);
+      // Return a basic structure with the generated text
+      siteData = {
+        siteName: siteName || 'My Website',
+        tagline: prompt?.substring(0, 60) || 'Welcome to our website',
+        description: prompt || 'A great website',
+        heroTitle: 'Welcome',
+        heroSubtitle: prompt || 'Discover what we have to offer',
+        ctaText: 'Get Started',
+        features: [
+          { title: 'Quality', description: 'Top quality service' },
+          { title: 'Support', description: '24/7 customer support' },
+          { title: 'Value', description: 'Great value for money' }
+        ],
+        aboutTitle: 'About Us',
+        aboutText: prompt || 'We are dedicated to providing the best service.',
+        contactEmail: 'contact@example.com'
+      };
+    }
+    
+    console.log('✅ AI Site generated:', siteData.siteName);
+    
+    res.json({
+      ok: true,
+      generated: true,
+      ...siteData
+    });
+    
+  } catch (error) {
+    console.error('AI Site generation error:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'AI generation failed. Please fill manually.',
+      generated: false
+    });
   }
 });
 
