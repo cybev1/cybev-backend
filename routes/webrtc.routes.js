@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/webrtc.routes.js
-// WebRTC Browser Streaming Routes - FIXED v4.1
-// VERSION: 4.1 - Auto-cleanup stuck streams + cleanup endpoint
-// PREVIOUS: 4.0 - January 5, 2026
+// WebRTC Browser Streaming Routes - FIXED v4.2
+// VERSION: 4.2 - Fixed authenticate (rtmpUrl from DB)
+// PREVIOUS: 4.1 - Auto-cleanup stuck streams + cleanup endpoint
 // CRITICAL: Database update for status=live, isActive=true
 // ============================================
 
@@ -11,7 +11,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 WebRTC Routes v4.1 loaded - auto-cleanup stuck streams');
+console.log('🔄 WebRTC Routes v4.2 loaded - rtmpUrl from DB fix');
 
 // Services
 let webrtcRtmpService;
@@ -446,14 +446,14 @@ function initializeWebSocket(io) {
       try {
         const { token, streamId, rtmpUrl } = data;
         
-        if (!token || !streamId || !rtmpUrl) {
-          console.log('❌ Missing auth data:', { hasToken: !!token, hasStreamId: !!streamId, hasRtmpUrl: !!rtmpUrl });
-          socket.emit('error', { message: 'Missing token, streamId, or rtmpUrl' });
+        // Only token and streamId are required - rtmpUrl will be fetched from DB
+        if (!token || !streamId) {
+          console.log('❌ Missing auth data:', { hasToken: !!token, hasStreamId: !!streamId });
+          socket.emit('error', { message: 'Missing token or streamId' });
           return;
         }
         
         console.log(`   Stream ID: ${streamId}`);
-        console.log(`   RTMP URL: ${rtmpUrl.substring(0, 60)}...`);
         
         // Verify token
         const jwt = require('jsonwebtoken');
@@ -462,7 +462,7 @@ function initializeWebSocket(io) {
         
         console.log(`   User ID: ${userId}`);
         
-        // Verify stream ownership
+        // Verify stream ownership AND get RTMP URL from database
         const Model = getLiveStreamModel();
         if (Model) {
           const stream = await Model.findOne({
@@ -476,6 +476,18 @@ function initializeWebSocket(io) {
             return;
           }
           console.log(`   Stream found: ${stream.title}`);
+          
+          // Get RTMP URL from stream record
+          currentRtmpUrl = rtmpUrl || stream.muxRtmpUrl || 
+            (stream.muxStreamKey ? `rtmps://global-live.mux.com:443/app/${stream.muxStreamKey}` : null);
+          
+          if (!currentRtmpUrl) {
+            console.log('❌ No RTMP URL available');
+            socket.emit('error', { message: 'Stream has no RTMP configuration' });
+            return;
+          }
+          
+          console.log(`   RTMP URL: ${currentRtmpUrl.substring(0, 60)}...`);
         }
 
         currentStreamId = streamId;
