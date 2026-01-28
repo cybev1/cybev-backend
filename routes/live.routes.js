@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
-// VERSION: 4.1 - Fixed streamKey response for OBS
-// PREVIOUS: 4.0 - January 5, 2026
+// VERSION: 4.2 - Auto-cleanup stuck streams
+// PREVIOUS: 4.1 - Fixed streamKey response for OBS
 // Features: RTMP, thumbnails, auto-feed posting, notifications
 // IMPORTANT: Route order matters! Specific routes before :id routes
 // ============================================
@@ -12,7 +12,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 Live Routes v4.1 loaded - streamKey at top level for OBS');
+console.log('🔄 Live Routes v4.2 loaded - auto-cleanup stuck streams');
 
 // Mux service
 let muxService;
@@ -446,12 +446,77 @@ router.post('/generate-key', verifyToken, async (req, res) => {
 });
 
 // ==========================================
+// POST /api/live/cleanup - Clean up stuck streams
+// ==========================================
+router.post('/cleanup', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    
+    // End all active/preparing streams for this user
+    const result = await LiveStream.updateMany(
+      { 
+        streamer: userId, 
+        status: { $in: ['preparing', 'live'] }
+      },
+      { 
+        $set: { 
+          status: 'ended', 
+          isActive: false, 
+          endedAt: new Date(),
+          endReason: 'manual-cleanup'
+        } 
+      }
+    );
+
+    console.log(`🧹 Cleaned up ${result.modifiedCount} streams for user ${userId}`);
+
+    res.json({
+      success: true,
+      cleanedUp: result.modifiedCount,
+      message: `Cleaned up ${result.modifiedCount} stream(s). You can now start a new stream.`
+    });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
 // POST /api/live/start - Start a new stream (camera mode)
+// FIXED: Auto-cleanup stuck streams
 // ==========================================
 router.post('/start', verifyToken, async (req, res) => {
   try {
-    const { title, description, streamType, privacy, lowLatency, thumbnail, postToFeed } = req.body;
+    const { title, description, streamType, privacy, lowLatency, thumbnail, postToFeed, forceNew } = req.body;
     const userId = req.user.id || req.user._id;
+    
+    // Auto-cleanup: End any stuck streams older than 30 minutes
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const cleanupResult = await LiveStream.updateMany(
+      {
+        streamer: userId,
+        status: { $in: ['preparing', 'live'] },
+        $or: [
+          { createdAt: { $lt: thirtyMinutesAgo } },
+          { startedAt: { $lt: thirtyMinutesAgo } }
+        ]
+      },
+      {
+        $set: { status: 'ended', isActive: false, endedAt: new Date(), endReason: 'auto-cleanup' }
+      }
+    );
+    
+    if (cleanupResult.modifiedCount > 0) {
+      console.log(`🧹 Auto-cleaned ${cleanupResult.modifiedCount} stuck stream(s)`);
+    }
+
+    // Force end all if requested
+    if (forceNew) {
+      await LiveStream.updateMany(
+        { streamer: userId, status: { $in: ['preparing', 'live'] } },
+        { $set: { status: 'ended', isActive: false, endedAt: new Date(), endReason: 'force-new' } }
+      );
+    }
     
     const existingActive = await LiveStream.findOne({
       streamer: userId,
@@ -461,7 +526,8 @@ router.post('/start', verifyToken, async (req, res) => {
     if (existingActive) {
       return res.status(400).json({ 
         success: false, 
-        error: 'You already have an active stream. End it first.' 
+        error: 'You already have an active stream. End it first or wait 30 minutes.',
+        existingStreamId: existingActive._id
       });
     }
     

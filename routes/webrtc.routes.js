@@ -1,7 +1,8 @@
 // ============================================
 // FILE: routes/webrtc.routes.js
-// WebRTC Browser Streaming Routes - FIXED v4
-// VERSION: 4.0 - January 5, 2026
+// WebRTC Browser Streaming Routes - FIXED v4.1
+// VERSION: 4.1 - Auto-cleanup stuck streams + cleanup endpoint
+// PREVIOUS: 4.0 - January 5, 2026
 // CRITICAL: Database update for status=live, isActive=true
 // ============================================
 
@@ -10,7 +11,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 WebRTC Routes v4.0 loaded - with database status fix');
+console.log('🔄 WebRTC Routes v4.1 loaded - auto-cleanup stuck streams');
 
 // Services
 let webrtcRtmpService;
@@ -137,13 +138,55 @@ router.get('/test', (req, res) => {
 });
 
 // ==========================================
+// POST /api/webrtc/cleanup - Clean up stuck streams
+// ==========================================
+router.post('/cleanup', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const Model = getLiveStreamModel();
+    
+    if (!Model) {
+      return res.status(500).json({ success: false, error: 'Model not available' });
+    }
+
+    // End all active streams for this user
+    const result = await Model.updateMany(
+      { 
+        streamer: userId, 
+        status: { $in: ['preparing', 'live'] },
+        isActive: true 
+      },
+      { 
+        $set: { 
+          status: 'ended', 
+          isActive: false, 
+          endedAt: new Date(),
+          endReason: 'manual-cleanup'
+        } 
+      }
+    );
+
+    console.log(`🧹 Cleaned up ${result.modifiedCount} streams for user ${userId}`);
+
+    res.json({
+      success: true,
+      cleanedUp: result.modifiedCount,
+      message: `Cleaned up ${result.modifiedCount} stream(s). You can now start a new stream.`
+    });
+  } catch (error) {
+    console.error('Cleanup error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
 // POST /api/webrtc/start-stream - Start camera stream
-// FIXED: Correct Mux response handling
+// FIXED: Auto-cleanup stuck streams before creating new one
 // ==========================================
 router.post('/start-stream', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { title, description, privacy } = req.body;
+    const { title, description, privacy, forceNew } = req.body;
 
     console.log(`\n${'='.repeat(50)}`);
     console.log(`📱 START STREAM REQUEST from user ${userId}`);
@@ -160,7 +203,42 @@ router.post('/start-stream', verifyToken, async (req, res) => {
       return res.status(500).json({ success: false, error: 'Database model not available' });
     }
 
-    // Check for existing active stream
+    // Auto-cleanup: End any stuck streams older than 30 minutes
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const cleanupResult = await Model.updateMany(
+      {
+        streamer: userId,
+        status: { $in: ['preparing', 'live'] },
+        isActive: true,
+        $or: [
+          { createdAt: { $lt: thirtyMinutesAgo } },
+          { startedAt: { $lt: thirtyMinutesAgo } }
+        ]
+      },
+      {
+        $set: { 
+          status: 'ended', 
+          isActive: false, 
+          endedAt: new Date(),
+          endReason: 'auto-cleanup-stuck'
+        }
+      }
+    );
+    
+    if (cleanupResult.modifiedCount > 0) {
+      console.log(`🧹 Auto-cleaned ${cleanupResult.modifiedCount} stuck stream(s)`);
+    }
+
+    // If forceNew is true, end ALL existing streams for this user
+    if (forceNew) {
+      await Model.updateMany(
+        { streamer: userId, status: { $in: ['preparing', 'live'] }, isActive: true },
+        { $set: { status: 'ended', isActive: false, endedAt: new Date(), endReason: 'force-new' } }
+      );
+      console.log('🔄 Force-ended previous streams');
+    }
+
+    // Check for existing active stream (after cleanup)
     const existingStream = await Model.findOne({
       streamer: userId,
       status: { $in: ['preparing', 'live'] },
@@ -169,10 +247,12 @@ router.post('/start-stream', verifyToken, async (req, res) => {
 
     if (existingStream) {
       console.log(`⚠️ User ${userId} already has active stream: ${existingStream._id}`);
+      // Return the existing stream info so frontend can use it
       return res.status(400).json({
         success: false,
-        error: 'You already have an active stream',
-        existingStreamId: existingStream._id
+        error: 'You already have an active stream. End it first or wait 30 minutes for auto-cleanup.',
+        existingStreamId: existingStream._id,
+        streamAge: Math.round((Date.now() - new Date(existingStream.createdAt).getTime()) / 60000) + ' minutes'
       });
     }
 
