@@ -1,7 +1,8 @@
 // ============================================
 // FILE: routes/sites.routes.js
 // Website Builder API - NATIVE MONGODB FIX
-// VERSION: 6.6.0 - Enhanced /my with stats
+// VERSION: 6.7.0 - Added /generate-ai endpoint
+// PREVIOUS: 6.6.0 - Enhanced /my with stats
 // ============================================
 
 const express = require('express');
@@ -371,6 +372,185 @@ router.get('/subdomain/:subdomain', async (req, res) => {
     res.json({ ok: true, site });
   } catch (err) {
     res.status(500).json({ ok: false, error: 'Failed to fetch site' });
+  }
+});
+
+// ==========================================
+// POST /api/sites/generate-ai - AI Content Generation
+// VERSION: 1.0 - Added for website AI generation
+// ==========================================
+router.post('/generate-ai', verifyToken, async (req, res) => {
+  try {
+    const { prompt, template = 'business', siteName } = req.body;
+    
+    console.log('🤖 AI Site Generation:', { prompt, template, siteName });
+    
+    if (!prompt && !siteName) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: 'Please provide a description or site name' 
+      });
+    }
+
+    // AI Provider configuration
+    const PROVIDERS = {
+      deepseek: {
+        name: 'DeepSeek',
+        baseUrl: 'https://api.deepseek.com/v1',
+        model: 'deepseek-chat',
+        apiKey: process.env.DEEPSEEK_API_KEY
+      },
+      openai: {
+        name: 'OpenAI',
+        baseUrl: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        apiKey: process.env.OPENAI_API_KEY
+      }
+    };
+
+    // Generate with AI
+    const generateContent = async () => {
+      const systemPrompt = 'You are a professional website content creator. Generate complete website content in JSON format.';
+      const userPrompt = `Create website content for: "${prompt || siteName}"
+Template style: ${template}
+
+Return a JSON object with this structure:
+{
+  "siteName": "website name",
+  "tagline": "short catchy tagline",
+  "description": "brief site description",
+  "heroTitle": "main headline for hero section",
+  "heroSubtitle": "supporting text for hero",
+  "ctaText": "call to action button text",
+  "features": [
+    {"title": "Feature 1", "description": "description"},
+    {"title": "Feature 2", "description": "description"},
+    {"title": "Feature 3", "description": "description"}
+  ],
+  "aboutTitle": "About section title",
+  "aboutText": "About section content"
+}
+
+Return ONLY the JSON object, no other text.`;
+
+      // Try DeepSeek first
+      if (PROVIDERS.deepseek.apiKey) {
+        try {
+          const fetch = (await import('node-fetch')).default;
+          const response = await fetch(`${PROVIDERS.deepseek.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${PROVIDERS.deepseek.apiKey}`
+            },
+            body: JSON.stringify({
+              model: PROVIDERS.deepseek.model,
+              max_tokens: 1500,
+              temperature: 0.7,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+              ]
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            return data.choices[0].message.content;
+          }
+        } catch (e) {
+          console.log('DeepSeek failed:', e.message);
+        }
+      }
+
+      // Try OpenAI
+      if (PROVIDERS.openai.apiKey) {
+        try {
+          const fetch = (await import('node-fetch')).default;
+          const response = await fetch(`${PROVIDERS.openai.baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${PROVIDERS.openai.apiKey}`
+            },
+            body: JSON.stringify({
+              model: PROVIDERS.openai.model,
+              max_tokens: 1500,
+              temperature: 0.7,
+              messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userPrompt }
+              ]
+            })
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            return data.choices[0].message.content;
+          }
+        } catch (e) {
+          console.log('OpenAI failed:', e.message);
+        }
+      }
+
+      return null;
+    };
+
+    const result = await generateContent();
+    
+    if (!result) {
+      console.log('⚠️ AI generation failed - no API keys or all providers failed');
+      return res.status(500).json({ 
+        ok: false, 
+        error: 'AI generation failed. Please fill manually.',
+        generated: false
+      });
+    }
+
+    // Parse the JSON response
+    let siteData;
+    try {
+      const jsonMatch = result.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        siteData = JSON.parse(jsonMatch[0]);
+      } else {
+        siteData = JSON.parse(result);
+      }
+    } catch (parseError) {
+      console.error('Failed to parse AI response:', parseError);
+      siteData = {
+        siteName: siteName || 'My Website',
+        tagline: prompt?.substring(0, 60) || 'Welcome to our website',
+        description: prompt || 'A great website',
+        heroTitle: 'Welcome',
+        heroSubtitle: prompt || 'Discover what we have to offer',
+        ctaText: 'Get Started',
+        features: [
+          { title: 'Quality', description: 'Top quality service' },
+          { title: 'Support', description: '24/7 customer support' },
+          { title: 'Value', description: 'Great value for money' }
+        ],
+        aboutTitle: 'About Us',
+        aboutText: prompt || 'We are dedicated to providing the best service.'
+      };
+    }
+
+    console.log('✅ AI Site content generated:', siteData.siteName);
+
+    res.json({
+      ok: true,
+      success: true,
+      generated: true,
+      ...siteData
+    });
+
+  } catch (error) {
+    console.error('❌ AI Site generation error:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'AI generation failed. Please fill manually.',
+      generated: false
+    });
   }
 });
 
