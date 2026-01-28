@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/sites.routes.js
 // Website Builder API - NATIVE MONGODB FIX
-// VERSION: 6.7.0 - Added /generate-ai endpoint
-// PREVIOUS: 6.6.0 - Enhanced /my with stats
+// VERSION: 6.7.1 - Fixed generate-ai to accept 'description' field
+// PREVIOUS: 6.7.0 - Added /generate-ai endpoint
 // ============================================
 
 const express = require('express');
@@ -377,18 +377,22 @@ router.get('/subdomain/:subdomain', async (req, res) => {
 
 // ==========================================
 // POST /api/sites/generate-ai - AI Content Generation
-// VERSION: 1.0 - Added for website AI generation
+// VERSION: 1.1 - Fixed to accept 'description' field from frontend
 // ==========================================
 router.post('/generate-ai', verifyToken, async (req, res) => {
   try {
-    const { prompt, template = 'business', siteName } = req.body;
+    // Frontend sends 'description', also support 'prompt' and 'siteName'
+    const { description, prompt, template = 'business', siteName, name } = req.body;
     
-    console.log('🤖 AI Site Generation:', { prompt, template, siteName });
+    // Use description OR prompt OR siteName
+    const inputText = description || prompt || siteName || name;
     
-    if (!prompt && !siteName) {
+    console.log('🤖 AI Site Generation:', { input: inputText, template });
+    
+    if (!inputText) {
       return res.status(400).json({ 
         ok: false, 
-        error: 'Please provide a description or site name' 
+        error: 'Please provide a description for your website' 
       });
     }
 
@@ -411,12 +415,12 @@ router.post('/generate-ai', verifyToken, async (req, res) => {
     // Generate with AI
     const generateContent = async () => {
       const systemPrompt = 'You are a professional website content creator. Generate complete website content in JSON format.';
-      const userPrompt = `Create website content for: "${prompt || siteName}"
+      const userPrompt = `Create website content for: "${inputText}"
 Template style: ${template}
 
 Return a JSON object with this structure:
 {
-  "siteName": "website name",
+  "name": "website name",
   "tagline": "short catchy tagline",
   "description": "brief site description",
   "heroTitle": "main headline for hero section",
@@ -428,7 +432,8 @@ Return a JSON object with this structure:
     {"title": "Feature 3", "description": "description"}
   ],
   "aboutTitle": "About section title",
-  "aboutText": "About section content"
+  "aboutText": "About section content",
+  "template": "portfolio"
 }
 
 Return ONLY the JSON object, no other text.`;
@@ -518,12 +523,13 @@ Return ONLY the JSON object, no other text.`;
       }
     } catch (parseError) {
       console.error('Failed to parse AI response:', parseError);
+      // Fallback with user's input
       siteData = {
-        siteName: siteName || 'My Website',
-        tagline: prompt?.substring(0, 60) || 'Welcome to our website',
-        description: prompt || 'A great website',
+        name: 'My Website',
+        tagline: inputText?.substring(0, 60) || 'Welcome to our website',
+        description: inputText || 'A great website',
         heroTitle: 'Welcome',
-        heroSubtitle: prompt || 'Discover what we have to offer',
+        heroSubtitle: inputText || 'Discover what we have to offer',
         ctaText: 'Get Started',
         features: [
           { title: 'Quality', description: 'Top quality service' },
@@ -531,16 +537,19 @@ Return ONLY the JSON object, no other text.`;
           { title: 'Value', description: 'Great value for money' }
         ],
         aboutTitle: 'About Us',
-        aboutText: prompt || 'We are dedicated to providing the best service.'
+        aboutText: inputText || 'We are dedicated to providing the best service.',
+        template: 'portfolio'
       };
     }
 
-    console.log('✅ AI Site content generated:', siteData.siteName);
+    console.log('✅ AI Site content generated:', siteData.name || siteData.siteName);
 
+    // Return in format frontend expects
     res.json({
       ok: true,
       success: true,
       generated: true,
+      suggestion: siteData,
       ...siteData
     });
 
