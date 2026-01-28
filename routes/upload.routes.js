@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/upload.routes.js
 // PURPOSE: File upload endpoints
-// VERSION: 1.3.0 - Fixed /image to accept FormData + base64
-// PREVIOUS: 1.2.1 - Fixed auth middleware import
+// VERSION: 1.3.1 - Added explicit Cloudinary config
+// PREVIOUS: 1.3.0 - Fixed /image to accept FormData + base64
 // ============================================
 
 const express = require('express');
@@ -10,6 +10,26 @@ const router = express.Router();
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
 const jwt = require('jsonwebtoken');
+
+// ==========================================
+// CLOUDINARY CONFIGURATION
+// ==========================================
+// Support both individual env vars AND CLOUDINARY_URL format
+if (process.env.CLOUDINARY_URL) {
+  // CLOUDINARY_URL format: cloudinary://api_key:api_secret@cloud_name
+  console.log('☁️ Cloudinary configured via CLOUDINARY_URL');
+} else if (process.env.CLOUDINARY_API_KEY) {
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+  });
+  console.log('☁️ Cloudinary configured:', process.env.CLOUDINARY_CLOUD_NAME);
+} else {
+  console.log('⚠️ Cloudinary NOT configured - check env vars:');
+  console.log('   - CLOUDINARY_URL or');
+  console.log('   - CLOUDINARY_CLOUD_NAME + CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET');
+}
 
 // Import auth middleware with robust fallback
 let verifyToken;
@@ -423,6 +443,6 @@ router.delete('/:publicId', verifyToken, async (req, res) => {
   }
 });
 
-console.log('📤 Upload routes v1.3.0 loaded - FormData + base64 support');
+console.log('📤 Upload routes v1.3.1 loaded - Cloudinary explicitly configured');
 
 module.exports = router;
