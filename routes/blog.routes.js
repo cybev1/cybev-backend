@@ -1,7 +1,8 @@
 // ============================================
 // FILE: routes/blog.routes.js
 // Blog Routes - FIXED ROUTE ORDER + POPULATE
-// VERSION: 2.1 - Removed website populate (schema mismatch)
+// VERSION: 2.2 - Fixed authorName auto-population
+// PREVIOUS: 2.1 - Removed website populate (schema mismatch)
 // ISSUE: /my was being caught by /:id route
 // ============================================
 
@@ -24,6 +25,7 @@ const getBlog = () => {
       author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      authorName: { type: String, required: true },
       status: { type: String, default: 'draft' },
       views: { type: Number, default: 0 },
       likes: { type: Number, default: 0 },
@@ -38,6 +40,15 @@ const getBlog = () => {
     }, { timestamps: true });
     
     return mongoose.model('Blog', BlogSchema);
+  }
+};
+
+// Get User model
+const getUser = () => {
+  try {
+    return mongoose.models.User || require('../models/user.model');
+  } catch (e) {
+    return null;
   }
 };
 
@@ -387,15 +398,34 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
 router.post('/', verifyToken, async (req, res) => {
   try {
     const Blog = getBlog();
+    const User = getUser();
     const userId = req.user.id || req.user.userId || req.user._id;
     
     const {
       title, content, excerpt, slug, status,
-      tags, category, featuredImage, website, siteId
+      tags, category, featuredImage, website, siteId, authorName
     } = req.body;
 
     if (!title) {
       return res.status(400).json({ ok: false, error: 'Title is required' });
+    }
+
+    // Get author name from user if not provided
+    let blogAuthorName = authorName;
+    if (!blogAuthorName && User) {
+      try {
+        const user = await User.findById(userId).select('name username firstName lastName');
+        if (user) {
+          blogAuthorName = user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.username || 'Anonymous';
+        }
+      } catch (e) {
+        console.log('Could not fetch user for authorName:', e.message);
+      }
+    }
+    
+    // Fallback to token data or default
+    if (!blogAuthorName) {
+      blogAuthorName = req.user.name || req.user.username || 'Anonymous';
     }
 
     // Generate slug if not provided
@@ -412,6 +442,7 @@ router.post('/', verifyToken, async (req, res) => {
       author: userId,
       user: userId,
       userId: userId,
+      authorName: blogAuthorName,
       status: status || 'draft',
       tags: tags || [],
       category,
@@ -424,6 +455,7 @@ router.post('/', verifyToken, async (req, res) => {
     await blog.save();
     await blog.populate('author', 'name username avatar');
 
+    console.log(`✅ Blog created: "${title}" by ${blogAuthorName}`);
     res.status(201).json({ ok: true, blog });
   } catch (err) {
     console.error('❌ Create blog error:', err);
@@ -573,4 +605,5 @@ router.get('/:id', optionalAuth, async (req, res) => {
   }
 });
 
+console.log('📝 Blog routes v2.2 loaded - authorName auto-population');
 module.exports = router;
