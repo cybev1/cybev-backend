@@ -2,17 +2,16 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.11.0 - Comprehensive upload & streaming fixes
-// PREVIOUS: 7.10.0 - Added ai-site, ai-image routes
+// VERSION: 7.12.0 - Added WebRTC WebSocket namespace init
+// PREVIOUS: 7.11.0 - Fixed uploads, streaming, AI generation
 // 
-// FIXES IN 7.11.0:
-//   - upload.routes.js v1.3.0: /image accepts FormData + base64
-//   - live.routes.js v4.1: streamKey at top level for OBS
-//   - ai-generate.routes.js v2.1: Added /generate-site endpoint
+// FIXES IN 7.12.0:
+//   - Initialize WebRTC WebSocket namespace for live streaming
+//   - Fixed browser streaming (camera mode)
 //
 // ROLLBACK: If issues, revert to VERSION 7.3.0
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-27
+// UPDATED: 2026-01-28
 // ============================================
 
 const express = require('express');
@@ -1311,8 +1310,6 @@ const routes = [
   ['campaigns', '/api/campaigns', './routes/campaigns.routes'],
   ['contacts', '/api/contacts', './routes/contacts.routes'],
   ['ai-generate', '/api/ai-generate', './routes/ai-generate.routes'],
-  ['ai-site', '/api/ai-site', './routes/ai-site.routes'],
-  ['ai-image', '/api/ai-image', './routes/ai-image.routes'],
   ['content', '/api/content', './routes/content.routes'],
   
   // Email Platform
@@ -1349,6 +1346,19 @@ routes.forEach(([name, path, file]) => {
 });
 
 console.log(`=== Routes: ${loadedCount} loaded, ${failedCount} skipped ===\n`);
+
+// ==========================================
+// INITIALIZE WEBRTC WEBSOCKET NAMESPACE
+// ==========================================
+try {
+  const webrtcRoutes = require('./routes/webrtc.routes');
+  if (webrtcRoutes.initializeWebSocket) {
+    webrtcRoutes.initializeWebSocket(io);
+    console.log('✅ WebRTC WebSocket namespace initialized');
+  }
+} catch (err) {
+  console.log('⚠️ WebRTC WebSocket initialization skipped:', err.message);
+}
 
 // ==========================================
 // INITIALIZE EMAIL PLANS ON STARTUP
@@ -1523,21 +1533,21 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.11.0
-  Comprehensive Upload & Streaming Fix
+  CYBEV API Server v7.12.0
+  Live Streaming WebSocket Fix
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.11.0 Fixes:
-  ✅ upload.routes v1.3.0: /image accepts FormData+base64
-  ✅ live.routes v4.1: streamKey at top level for OBS
-  ✅ ai-generate v2.1: Added /generate-site endpoint
+  v7.12.0 Fixes:
+  ✅ WebRTC WebSocket namespace initialized
+  ✅ Browser camera streaming should work now
   
   Previous Fixes:
-  ✅ /api/live, /api/webrtc, /api/groups routes
-  ✅ /api/ai-site, /api/ai-image routes
+  ✅ AI Website Generator with images
+  ✅ Image uploads (FormData + base64)
+  ✅ OBS streaming (streamKey at top level)
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
