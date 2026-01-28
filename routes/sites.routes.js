@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/sites.routes.js
 // Website Builder API - NATIVE MONGODB FIX
-// VERSION: 6.7.1 - Fixed generate-ai to accept 'description' field
-// PREVIOUS: 6.7.0 - Added /generate-ai endpoint
+// VERSION: 6.7.2 - Added images to generate-ai response
+// PREVIOUS: 6.7.1 - Fixed generate-ai to accept 'description' field
 // ============================================
 
 const express = require('express');
@@ -33,6 +33,12 @@ try {
 // USE NATIVE MONGODB - NO MONGOOSE MODEL
 // ==========================================
 const getSitesCollection = () => mongoose.connection.db.collection('sites');
+
+// Log image API status
+console.log('🌐 Sites routes v6.7.2 loaded - with AI images');
+console.log('🎨 Image APIs:');
+console.log(`   Pexels: ${process.env.PEXELS_API_KEY ? '✅ Configured' : '❌ Not configured (add PEXELS_API_KEY)'}`);
+console.log(`   Unsplash: ${process.env.UNSPLASH_ACCESS_KEY ? '✅ Configured' : '❌ Not configured (add UNSPLASH_ACCESS_KEY)'}`);
 
 // ==========================================
 // AI IMAGE SEARCH - Pexels & Unsplash
@@ -544,13 +550,29 @@ Return ONLY the JSON object, no other text.`;
 
     console.log('✅ AI Site content generated:', siteData.name || siteData.siteName);
 
-    // Return in format frontend expects
+    // Fetch relevant images for the site
+    console.log('🎨 Fetching images for site...');
+    let images = {};
+    try {
+      images = await getTemplateImages(template, siteData.name || inputText);
+      console.log('✅ Images fetched:', images.heroImage ? 'Hero found' : 'Using default');
+    } catch (imgErr) {
+      console.log('⚠️ Image fetch failed:', imgErr.message);
+    }
+
+    // Return in format frontend expects, with images
     res.json({
       ok: true,
       success: true,
       generated: true,
-      suggestion: siteData,
-      ...siteData
+      suggestion: {
+        ...siteData,
+        heroImage: images.heroImage,
+        featureImages: images.featureImages || []
+      },
+      ...siteData,
+      heroImage: images.heroImage,
+      featureImages: images.featureImages || []
     });
 
   } catch (error) {
