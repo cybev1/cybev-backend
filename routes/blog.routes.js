@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/blog.routes.js
 // Blog Routes - FIXED ROUTE ORDER + POPULATE
-// VERSION: 2.2 - Fixed authorName auto-population
-// PREVIOUS: 2.1 - Removed website populate (schema mismatch)
+// VERSION: 2.3 - Added GET / for public blog listing
+// PREVIOUS: 2.2 - Fixed authorName auto-population
 // ISSUE: /my was being caught by /:id route
 // ============================================
 
@@ -74,6 +74,92 @@ const optionalAuth = (req, res, next) => {
   }
   next();
 };
+
+// ==========================================
+// GET /api/blogs - List all public blogs
+// MUST come before /my and /:id
+// ==========================================
+router.get('/', optionalAuth, async (req, res) => {
+  try {
+    const Blog = getBlog();
+    const { 
+      page = 1, 
+      limit = 12, 
+      sort = 'createdAt',
+      category,
+      search 
+    } = req.query;
+
+    console.log(`📖 Fetching public blogs - page ${page}, limit ${limit}, sort ${sort}`);
+
+    // Build query for public/published blogs
+    const query = {
+      $or: [
+        { status: 'published' },
+        { status: 'public' },
+        { isPublished: true }
+      ]
+    };
+
+    if (category && category !== 'all') {
+      query.category = category.toLowerCase();
+    }
+
+    if (search) {
+      query.$and = [
+        query.$or ? { $or: query.$or } : {},
+        {
+          $or: [
+            { title: { $regex: search, $options: 'i' } },
+            { content: { $regex: search, $options: 'i' } },
+            { excerpt: { $regex: search, $options: 'i' } }
+          ]
+        }
+      ];
+      delete query.$or;
+    }
+
+    // Determine sort order
+    let sortOption = {};
+    if (sort === 'views' || sort === '-views') {
+      sortOption = { views: -1 };
+    } else if (sort === 'likes' || sort === '-likes') {
+      sortOption = { likes: -1 };
+    } else {
+      sortOption = { createdAt: -1 };
+    }
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const [blogs, total] = await Promise.all([
+      Blog.find(query)
+        .sort(sortOption)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .populate('author', 'name username avatar profilePicture')
+        .lean(),
+      Blog.countDocuments(query)
+    ]);
+
+    console.log(`📖 Found ${blogs.length} blogs (total: ${total})`);
+
+    res.json({
+      ok: true,
+      blogs,
+      data: { blogs },
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit)),
+        hasMore: skip + blogs.length < total
+      }
+    });
+  } catch (err) {
+    console.error('❌ List blogs error:', err);
+    res.status(500).json({ ok: false, error: err.message, blogs: [] });
+  }
+});
 
 // ==========================================
 // IMPORTANT: /my MUST come BEFORE /:id
@@ -605,5 +691,5 @@ router.get('/:id', optionalAuth, async (req, res) => {
   }
 });
 
-console.log('📝 Blog routes v2.2 loaded - authorName auto-population');
+console.log('📝 Blog routes v2.3 loaded - GET / public listing + authorName fix');
 module.exports = router;
