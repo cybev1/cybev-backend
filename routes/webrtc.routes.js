@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/webrtc.routes.js
-// WebRTC Browser Streaming Routes - FIXED v4.3
-// VERSION: 4.3 - Fixed RTMP URL + added feed posting
-// PREVIOUS: 4.2 - Fixed authenticate (rtmpUrl from DB)
+// WebRTC Browser Streaming Routes - FIXED v4.4
+// VERSION: 4.4 - Fixed feed post (use imageUrl for Post model)
+// PREVIOUS: 4.3 - Fixed RTMP URL + added feed posting
 // CRITICAL: Database update for status=live, isActive=true
 // ============================================
 
@@ -11,7 +11,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 WebRTC Routes v4.3 loaded - RTMP URL fix + feed posting');
+console.log('🔄 WebRTC Routes v4.4 loaded - fixed feed post thumbnail');
 
 // Services
 let webrtcRtmpService;
@@ -599,24 +599,41 @@ function initializeWebSocket(io) {
             try {
               const Post = mongoose.models.Post || require('../models/post.model');
               if (Post) {
+                // Generate Mux thumbnail URL
+                const muxThumbnail = updateResult.muxPlaybackId 
+                  ? `https://image.mux.com/${updateResult.muxPlaybackId}/thumbnail.jpg?time=0`
+                  : null;
+                
+                const thumbnailUrl = updateResult.thumbnail || muxThumbnail;
+                
                 const feedPost = new Post({
                   author: updateResult.streamer._id || userId,
+                  authorId: updateResult.streamer._id || userId,
                   content: `🔴 LIVE NOW: ${updateResult.title || 'Live Stream'}`,
+                  postType: 'live',
                   type: 'livestream',
                   isLiveStream: true,
                   liveStreamId: updateResult._id,
-                  featuredImage: updateResult.thumbnail,
-                  media: updateResult.thumbnail ? [{
-                    url: updateResult.thumbnail,
+                  // Use imageUrl for Post model (not featuredImage)
+                  imageUrl: thumbnailUrl,
+                  media: thumbnailUrl ? [{
+                    url: thumbnailUrl,
                     type: 'image',
-                    isLiveThumbnail: true
+                    isLiveThumbnail: true,
+                    playbackId: updateResult.muxPlaybackId
                   }] : [],
                   streamData: {
                     streamId: updateResult._id,
                     playbackId: updateResult.muxPlaybackId,
+                    playbackUrl: updateResult.muxPlaybackId 
+                      ? `https://stream.mux.com/${updateResult.muxPlaybackId}.m3u8`
+                      : null,
+                    thumbnailUrl: muxThumbnail,
                     viewerCount: 0,
                     isLive: true
-                  }
+                  },
+                  visibility: 'public',
+                  isPublished: true
                 });
                 await feedPost.save();
                 

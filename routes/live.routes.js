@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
-// VERSION: 4.2 - Auto-cleanup stuck streams
-// PREVIOUS: 4.1 - Fixed streamKey response for OBS
+// VERSION: 4.3 - Auto-generate Mux thumbnail for feed
+// PREVIOUS: 4.2 - Auto-cleanup stuck streams
 // Features: RTMP, thumbnails, auto-feed posting, notifications
 // IMPORTANT: Route order matters! Specific routes before :id routes
 // ============================================
@@ -12,7 +12,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 Live Routes v4.2 loaded - auto-cleanup stuck streams');
+console.log('🔄 Live Routes v4.3 loaded - auto Mux thumbnail for feed');
 
 // Mux service
 let muxService;
@@ -79,6 +79,12 @@ async function createLiveFeedPost(stream, userId) {
     const user = await User.findById(userId).select('name username profilePicture');
     const authorName = user?.name || user?.username || 'Anonymous';
     
+    // Generate Mux thumbnail URL automatically
+    const muxThumbnail = stream.muxPlaybackId 
+      ? `https://image.mux.com/${stream.muxPlaybackId}/thumbnail.jpg?time=0`
+      : null;
+    const thumbnailUrl = stream.thumbnail || muxThumbnail;
+    
     const feedPost = new Blog({
       author: userId,
       authorId: userId,
@@ -91,17 +97,22 @@ async function createLiveFeedPost(stream, userId) {
       liveStreamId: stream._id,
       visibility: stream.privacy || 'public',
       isLive: true,
-      thumbnail: stream.thumbnail,
-      featuredImage: stream.thumbnail,
-      coverImage: stream.thumbnail,
-      media: stream.thumbnail ? [{
-        url: stream.thumbnail,
+      thumbnail: thumbnailUrl,
+      featuredImage: thumbnailUrl,
+      coverImage: thumbnailUrl,
+      media: thumbnailUrl ? [{
+        url: thumbnailUrl,
         type: 'image',
-        isLiveThumbnail: true
+        isLiveThumbnail: true,
+        playbackId: stream.muxPlaybackId
       }] : [],
       streamData: {
         streamId: stream._id,
         playbackId: stream.muxPlaybackId,
+        playbackUrl: stream.muxPlaybackId 
+          ? `https://stream.mux.com/${stream.muxPlaybackId}.m3u8`
+          : null,
+        thumbnailUrl: muxThumbnail,
         viewerCount: 0,
         isLive: true
       }
