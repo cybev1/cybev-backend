@@ -1,12 +1,18 @@
 // ============================================
 // FILE: routes/search.routes.js
 // Comprehensive Search Routes
-// VERSION: 1.0
+// VERSION: 1.1 - Improved user search + live streams
+// FIXES:
+//   - Autocomplete now searches both name AND username
+//   - Partial matching (not just prefix)
+//   - Added live streams to search results
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
+
+console.log('🔍 Search Routes v1.1 loaded - improved user search + live streams');
 
 // Middleware
 const optionalAuth = (req, res, next) => {
@@ -49,7 +55,8 @@ router.get('/', optionalAuth, async (req, res) => {
       blogs: [],
       groups: [],
       events: [],
-      hashtags: []
+      hashtags: [],
+      streams: []
     };
 
     // Search users
@@ -174,6 +181,26 @@ router.get('/', optionalAuth, async (req, res) => {
       }
     }
 
+    // Search live streams
+    if (type === 'all' || type === 'streams' || type === 'live') {
+      const LiveStream = mongoose.models.LiveStream;
+      if (LiveStream) {
+        results.streams = await LiveStream.find({
+          $or: [
+            { title: searchRegex },
+            { description: searchRegex }
+          ],
+          status: 'live',
+          isActive: true
+        })
+          .populate('streamer', 'name username avatar profilePicture')
+          .select('title description thumbnail muxPlaybackId viewerCount startedAt')
+          .sort({ viewerCount: -1, startedAt: -1 })
+          .limit(type === 'streams' || type === 'live' ? limitNum : 5)
+          .lean();
+      }
+    }
+
     // Calculate total results for pagination
     const totalResults = type === 'all'
       ? Object.values(results).reduce((sum, arr) => sum + arr.length, 0)
@@ -199,6 +226,7 @@ router.get('/', optionalAuth, async (req, res) => {
 /**
  * Get search suggestions (autocomplete)
  * GET /api/search/suggestions
+ * FIXED: Now searches both name and username with partial matching
  */
 router.get('/suggestions', async (req, res) => {
   try {
@@ -208,25 +236,46 @@ router.get('/suggestions', async (req, res) => {
       return res.json({ ok: true, suggestions: [] });
     }
 
-    const searchRegex = new RegExp('^' + q, 'i');
+    // FIXED: Use partial matching (no ^ anchor) for better results
+    const partialRegex = new RegExp(q, 'i');
+    const startWithRegex = new RegExp('^' + q, 'i');
     const suggestions = [];
 
-    // Username suggestions
+    // Username and name suggestions - search both fields
     const User = mongoose.models.User || require('../models/user.model');
     const users = await User.find({
-      username: searchRegex,
+      $or: [
+        { username: partialRegex },
+        { name: partialRegex }
+      ],
       role: { $ne: 'banned' }
     })
-      .select('username name avatar')
-      .limit(parseInt(limit))
+      .select('username name avatar profilePicture')
+      .limit(parseInt(limit) * 2)  // Get more results to sort
       .lean();
+    
+    // Sort: prioritize matches that start with query
+    const sortedUsers = users.sort((a, b) => {
+      const aStartsUsername = startWithRegex.test(a.username || '');
+      const bStartsUsername = startWithRegex.test(b.username || '');
+      const aStartsName = startWithRegex.test(a.name || '');
+      const bStartsName = startWithRegex.test(b.name || '');
+      
+      // Prioritize: starts with query > partial match
+      if (aStartsUsername && !bStartsUsername) return -1;
+      if (bStartsUsername && !aStartsUsername) return 1;
+      if (aStartsName && !bStartsName) return -1;
+      if (bStartsName && !aStartsName) return 1;
+      return 0;
+    }).slice(0, parseInt(limit));
 
-    users.forEach(u => {
+    sortedUsers.forEach(u => {
       suggestions.push({
         type: 'user',
         text: `@${u.username}`,
         name: u.name,
-        avatar: u.avatar
+        avatar: u.avatar || u.profilePicture,
+        userId: u._id
       });
     });
 

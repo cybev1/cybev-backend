@@ -1,8 +1,8 @@
 // ============================================
 // FILE: routes/webrtc.routes.js
-// WebRTC Browser Streaming Routes - FIXED v4.2
-// VERSION: 4.2 - Fixed authenticate (rtmpUrl from DB)
-// PREVIOUS: 4.1 - Auto-cleanup stuck streams + cleanup endpoint
+// WebRTC Browser Streaming Routes - FIXED v4.3
+// VERSION: 4.3 - Fixed RTMP URL + added feed posting
+// PREVIOUS: 4.2 - Fixed authenticate (rtmpUrl from DB)
 // CRITICAL: Database update for status=live, isActive=true
 // ============================================
 
@@ -11,7 +11,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 WebRTC Routes v4.2 loaded - rtmpUrl from DB fix');
+console.log('🔄 WebRTC Routes v4.3 loaded - RTMP URL fix + feed posting');
 
 // Services
 let webrtcRtmpService;
@@ -477,12 +477,17 @@ function initializeWebSocket(io) {
           }
           console.log(`   Stream found: ${stream.title}`);
           
-          // Get RTMP URL from stream record
-          currentRtmpUrl = rtmpUrl || stream.muxRtmpUrl || 
-            (stream.muxStreamKey ? `rtmps://global-live.mux.com:443/app/${stream.muxStreamKey}` : null);
-          
-          if (!currentRtmpUrl) {
-            console.log('❌ No RTMP URL available');
+          // FIXED: Construct full RTMP URL with stream key
+          // Priority: 1) Construct from muxStreamKey, 2) Use muxRtmpUrl if it has key, 3) Frontend rtmpUrl
+          if (stream.muxStreamKey) {
+            currentRtmpUrl = `rtmps://global-live.mux.com:443/app/${stream.muxStreamKey}`;
+          } else if (stream.muxRtmpUrl && stream.muxRtmpUrl.includes('/app/')) {
+            // muxRtmpUrl might already include the key
+            currentRtmpUrl = stream.muxRtmpUrl;
+          } else if (rtmpUrl) {
+            currentRtmpUrl = rtmpUrl;
+          } else {
+            console.log('❌ No stream key or RTMP URL available');
             socket.emit('error', { message: 'Stream has no RTMP configuration' });
             return;
           }
@@ -491,14 +496,16 @@ function initializeWebSocket(io) {
         }
 
         currentStreamId = streamId;
-        currentRtmpUrl = rtmpUrl;
+        // Keep the RTMP URL we computed from the database (don't overwrite with undefined)
+        // currentRtmpUrl was already set above from stream.muxRtmpUrl or stream.muxStreamKey
         isAuthenticated = true;
         
         activeConnections.set(socket.id, {
           ...activeConnections.get(socket.id),
           authenticated: true,
           userId,
-          streamId
+          streamId,
+          rtmpUrl: currentRtmpUrl  // Store for debugging
         });
 
         socket.emit('authenticated', { 
@@ -579,7 +586,7 @@ function initializeWebSocket(io) {
               startedAt: new Date()
             }, 
             { new: true }
-          );
+          ).populate('streamer', 'name username');
           
           if (updateResult) {
             console.log(`✅ DATABASE UPDATED SUCCESSFULLY:`);
@@ -587,6 +594,41 @@ function initializeWebSocket(io) {
             console.log(`   Status: ${updateResult.status}`);
             console.log(`   isActive: ${updateResult.isActive}`);
             console.log(`   startedAt: ${updateResult.startedAt}`);
+            
+            // POST TO FEED - Make stream visible to followers
+            try {
+              const Post = mongoose.models.Post || require('../models/post.model');
+              if (Post) {
+                const feedPost = new Post({
+                  author: updateResult.streamer._id || userId,
+                  content: `🔴 LIVE NOW: ${updateResult.title || 'Live Stream'}`,
+                  type: 'livestream',
+                  isLiveStream: true,
+                  liveStreamId: updateResult._id,
+                  featuredImage: updateResult.thumbnail,
+                  media: updateResult.thumbnail ? [{
+                    url: updateResult.thumbnail,
+                    type: 'image',
+                    isLiveThumbnail: true
+                  }] : [],
+                  streamData: {
+                    streamId: updateResult._id,
+                    playbackId: updateResult.muxPlaybackId,
+                    viewerCount: 0,
+                    isLive: true
+                  }
+                });
+                await feedPost.save();
+                
+                // Update stream with feed post reference
+                updateResult.feedPostId = feedPost._id;
+                await updateResult.save();
+                
+                console.log(`📺 Live stream posted to feed: ${feedPost._id}`);
+              }
+            } catch (feedErr) {
+              console.log('⚠️ Could not post to feed:', feedErr.message);
+            }
           } else {
             console.log(`⚠️ Stream ${currentStreamId} not found in database!`);
           }
