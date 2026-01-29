@@ -626,6 +626,19 @@ router.delete('/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
 
+    // ✨ NEW: If this is a livestream post, also delete the livestream
+    if (blog.liveStreamId) {
+      try {
+        const LiveStream = mongoose.models.LiveStream || require('../models/livestream.model');
+        if (LiveStream) {
+          await LiveStream.findByIdAndDelete(blog.liveStreamId);
+          console.log(`🗑️ Deleted livestream: ${blog.liveStreamId}`);
+        }
+      } catch (e) {
+        console.error('⚠️ Could not delete livestream:', e.message);
+      }
+    }
+
     await Blog.findByIdAndDelete(id);
 
     res.json({ ok: true, message: 'Blog deleted successfully' });
