@@ -1190,6 +1190,44 @@ router.post('/:id/like', verifyToken, async (req, res) => {
   }
 });
 
-console.log('✅ Live routes loaded (with /streams, /active, thumbnail & feed support)');
+// ==========================================
+// GET /api/live/:streamId/status - Check stream status for OBS connection
+// FIXED: Detect when OBS starts pushing stream to Mux
+// ==========================================
+router.get('/:streamId/status', async (req, res) => {
+  try {
+    const { streamId } = req.params;
+    const stream = await LiveStream.findById(streamId);
+    
+    if (!stream) {
+      return res.status(404).json({ success: false, error: 'Stream not found' });
+    }
+
+    // Check if stream is active and has started
+    const isActive = stream.isActive && stream.status === 'live';
+    
+    // For Mux streams, check if it's connected by verifying mux data exists
+    const isConnected = isActive && !!stream.muxStreamKey;
+    const isStreaming = isActive && stream.status === 'live';
+    
+    console.log(`📊 Stream ${streamId} status: active=${isActive}, connected=${isConnected}, streaming=${isStreaming}`);
+    
+    res.json({
+      success: true,
+      isActive,
+      isConnected,
+      isStreaming,
+      status: stream.status,
+      title: stream.title,
+      muxStreamId: stream.muxStreamId,
+      viewerCount: stream.viewerCount || 0
+    });
+  } catch (error) {
+    console.error('Error checking stream status:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+console.log('✅ Live routes loaded (with /streams, /active, /status, thumbnail & feed support)');
 
 module.exports = router;
