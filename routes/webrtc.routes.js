@@ -247,12 +247,15 @@ router.post('/start-stream', verifyToken, async (req, res) => {
 
     if (existingStream) {
       console.log(`⚠️ User ${userId} already has active stream: ${existingStream._id}`);
-      // Return the existing stream info so frontend can use it
-      return res.status(400).json({
-        success: false,
-        error: 'You already have an active stream. End it first or wait 30 minutes for auto-cleanup.',
-        existingStreamId: existingStream._id,
-        streamAge: Math.round((Date.now() - new Date(existingStream.createdAt).getTime()) / 60000) + ' minutes'
+      // ✨ FIX: Return existing stream with 200 instead of 400
+      return res.json({
+        success: true,
+        streamId: existingStream._id,
+        muxStreamId: existingStream.muxStreamId,
+        playbackId: existingStream.muxPlaybackId,
+        rtmpUrl: `rtmps://global-live.mux.com:443/app/${existingStream.muxStreamKey}`,
+        playbackUrl: existingStream.playbackUrls.hls,
+        note: 'Using existing active stream'
       });
     }
 
