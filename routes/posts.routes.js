@@ -301,6 +301,19 @@ router.delete('/:id', verifyToken, async (req, res) => {
       });
     }
 
+    // ✨ NEW: If this is a livestream post, also delete the livestream
+    if (post.liveStreamId) {
+      try {
+        const LiveStream = require('../models/livestream.model');
+        if (LiveStream) {
+          await LiveStream.findByIdAndDelete(post.liveStreamId);
+          console.log(`🗑️ Deleted livestream: ${post.liveStreamId}`);
+        }
+      } catch (e) {
+        console.error('⚠️ Could not delete livestream:', e.message);
+      }
+    }
+
     await Post.findByIdAndDelete(req.params.id);
 
     res.json({
