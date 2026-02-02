@@ -94,6 +94,8 @@ async function createLiveFeedPost(stream, userId) {
       content: stream.description || `${authorName} is now live! Join the stream.`,
       contentType: 'live',
       type: 'live',
+      status: 'published',  // ✨ NEW: Mark as published so it appears in feed
+      isPublished: true,    // ✨ NEW: Published flag for compatibility
       liveStreamId: stream._id,
       visibility: stream.privacy || 'public',
       isLive: true,
