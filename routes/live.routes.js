@@ -1,8 +1,16 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
-// VERSION: 4.3.1 - Added fallback to active stream on ID mismatch
-// PREVIOUS: 4.3 - Auto-generate Mux thumbnail for feed
+// VERSION: 4.2.0 - OBS Connection Detection Fix
+// DATE: Feb 2, 2026
+// PREVIOUS: 4.3.1 - fallback to active stream on ID mismatch
+// 
+// CHANGELOG v4.2.0:
+//   - Fixed status endpoint muxStreamKey validation
+//   - Added support for 'preparing' state
+//   - Improved debug logging for connection issues
+//   - FIXES: "Waiting for OBS..." when stream should be connected
+//
 // Features: RTMP, thumbnails, auto-feed posting, notifications, fallback lookup
 // IMPORTANT: Route order matters! Specific routes before :id routes
 // ============================================
@@ -12,7 +20,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 Live Routes v4.3.1 loaded - fallback to active stream on ID mismatch');
+console.log('🔄 Live Routes v4.2.0 loaded - OBS connection detection fix');
 
 // Mux service
 let muxService;
@@ -1203,14 +1211,21 @@ router.get('/:streamId/status', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
 
-    // Check if stream is active and has started
-    const isActive = stream.isActive && stream.status === 'live';
+    // FIXED v4.2.0: Support 'preparing' state and validate muxStreamKey properly
+    const isActive = stream.isActive && (stream.status === 'live' || stream.status === 'preparing');
     
-    // For Mux streams, check if it's connected by verifying mux data exists
-    const isConnected = isActive && !!stream.muxStreamKey;
-    const isStreaming = isActive && stream.status === 'live';
+    // FIXED: Check for VALID (non-empty) mux stream key, not just existence
+    // Empty strings are truthy with !! operator, so we need to check .trim()
+    const hasValidMuxKey = !!(stream.muxStreamKey && String(stream.muxStreamKey).trim());
+    const isConnected = isActive && hasValidMuxKey;
+    const isStreaming = isActive && stream.status === 'live' && hasValidMuxKey;
     
-    console.log(`📊 Stream ${streamId} status: active=${isActive}, connected=${isConnected}, streaming=${isStreaming}`);
+    // Better logging for debugging
+    if (!isConnected) {
+      console.log(`⚠️  Stream ${streamId} NOT CONNECTED: status=${stream.status}, muxKey=${hasValidMuxKey ? '✅' : '❌'}, isActive=${stream.isActive}`);
+    } else {
+      console.log(`✅ Stream ${streamId} CONNECTED: status=${stream.status}, ready for end stream`);
+    }
     
     res.json({
       success: true,
