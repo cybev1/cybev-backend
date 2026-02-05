@@ -293,8 +293,13 @@ router.delete('/:id', verifyToken, async (req, res) => {
       });
     }
 
-    // Check ownership
-    if (post.authorId.toString() !== req.user.id) {
+    // Check ownership (support multiple token/user shapes and multiple author fields)
+    const userId = (req.user?.id || req.user?.userId || req.user?._id || req.user?.uid || '').toString();
+    const ownerId = (
+      post.authorId || post.author || post.user || post.userId || post.owner
+    )?.toString();
+
+    if (!userId || !ownerId || (ownerId !== userId && req.user?.role !== 'admin')) {
       return res.status(403).json({
         success: false,
         error: 'Not authorized to delete this post'

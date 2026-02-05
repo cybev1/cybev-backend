@@ -646,80 +646,10 @@ app.get('/api/sites/stats', authMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/vlogs/my - User's vlogs
-app.get('/api/vlogs/my', authMiddleware, async (req, res) => {
-  try {
-    const Vlog = mongoose.models.Vlog || mongoose.model('Vlog', new mongoose.Schema({
-      author: mongoose.Schema.Types.ObjectId,
-      title: String,
-      videoUrl: String,
-      views: { type: Number, default: 0 },
-      createdAt: { type: Date, default: Date.now }
-    }));
-    
-    const userId = req.user.userId || req.user.id || req.user._id;
-    const vlogs = await Vlog.find({ 
-      $or: [{ author: userId }, { user: userId }, { userId: userId }] 
-    }).sort({ createdAt: -1 }).lean();
-    
-    res.json({ ok: true, vlogs: vlogs || [], count: vlogs.length });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message, vlogs: [] });
-  }
-});
-
-// GET /api/vlogs/feed - Public vlogs feed
-app.get('/api/vlogs/feed', async (req, res) => {
-  try {
-    const Vlog = mongoose.models.Vlog;
-    const { limit = 20, page = 1, skip = 0 } = req.query;
-    
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const skipNum = parseInt(skip) || ((pageNum - 1) * limitNum);
-    
-    let vlogs = [];
-    let total = 0;
-    
-    if (Vlog) {
-      total = await Vlog.countDocuments({ 
-        $or: [
-          { status: 'published' }, 
-          { isPublished: true }, 
-          { status: { $exists: false } }
-        ]
-      });
-      
-      vlogs = await Vlog.find({ 
-        $or: [
-          { status: 'published' }, 
-          { isPublished: true }, 
-          { status: { $exists: false } }
-        ]
-      })
-        .sort({ createdAt: -1 })
-        .skip(skipNum)
-        .limit(limitNum)
-        .populate('author', 'name username avatar')
-        .lean();
-    }
-    
-    const hasMore = (skipNum + vlogs.length) < total;
-    
-    res.json({ 
-      ok: true, 
-      vlogs, 
-      feed: vlogs, 
-      count: vlogs.length,
-      total,
-      page: pageNum,
-      hasMore,
-      nextPage: hasMore ? pageNum + 1 : null
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message, vlogs: [], feed: [] });
-  }
-});
+// NOTE: Legacy /api/vlogs/* inline routes removed.
+// They were overriding the dedicated router at ./routes/vlog.routes.js
+// and returning a different response shape (ok:true) which broke the frontend
+// that expects { success: true, stories: [...] }.
 
 // GET /api/rewards/wallet - Wallet balance and transactions
 app.get('/api/rewards/wallet', authMiddleware, async (req, res) => {
@@ -1235,7 +1165,8 @@ const routes = [
   ['auth', '/api/auth', './routes/auth.routes'],
   ['users', '/api/users', './routes/user.routes'],
   ['user-analytics', '/api/user-analytics', './routes/user-analytics.routes'],
-  ['posts', '/api/posts', './routes/post.routes'],
+  // NOTE: correct filename is posts.routes.js
+  ['posts', '/api/posts', './routes/posts.routes'],
   ['comments', '/api/comments', './routes/comment.routes'],
   ['messages', '/api/messages', './routes/message.routes'],
   ['notifications', '/api/notifications', './routes/notification.routes'],
@@ -1246,32 +1177,34 @@ const routes = [
   ['bookmarks', '/api/bookmarks', './routes/bookmark.routes'],
   
   // Media & Content
-  ['media', '/api/media', './routes/media.routes'],
+  // Alias: some frontends call /api/media for uploads
+  ['media', '/api/media', './routes/upload.routes'],
   ['vlogs', '/api/vlogs', './routes/vlog.routes'],
   ['stories', '/api/stories', './routes/story.routes'],
-  ['polls', '/api/polls', './routes/poll.routes'],
+  // Polls route removed (module missing). Add it back when implemented.
   ['reactions', '/api/reactions', './routes/reaction.routes'],
-  ['reels', '/api/reels', './routes/reels.routes'],
+  // Reels routes were removed/merged; vlogs cover short-form video.
+  ['reels', '/api/reels', './routes/vlog.routes'],
   ['live', '/api/live', './routes/live.routes'],
   ['webrtc', '/api/webrtc', './routes/webrtc.routes'],
-  ['groups', '/api/groups', './routes/group.routes'],
-  ['groups-enhanced', '/api/groups', './routes/group-enhanced.routes'],
+  // Correct route file is groups.routes.js; mount enhanced on a dedicated prefix
+  ['groups', '/api/groups', './routes/groups.routes'],
+  ['groups-enhanced', '/api/groups-enhanced', './routes/group-enhanced.routes'],
   
   // Websites & Blogs - SITES ROUTES ADDED
   ['sites', '/api/sites', './routes/sites.routes'],
-  ['websites', '/api/websites', './routes/website.routes'],
+  // Backward compatible alias to sites
+  ['websites', '/api/websites', './routes/sites.routes'],
   ['blogs', '/api/blogs', './routes/blog.routes'],
-  ['blog-templates', '/api/blog-templates', './routes/blog-templates.routes'],
-  ['public-blog', '/api/public-blog', './routes/public-blog.routes'],
-  ['web3-blog', '/api/web3-blog', './routes/web3-blog.routes'],
+  // blog-templates/public-blog/web3-blog modules were removed (kept out of loader)
   
   // Web3 & NFT
   ['nft', '/api/nft', './routes/nft.routes'],
-  ['tokens', '/api/tokens', './routes/token.routes'],
+  // tokens module removed
   ['wallet', '/api/wallet', './routes/wallet.routes'],
   
   // Admin
-  ['admin-users', '/api/admin/users', './routes/admin-users.routes'],
+  // admin-users module removed
   ['admin-charts', '/api/admin/charts', './routes/admin-charts.routes'],
   ['admin-summary', '/api/admin', './routes/admin-summary.routes'],
   ['admin-insight', '/api/admin', './routes/admin-insight.routes'],
@@ -1323,8 +1256,7 @@ const routes = [
   // Premium Email
   ['campaigns-premium', '/api/campaigns-premium', './routes/campaigns-premium.routes'],
   
-  // Debug routes (TEMPORARY - remove after fixing)
-  ['debug', '/api/debug', './routes/debug.routes']
+  // Debug routes removed
   
   // NOTE: blogs-my.routes and sites-my.routes REMOVED - handled by inline routes above
 ];
