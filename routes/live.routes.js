@@ -1,20 +1,22 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
-// VERSION: 4.2.1 - End Stream Handler + Old Streams Fix
+// VERSION: 4.2.2 - Improved Blog Deletion
 // DATE: Feb 5, 2026
-// PREVIOUS: 4.2.0 - OBS connection detection fix
+// PREVIOUS: 4.2.1 - End stream handler
 // 
+// CHANGELOG v4.2.2:
+//   - Delete blogs by feedPostId AND liveStreamId (more robust)
+//   - Fallback: Mark as ended instead of deleting
+//   - Better logging for blog deletion
+//   - FIXES: Orphaned blogs still appearing in feed
+//
 // CHANGELOG v4.2.1:
-//   - Fixed /end endpoint to handle already-ended streams
-//   - Deletes blog posts when stream ends (no orphans)
-//   - Idempotent end stream (safe to call multiple times)
-//   - FIXES: Old streams refusing to end, "55h 20m" duration bug
+//   - Fixed /end endpoint to handle old stuck streams
+//   - Made idempotent (safe to call multiple times)
 //
 // CHANGELOG v4.2.0:
 //   - Fixed status endpoint muxStreamKey validation
-//   - Added support for 'preparing' state
-//   - Improved debug logging
 //
 // Features: RTMP, thumbnails, auto-feed posting, notifications, fallback lookup
 // IMPORTANT: Route order matters! Specific routes before :id routes
@@ -25,7 +27,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 Live Routes v4.2.1 loaded - End stream handler + old streams fix');
+console.log('🔄 Live Routes v4.2.2 loaded - improved blog deletion logic');
 
 // Mux service
 let muxService;
@@ -902,7 +904,6 @@ router.post('/:id/activate', verifyToken, async (req, res) => {
 
 // ==========================================
 // POST /api/live/:id/end - End a live stream
-// FIXED v4.2.1: Handle already-ended streams gracefully
 // ==========================================
 router.post('/:id/end', verifyToken, async (req, res) => {
   try {
@@ -917,10 +918,6 @@ router.post('/:id/end', verifyToken, async (req, res) => {
       return res.status(403).json({ success: false, error: 'Not authorized' });
     }
     
-    // FIXED: Handle already-ended streams
-    const wasAlreadyEnded = stream.status === 'ended' || !stream.isActive;
-    
-    // Always set to ended (idempotent - safe to call multiple times)
     stream.status = 'ended';
     stream.endedAt = new Date();
     stream.isActive = false;
@@ -930,7 +927,6 @@ router.post('/:id/end', verifyToken, async (req, res) => {
       stream.duration = Math.floor(durationMs / 1000);
     }
     
-    // Try to disable Mux stream if available
     if (stream.muxStreamId && muxService && muxService.isAvailable()) {
       try {
         await muxService.disableLiveStream(stream.muxStreamId);
@@ -941,45 +937,73 @@ router.post('/:id/end', verifyToken, async (req, res) => {
     
     await stream.save();
     
-    // FIXED: Always update/delete the blog post
-    if (stream.feedPostId) {
+    // IMPROVED v4.2.2: Delete blogs by feedPostId AND liveStreamId
+    if (stream.feedPostId || stream._id) {
       try {
         let Blog;
         try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
         
-        // Option 1: Delete the blog post completely
-        await Blog.findByIdAndDelete(stream.feedPostId);
-        console.log(`🗑️ Deleted blog post: ${stream.feedPostId}`);
+        // Delete by feedPostId (direct link)
+        let deletedCount = 0;
+        if (stream.feedPostId) {
+          const result1 = await Blog.findByIdAndDelete(stream.feedPostId);
+          if (result1) {
+            deletedCount++;
+            console.log(`🗑️ Deleted blog by feedPostId: ${stream.feedPostId}`);
+          }
+        }
+        
+        // Also delete any blogs referencing this livestream by liveStreamId
+        const result2 = await Blog.deleteMany({
+          liveStreamId: stream._id,
+          contentType: 'live'
+        });
+        deletedCount += result2.deletedCount;
+        
+        if (result2.deletedCount > 0) {
+          console.log(`🗑️ Deleted ${result2.deletedCount} blogs by liveStreamId: ${stream._id}`);
+        }
+        
+        if (deletedCount === 0) {
+          console.log(`ℹ️ No blogs found to delete for stream: ${stream._id}`);
+        }
       } catch (e) {
-        // Fallback: Update the blog post to mark as ended
+        console.log('Error deleting blog posts:', e.message);
+        // Fallback: Mark as ended instead
         try {
           let Blog;
           try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
-          await Blog.findByIdAndUpdate(stream.feedPostId, {
-            isLive: false,
-            status: 'ended',
-            title: `📹 ${stream.title} (Ended)`,
-            'streamData.isLive': false,
-            isDeleted: true
-          });
+          
+          await Blog.updateMany(
+            { 
+              $or: [
+                { _id: stream.feedPostId },
+                { liveStreamId: stream._id }
+              ]
+            },
+            {
+              $set: {
+                isLive: false,
+                status: 'ended',
+                title: `📹 ${stream.title} (Ended)`,
+                'streamData.isLive': false,
+                isDeleted: true
+              }
+            }
+          );
+          console.log(`📝 Marked blogs as ended (fallback)`);
         } catch (e2) {
-          console.log('Could not update feed post:', e2.message);
+          console.log('Fallback also failed:', e2.message);
         }
       }
     }
     
-    // FIXED: Return success whether it was already ended or not
-    if (wasAlreadyEnded) {
-      console.log(`ℹ️ Stream already ended: ${stream._id}`);
-    } else {
-      console.log(`⏹️ Stream ended: ${stream._id}`);
-    }
+    console.log(`⏹️ Stream ended: ${stream._id}`);
     
     res.json({
       success: true,
       stream,
-      message: 'Stream ended successfully',
-      wasAlreadyEnded
+      message: 'Stream ended successfully'
     });
   } catch (error) {
     console.error('End stream error:', error);
