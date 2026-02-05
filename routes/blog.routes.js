@@ -1,14 +1,13 @@
 // ============================================
 // FILE: routes/blog.routes.js
 // Blog Routes - FIXED ROUTE ORDER + POPULATE
-// VERSION: 2.4 - Added liveStreamId fallback for deletion
-// PREVIOUS: 2.3 - Added GET / for public blog listing
-// ISSUE: Delete endpoint now handles livestreamId parameter
-// CHANGELOG v2.4:
-//   - Support delete by liveStreamId fallback
-//   - Try direct ID first, fallback to liveStreamId search
-//   - Better logging and error handling
-//   - FIXES: 404 when trying to delete by livestream ID
+// VERSION: 2.5 - Smart livestream blog deletion
+// PREVIOUS: 2.4 - Added liveStreamId fallback
+// CHANGELOG v2.5:
+//   - Search via livestream collection if needed
+//   - Multiple fallback methods for finding blogs
+//   - Better error logging
+//   - FIXES: Old livestream blogs without liveStreamId field
 // ============================================
 
 const express = require('express');
@@ -608,7 +607,7 @@ router.put('/:id', verifyToken, async (req, res) => {
 
 // DELETE /api/blogs/:id - Delete blog
 // DELETE /api/blogs/:id - Delete a blog post
-// FIXED v2.4: Support deletion by liveStreamId fallback
+// FIXED v2.5: Smart search for livestream blogs
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
     const Blog = getBlog();
@@ -623,23 +622,40 @@ router.delete('/:id', verifyToken, async (req, res) => {
     
     if (mongoose.Types.ObjectId.isValid(id)) {
       blog = await Blog.findById(id);
+      if (blog) {
+        console.log(`✅ Found blog by direct ID: ${id}`);
+      }
     }
     
-    // If not found by ID, try by liveStreamId (either from query or ID parameter)
+    // If not found by ID, search by liveStreamId (multiple ways)
     if (!blog) {
       const searchId = liveStreamId || id;
       if (mongoose.Types.ObjectId.isValid(searchId)) {
+        // Try 1: Find by liveStreamId field
         blog = await Blog.findOne({
-          $or: [
-            { liveStreamId: searchId },
-            { streamId: searchId }
-          ],
-          contentType: 'live'
+          liveStreamId: searchId
         });
         
         if (blog) {
           console.log(`✅ Found blog by liveStreamId: ${searchId}`);
         }
+      }
+    }
+    
+    // If still not found, try searching livestream by ID and get associated blog
+    if (!blog) {
+      try {
+        const LiveStream = mongoose.models.LiveStream || require('../models/livestream.model');
+        const stream = await LiveStream.findById(id);
+        
+        if (stream && stream.feedPostId) {
+          blog = await Blog.findById(stream.feedPostId);
+          if (blog) {
+            console.log(`✅ Found blog via livestream feedPostId: ${stream.feedPostId}`);
+          }
+        }
+      } catch (e) {
+        console.log('Could not search livestream:', e.message);
       }
     }
 
