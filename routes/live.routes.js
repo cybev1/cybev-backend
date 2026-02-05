@@ -1,19 +1,23 @@
 // ============================================
 // FILE: routes/live.routes.js
 // Live Streaming API Routes with Mux Integration
-// VERSION: 4.2.2 - Improved Blog Deletion
+// VERSION: 4.2.3 - Blog Deletion by liveStreamId
 // DATE: Feb 5, 2026
-// PREVIOUS: 4.2.1 - End stream handler
+// PREVIOUS: 4.2.2 - Improved blog deletion logic
 // 
+// CHANGELOG v4.2.3:
+//   - Delete blogs by feedPostId AND liveStreamId
+//   - Handle ID mismatches between blog and livestream
+//   - Better fallback if primary delete fails
+//   - FIXES: Blog delete returning 404 when IDs don't match
+//
 // CHANGELOG v4.2.2:
-//   - Delete blogs by feedPostId AND liveStreamId (more robust)
-//   - Fallback: Mark as ended instead of deleting
-//   - Better logging for blog deletion
-//   - FIXES: Orphaned blogs still appearing in feed
+//   - Delete blogs by feedPostId AND liveStreamId
+//   - Fallback to mark as ended
+//   - Better logging
 //
 // CHANGELOG v4.2.1:
-//   - Fixed /end endpoint to handle old stuck streams
-//   - Made idempotent (safe to call multiple times)
+//   - Fixed /end endpoint for old stuck streams
 //
 // CHANGELOG v4.2.0:
 //   - Fixed status endpoint muxStreamKey validation
@@ -27,7 +31,7 @@ const router = express.Router();
 const mongoose = require('mongoose');
 
 // Log version on load
-console.log('🔄 Live Routes v4.2.2 loaded - improved blog deletion logic');
+console.log('🔄 Live Routes v4.2.3 loaded - blog deletion by liveStreamId with fallback');
 
 // Mux service
 let muxService;
@@ -937,48 +941,57 @@ router.post('/:id/end', verifyToken, async (req, res) => {
     
     await stream.save();
     
-    // IMPROVED v4.2.2: Delete blogs by feedPostId AND liveStreamId
+    // IMPROVED v4.2.3: Delete blogs using both feedPostId AND liveStreamId
+    // Handles case where blog ID might not match livestream ID
     if (stream.feedPostId || stream._id) {
       try {
         let Blog;
         try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
         
-        // Delete by feedPostId (direct link)
-        let deletedCount = 0;
+        // Try to delete by feedPostId first (direct match)
+        let blogDeleted = false;
+        
         if (stream.feedPostId) {
-          const result1 = await Blog.findByIdAndDelete(stream.feedPostId);
-          if (result1) {
-            deletedCount++;
+          const result = await Blog.findByIdAndDelete(stream.feedPostId);
+          if (result) {
+            blogDeleted = true;
             console.log(`🗑️ Deleted blog by feedPostId: ${stream.feedPostId}`);
           }
         }
         
-        // Also delete any blogs referencing this livestream by liveStreamId
-        const result2 = await Blog.deleteMany({
-          liveStreamId: stream._id,
-          contentType: 'live'
-        });
-        deletedCount += result2.deletedCount;
-        
-        if (result2.deletedCount > 0) {
-          console.log(`🗑️ Deleted ${result2.deletedCount} blogs by liveStreamId: ${stream._id}`);
+        // If feedPostId didn't work, search by liveStreamId
+        // This handles cases where blog ID != livestream feedPostId
+        if (!blogDeleted && stream._id) {
+          const deleteResult = await Blog.deleteMany({
+            $or: [
+              { liveStreamId: stream._id },
+              { streamId: stream._id }  // Try alternate field name too
+            ],
+            contentType: 'live'
+          });
+          
+          if (deleteResult.deletedCount > 0) {
+            blogDeleted = true;
+            console.log(`🗑️ Deleted ${deleteResult.deletedCount} blog(s) by liveStreamId: ${stream._id}`);
+          }
         }
         
-        if (deletedCount === 0) {
-          console.log(`ℹ️ No blogs found to delete for stream: ${stream._id}`);
+        if (!blogDeleted) {
+          console.log(`ℹ️ No blogs found to delete for stream ${stream._id} (feedPostId: ${stream.feedPostId})`);
         }
       } catch (e) {
-        console.log('Error deleting blog posts:', e.message);
-        // Fallback: Mark as ended instead
+        console.log('Error deleting blog:', e.message);
+        // Fallback: Try to mark as deleted instead
         try {
           let Blog;
           try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
           
-          await Blog.updateMany(
-            { 
+          const updateResult = await Blog.updateMany(
+            {
               $or: [
                 { _id: stream.feedPostId },
-                { liveStreamId: stream._id }
+                { liveStreamId: stream._id },
+                { streamId: stream._id }
               ]
             },
             {
@@ -987,11 +1000,15 @@ router.post('/:id/end', verifyToken, async (req, res) => {
                 status: 'ended',
                 title: `📹 ${stream.title} (Ended)`,
                 'streamData.isLive': false,
-                isDeleted: true
+                isDeleted: true,
+                endedAt: new Date()
               }
             }
           );
-          console.log(`📝 Marked blogs as ended (fallback)`);
+          
+          if (updateResult.modifiedCount > 0) {
+            console.log(`📝 Marked ${updateResult.modifiedCount} blogs as ended (fallback)`);
+          }
         } catch (e2) {
           console.log('Fallback also failed:', e2.message);
         }
