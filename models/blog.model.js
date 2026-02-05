@@ -125,7 +125,74 @@ const blogSchema = new mongoose.Schema({
       copy: { type: Number, default: 0 },
       native: { type: Number, default: 0 }
     }
-  }
+  },
+
+  // ==========================================
+  // LIVE STREAM FIELDS (v4.3.0)
+  // Required for live stream feed posts to work
+  // ==========================================
+  contentType: {
+    type: String,
+    enum: ['blog', 'post', 'live', 'vlog', 'event', null],
+    default: 'blog'
+  },
+
+  type: {
+    type: String,
+    default: 'blog'
+  },
+
+  liveStreamId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LiveStream',
+    default: null,
+    index: true
+  },
+
+  isLive: {
+    type: Boolean,
+    default: false
+  },
+
+  isPublished: {
+    type: Boolean,
+    default: false
+  },
+
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+
+  visibility: {
+    type: String,
+    enum: ['public', 'followers', 'private', null],
+    default: 'public'
+  },
+
+  thumbnail: String,
+  coverImage: String,
+  authorProfilePicture: String,
+  authorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+  media: [{
+    url: String,
+    type: { type: String },
+    isLiveThumbnail: Boolean,
+    playbackId: String
+  }],
+
+  streamData: {
+    streamId: { type: mongoose.Schema.Types.ObjectId },
+    playbackId: String,
+    playbackUrl: String,
+    thumbnailUrl: String,
+    viewerCount: { type: Number, default: 0 },
+    isLive: { type: Boolean, default: false }
+  },
+
+  feedPostId: { type: mongoose.Schema.Types.ObjectId },
+  endedAt: Date
 
 }, { 
   timestamps: true,
@@ -139,6 +206,9 @@ blogSchema.index({ status: 1, createdAt: -1 });
 blogSchema.index({ category: 1 });
 blogSchema.index({ tags: 1 });
 blogSchema.index({ isPinned: 1, author: 1 });
+blogSchema.index({ liveStreamId: 1 });
+blogSchema.index({ contentType: 1 });
+blogSchema.index({ isDeleted: 1 });
 
 // Virtual for like count
 blogSchema.virtual('likeCount').get(function() {

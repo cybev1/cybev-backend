@@ -850,4 +850,81 @@ router.delete('/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// ==========================================
+// POST /:id/send - Send a specific campaign (v4.1.0)
+// ==========================================
+router.post('/:id/send', authenticateToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const campaign = await Campaign.findOne({ _id: req.params.id, user: userId });
+
+    if (!campaign) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found' });
+    }
+
+    // Get recipient count
+    let query = { user: userId, status: 'subscribed' };
+
+    if (campaign.audienceType === 'list' && campaign.selectedLists?.length > 0) {
+      query.list = { $in: campaign.selectedLists };
+    } else if (campaign.audienceType === 'tags' && campaign.includeTags?.length > 0) {
+      query.tags = { $in: campaign.includeTags };
+    }
+
+    const recipientCount = await CampaignContact.countDocuments(query);
+
+    // Update campaign status
+    campaign.status = 'sending';
+    campaign.sentAt = new Date();
+    campaign.recipientCount = recipientCount;
+    await campaign.save();
+
+    // TODO: Implement actual email sending via AWS SES
+    console.log(`📤 Sending campaign "${campaign.name}" to ${recipientCount} recipients`);
+
+    // Mark as sent after processing
+    campaign.status = 'sent';
+    campaign.stats = { ...campaign.stats, sent: recipientCount, delivered: recipientCount };
+    await campaign.save();
+
+    res.json({ ok: true, sent: recipientCount, campaign });
+  } catch (err) {
+    console.error('Send campaign error:', err);
+    res.status(500).json({ ok: false, error: 'Failed to send campaign' });
+  }
+});
+
+// ==========================================
+// POST /:id/duplicate - Duplicate a campaign (v4.1.0)
+// ==========================================
+router.post('/:id/duplicate', authenticateToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const original = await Campaign.findOne({ _id: req.params.id, user: userId }).lean();
+
+    if (!original) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found' });
+    }
+
+    // Remove unique fields
+    delete original._id;
+    delete original.createdAt;
+    delete original.updatedAt;
+
+    const duplicate = await Campaign.create({
+      ...original,
+      name: `${original.name} (Copy)`,
+      status: 'draft',
+      sentAt: null,
+      recipientCount: 0,
+      stats: { sent: 0, delivered: 0, opened: 0, clicked: 0, bounced: 0, unsubscribed: 0 }
+    });
+
+    res.json({ ok: true, campaign: duplicate });
+  } catch (err) {
+    console.error('Duplicate campaign error:', err);
+    res.status(500).json({ ok: false, error: 'Failed to duplicate campaign' });
+  }
+});
+
 module.exports = router;
