@@ -6,6 +6,11 @@
 const mongoose = require('mongoose');
 
 const blogSchema = new mongoose.Schema({
+  // Soft delete
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date, default: null, index: true },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
   title: {
     type: String,
     required: true,

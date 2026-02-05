@@ -27,6 +27,11 @@ const CommentSchema = new mongoose.Schema(
 
 const PostSchema = new mongoose.Schema(
   {
+    // Soft delete
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date, default: null, index: true },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
     // Support both authorId and author (for compatibility)
     authorId: {
       type: mongoose.Schema.Types.ObjectId,

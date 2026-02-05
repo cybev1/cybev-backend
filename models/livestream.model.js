@@ -7,6 +7,11 @@
 const mongoose = require('mongoose');
 
 const liveStreamSchema = new mongoose.Schema({
+  // Soft delete
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date, default: null, index: true },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
   // ==========================================
   // Core Fields
   // ==========================================

@@ -7,6 +7,13 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
+// Build an ObjectId that roughly matches a given date (for collections without createdAt)
+const objectIdFromDate = (date) => {
+  const hexSeconds = Math.floor(date.getTime() / 1000).toString(16);
+  return new mongoose.Types.ObjectId(hexSeconds + '0000000000000000');
+};
+
+
 // Load models
 let Vlog, User;
 try {
@@ -161,8 +168,9 @@ router.get('/feed', optionalAuth, async (req, res) => {
     try {
       vlogs = await Vlog.find({
         isActive: { $ne: false },
+        isDeleted: { $ne: true },
         visibility: { $in: ['public', undefined] },
-        createdAt: { $gte: since }
+         $or: [ { createdAt: { $gte: since } }, { _id: { $gte: objectIdFromDate(since) } } ]
       })
       .populate('user', 'name username profilePicture avatar')
       .populate('author', 'name username profilePicture avatar') // Fallback for author field
