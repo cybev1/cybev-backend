@@ -1,9 +1,14 @@
 // ============================================
 // FILE: routes/blog.routes.js
 // Blog Routes - FIXED ROUTE ORDER + POPULATE
-// VERSION: 2.3 - Added GET / for public blog listing
-// PREVIOUS: 2.2 - Fixed authorName auto-population
-// ISSUE: /my was being caught by /:id route
+// VERSION: 2.4 - Added liveStreamId fallback for deletion
+// PREVIOUS: 2.3 - Added GET / for public blog listing
+// ISSUE: Delete endpoint now handles livestreamId parameter
+// CHANGELOG v2.4:
+//   - Support delete by liveStreamId fallback
+//   - Try direct ID first, fallback to liveStreamId search
+//   - Better logging and error handling
+//   - FIXES: 404 when trying to delete by livestream ID
 // ============================================
 
 const express = require('express');
@@ -602,20 +607,49 @@ router.put('/:id', verifyToken, async (req, res) => {
 });
 
 // DELETE /api/blogs/:id - Delete blog
+// DELETE /api/blogs/:id - Delete a blog post
+// FIXED v2.4: Support deletion by liveStreamId fallback
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
     const Blog = getBlog();
     const { id } = req.params;
+    const { liveStreamId } = req.query;
     const userId = req.user.id || req.user.userId || req.user._id;
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ ok: false, error: 'Invalid blog ID' });
+    console.log(`🗑️ Delete blog request: id=${id}, liveStreamId=${liveStreamId}`);
+
+    // Try to find blog by direct ID first
+    let blog = null;
+    
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      blog = await Blog.findById(id);
+    }
+    
+    // If not found by ID, try by liveStreamId (either from query or ID parameter)
+    if (!blog) {
+      const searchId = liveStreamId || id;
+      if (mongoose.Types.ObjectId.isValid(searchId)) {
+        blog = await Blog.findOne({
+          $or: [
+            { liveStreamId: searchId },
+            { streamId: searchId }
+          ],
+          contentType: 'live'
+        });
+        
+        if (blog) {
+          console.log(`✅ Found blog by liveStreamId: ${searchId}`);
+        }
+      }
     }
 
-    const blog = await Blog.findById(id);
-
     if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog not found' });
+      console.log(`❌ Blog not found: id=${id}, liveStreamId=${liveStreamId}`);
+      return res.status(404).json({ 
+        ok: false, 
+        error: 'Blog not found',
+        tried: { id, liveStreamId }
+      });
     }
 
     // Check ownership
@@ -626,7 +660,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
 
-    // ✨ NEW: If this is a livestream post, also delete the livestream
+    // If this is a livestream post, also delete the livestream
     if (blog.liveStreamId) {
       try {
         const LiveStream = mongoose.models.LiveStream || require('../models/livestream.model');
@@ -639,7 +673,8 @@ router.delete('/:id', verifyToken, async (req, res) => {
       }
     }
 
-    await Blog.findByIdAndDelete(id);
+    await Blog.findByIdAndDelete(blog._id);
+    console.log(`✅ Blog deleted: ${blog._id}`);
 
     res.json({ ok: true, message: 'Blog deleted successfully' });
   } catch (err) {
