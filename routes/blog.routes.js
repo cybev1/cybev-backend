@@ -602,62 +602,84 @@ router.put('/:id', verifyToken, async (req, res) => {
 });
 
 // DELETE /api/blogs/:id - Delete blog
-// DELETE /api/blogs/:id - Delete blog OR linked livestream post
 router.delete('/:id', verifyToken, async (req, res) => {
   try {
     const Blog = getBlog();
     const LiveStream = mongoose.models.LiveStream || require('../models/livestream.model');
+    const Post = mongoose.models.Post || require('../models/post.model');
     const { id } = req.params;
     const userId = req.user?.id || req.user?.userId || req.user?._id;
 
-    // 1) Try by Blog _id (only if valid ObjectId)
-    let blog = null;
-    if (mongoose.Types.ObjectId.isValid(id)) {
-      blog = await Blog.findById(id);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid content ID' });
     }
 
-    // 2) Fallback: try linkage fields (works even if id isn't an ObjectId)
+    // 1) Try Blog by _id
+    let blog = await Blog.findById(id);
+
+    // 2) Try Blog linkage fields (stream-published feed items)
     if (!blog) {
-      blog = await Blog.findOne({ $or: [{ liveStreamId: id }, { feedPostId: id }] });
+      const oid = new mongoose.Types.ObjectId(id);
+      blog = await Blog.findOne({
+        $or: [
+          { liveStreamId: id }, { feedPostId: id },
+          { liveStreamId: oid }, { feedPostId: oid }
+        ]
+      });
     }
 
-    // 3) If still not found, the ID may actually be a LiveStream _id
-    if (!blog && mongoose.Types.ObjectId.isValid(id)) {
-      const stream = await LiveStream.findById(id);
-      if (stream) {
-        // delete any blog(s) that point to this stream
-        await Blog.deleteMany({ liveStreamId: stream._id.toString() });
-        await stream.deleteOne();
-        return res.json({ ok: true, message: 'Stream (and linked blog posts) deleted successfully' });
+    // If we found a blog, enforce ownership then delete
+    if (blog) {
+      const ownerIds = [
+        blog.author?.toString(),
+        blog.user?.toString(),
+        blog.userId?.toString()
+      ].filter(Boolean);
+
+      const isOwner = userId && ownerIds.includes(userId.toString());
+      if (!isOwner && req.user?.role !== 'admin') {
+        return res.status(403).json({ ok: false, error: 'Not authorized' });
       }
-    }
 
-    if (!blog) {
-      return res.status(404).json({ ok: false, error: 'Blog or Stream not found' });
-    }
-
-    // Ownership check (same behavior as before, but for linkage deletes too)
-    const blogOwner = (blog.author || blog.user || blog.userId || '').toString();
-    const isOwner = userId && blogOwner && blogOwner === userId.toString();
-
-    if (!isOwner && req.user?.role !== 'admin') {
-      return res.status(403).json({ ok: false, error: 'Not authorized' });
-    }
-
-    // If linked to a livestream, delete that too
-    if (blog.liveStreamId && mongoose.Types.ObjectId.isValid(blog.liveStreamId)) {
-      try {
-        await LiveStream.findByIdAndDelete(blog.liveStreamId);
-      } catch (e) {
-        console.error('⚠️ Could not delete linked livestream:', e.message);
+      // delete linked livestream too (if any)
+      if (blog.liveStreamId && mongoose.Types.ObjectId.isValid(blog.liveStreamId)) {
+        try { await LiveStream.findByIdAndDelete(blog.liveStreamId); } catch (e) {}
       }
+
+      await blog.deleteOne();
+      return res.json({ ok: true, message: 'Deleted' });
     }
 
-    await blog.deleteOne();
-    return res.json({ ok: true, message: 'Blog deleted successfully' });
+    // 3) Not a Blog → could be a LiveStream _id (OBS/device streams)
+    const stream = await LiveStream.findById(id);
+    if (stream) {
+      const isOwner = userId && stream.streamer?.toString() === userId.toString();
+      if (!isOwner && req.user?.role !== 'admin') {
+        return res.status(403).json({ ok: false, error: 'Not authorized' });
+      }
+
+      // delete any blog posts linked to this stream
+      await Blog.deleteMany({ $or: [{ liveStreamId: stream._id.toString() }, { liveStreamId: stream._id }] });
+      await stream.deleteOne();
+      return res.json({ ok: true, message: 'Stream deleted' });
+    }
+
+    // 4) Not a Blog/Stream → could be a Post (some feed items are stored as posts but UI deletes via /blogs)
+    const post = await Post.findById(id);
+    if (post) {
+      const postOwner = (post.author || post.user || post.userId || post.owner)?.toString();
+      const isOwner = userId && postOwner && postOwner === userId.toString();
+      if (!isOwner && req.user?.role !== 'admin') {
+        return res.status(403).json({ ok: false, error: 'Not authorized' });
+      }
+      await post.deleteOne();
+      return res.json({ ok: true, message: 'Post deleted' });
+    }
+
+    return res.status(404).json({ ok: false, error: 'Blog or Stream not found' });
 
   } catch (err) {
-    console.error('❌ Delete blog error:', err);
+    console.error('❌ Delete content error:', err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
