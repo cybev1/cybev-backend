@@ -797,19 +797,44 @@ router.get('/:id', optionalAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
     
-    let stream = await LiveStream.findById(req.params.id)
+    const requestedId = req.params.id;
+
+    let stream = await LiveStream.findById(requestedId)
       .populate('streamer', 'name username profilePicture isAdmin bio followers')
       .populate('comments.user', 'name username profilePicture');
     
     if (!stream) {
+      // Backwards-compatibility:
+      // Some feed items store the Blog _id as the link id, while the actual
+      // livestream is referenced via blog.liveStreamId (or feedPostId).
+      // If the requested id isn't a LiveStream, try resolving via Blog.
+      try {
+        const Blog = mongoose.models.Blog || require('../models/blog.model');
+        const or = [{ _id: requestedId }, { feedPostId: requestedId }, { liveStreamId: requestedId }];
+        if (mongoose.Types.ObjectId.isValid(requestedId)) {
+          const oid = new mongoose.Types.ObjectId(requestedId);
+          or.push({ _id: oid }, { feedPostId: oid }, { liveStreamId: oid });
+        }
+        const blog = await Blog.findOne({ $or: or }).lean();
+        if (blog?.liveStreamId) {
+          stream = await LiveStream.findById(blog.liveStreamId)
+            .populate('streamer', 'name username profilePicture isAdmin bio followers')
+            .populate('comments.user', 'name username profilePicture');
+        }
+      } catch (e) {
+        // Ignore and continue to fallback below
+      }
+
       // Fallback: Return active stream if ID not found (fixes feed thumbnail routing)
-      stream = await LiveStream.findOne({ status: 'live', isActive: true })
-        .populate('streamer', 'name username profilePicture isAdmin bio followers')
-        .populate('comments.user', 'name username profilePicture')
-        .sort({ startedAt: -1 });
-      
       if (!stream) {
-        return res.status(404).json({ success: false, error: 'Stream not found' });
+        stream = await LiveStream.findOne({ status: 'live', isActive: true })
+          .populate('streamer', 'name username profilePicture isAdmin bio followers')
+          .populate('comments.user', 'name username profilePicture')
+          .sort({ startedAt: -1 });
+        
+        if (!stream) {
+          return res.status(404).json({ success: false, error: 'Stream not found' });
+        }
       }
     }
     
@@ -1070,7 +1095,21 @@ router.post('/:id/comment', verifyToken, async (req, res) => {
 router.post('/:id/like', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id;
-    const stream = await LiveStream.findById(req.params.id);
+    const requestedId = req.params.id;
+    let stream = await LiveStream.findById(requestedId);
+
+    // Backwards-compatibility: resolve stream id via Blog
+    if (!stream && mongoose.Types.ObjectId.isValid(requestedId)) {
+      try {
+        const Blog = mongoose.models.Blog || require('../models/blog.model');
+        const blog = await Blog.findOne({
+          $or: [{ _id: requestedId }, { feedPostId: requestedId }, { liveStreamId: requestedId }]
+        }).lean();
+        if (blog?.liveStreamId) {
+          stream = await LiveStream.findById(blog.liveStreamId);
+        }
+      } catch (e) {}
+    }
     
     if (!stream) {
       return res.status(404).json({ success: false, error: 'Stream not found' });
@@ -1102,7 +1141,21 @@ router.post('/:id/like', verifyToken, async (req, res) => {
 // ==========================================
 router.post('/:id/join', optionalAuth, async (req, res) => {
   try {
-    const stream = await LiveStream.findById(req.params.id);
+    const requestedId = req.params.id;
+    let stream = await LiveStream.findById(requestedId);
+
+    // Backwards-compatibility: resolve stream id via Blog
+    if (!stream && mongoose.Types.ObjectId.isValid(requestedId)) {
+      try {
+        const Blog = mongoose.models.Blog || require('../models/blog.model');
+        const blog = await Blog.findOne({
+          $or: [{ _id: requestedId }, { feedPostId: requestedId }, { liveStreamId: requestedId }]
+        }).lean();
+        if (blog?.liveStreamId) {
+          stream = await LiveStream.findById(blog.liveStreamId);
+        }
+      } catch (e) {}
+    }
     if (!stream) {
       return res.status(404).json({ success: false, error: 'Stream not found' });
     }
@@ -1131,7 +1184,21 @@ router.post('/:id/join', optionalAuth, async (req, res) => {
 // ==========================================
 router.post('/:id/leave', optionalAuth, async (req, res) => {
   try {
-    const stream = await LiveStream.findById(req.params.id);
+    const requestedId = req.params.id;
+    let stream = await LiveStream.findById(requestedId);
+
+    // Backwards-compatibility: resolve stream id via Blog
+    if (!stream && mongoose.Types.ObjectId.isValid(requestedId)) {
+      try {
+        const Blog = mongoose.models.Blog || require('../models/blog.model');
+        const blog = await Blog.findOne({
+          $or: [{ _id: requestedId }, { feedPostId: requestedId }, { liveStreamId: requestedId }]
+        }).lean();
+        if (blog?.liveStreamId) {
+          stream = await LiveStream.findById(blog.liveStreamId);
+        }
+      } catch (e) {}
+    }
     if (!stream) {
       return res.json({ success: true });
     }

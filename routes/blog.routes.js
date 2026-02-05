@@ -94,7 +94,6 @@ router.get('/', optionalAuth, async (req, res) => {
 
     // Build query for public/published blogs
     const query = {
-      isDeleted: { $ne: true },
       $or: [
         { status: 'published' },
         { status: 'public' },
@@ -613,7 +612,28 @@ router.delete('/:id', verifyToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Invalid blog ID' });
     }
 
-    const blog = await Blog.findById(id);
+    // IMPORTANT:
+    // Some feed items (especially published livestream posts) may use the
+    // livestream id as the feed item's id. In those cases, the Blog document
+    // is linked via fields like liveStreamId or feedPostId.
+    // To remain backwards compatible with the frontend, we resolve the blog
+    // by multiple identifiers before returning 404.
+
+    let blog = await Blog.findById(id);
+
+    if (!blog) {
+      const or = [{ liveStreamId: id }, { feedPostId: id }];
+
+      // If the id looks like an ObjectId, try object form too (some schemas
+      // store liveStreamId/feedPostId as ObjectId).
+      if (mongoose.Types.ObjectId.isValid(id)) {
+        const oid = new mongoose.Types.ObjectId(id);
+        or.push({ liveStreamId: oid });
+        or.push({ feedPostId: oid });
+      }
+
+      blog = await Blog.findOne({ $or: or });
+    }
 
     if (!blog) {
       return res.status(404).json({ ok: false, error: 'Blog not found' });
@@ -627,7 +647,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
 
-    // ✨ NEW: If this is a livestream post, also delete the livestream
+    // ✨ If this is a livestream post, also delete the livestream
     if (blog.liveStreamId) {
       try {
         const LiveStream = mongoose.models.LiveStream || require('../models/livestream.model');
@@ -640,7 +660,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
       }
     }
 
-    await Blog.findByIdAndDelete(id);
+    await Blog.findByIdAndDelete(blog._id);
 
     res.json({ ok: true, message: 'Blog deleted successfully' });
   } catch (err) {
