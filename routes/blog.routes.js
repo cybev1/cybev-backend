@@ -602,32 +602,121 @@ router.put('/:id', verifyToken, async (req, res) => {
 });
 
 // DELETE /api/blogs/:id - Delete blog
-
-router.delete('/:id', auth, async (req, res) => {
+// DELETE /api/blogs/:id - Delete blog OR linked livestream post
+router.delete('/:id', verifyToken, async (req, res) => {
   try {
+    const Blog = getBlog();
+    const LiveStream = mongoose.models.LiveStream || require('../models/livestream.model');
     const { id } = req.params;
+    const userId = req.user?.id || req.user?.userId || req.user?._id;
 
-    let blog = await Blog.findById(id) 
-      || await Blog.findOne({ $or: [{ liveStreamId: id }, { feedPostId: id }] });
-
-    if (!blog) {
-      const stream = await LiveStream.findById(id);
-      if (stream) {
-        await Blog.deleteMany({ liveStreamId: stream._id.toString() });
-        await stream.deleteOne();
-        return res.json({ success: true });
-      }
-      return res.status(404).json({ error: "Blog or Stream not found" });
+    // 1) Try by Blog _id (only if valid ObjectId)
+    let blog = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      blog = await Blog.findById(id);
     }
 
-    if (blog.liveStreamId) {
-      await LiveStream.findByIdAndDelete(blog.liveStreamId);
+    // 2) Fallback: try linkage fields (works even if id isn't an ObjectId)
+    if (!blog) {
+      blog = await Blog.findOne({ $or: [{ liveStreamId: id }, { feedPostId: id }] });
+    }
+
+    // 3) If still not found, the ID may actually be a LiveStream _id
+    if (!blog && mongoose.Types.ObjectId.isValid(id)) {
+      const stream = await LiveStream.findById(id);
+      if (stream) {
+        // delete any blog(s) that point to this stream
+        await Blog.deleteMany({ liveStreamId: stream._id.toString() });
+        await stream.deleteOne();
+        return res.json({ ok: true, message: 'Stream (and linked blog posts) deleted successfully' });
+      }
+    }
+
+    if (!blog) {
+      return res.status(404).json({ ok: false, error: 'Blog or Stream not found' });
+    }
+
+    // Ownership check (same behavior as before, but for linkage deletes too)
+    const blogOwner = (blog.author || blog.user || blog.userId || '').toString();
+    const isOwner = userId && blogOwner && blogOwner === userId.toString();
+
+    if (!isOwner && req.user?.role !== 'admin') {
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
+    }
+
+    // If linked to a livestream, delete that too
+    if (blog.liveStreamId && mongoose.Types.ObjectId.isValid(blog.liveStreamId)) {
+      try {
+        await LiveStream.findByIdAndDelete(blog.liveStreamId);
+      } catch (e) {
+        console.error('⚠️ Could not delete linked livestream:', e.message);
+      }
     }
 
     await blog.deleteOne();
-    res.json({ success: true });
+    return res.json({ ok: true, message: 'Blog deleted successfully' });
 
-  } catch (e) {
-    res.status(500).json({ error: e.message });
+  } catch (err) {
+    console.error('❌ Delete blog error:', err);
+    return res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+// ==========================================
+// GET /:id - Get blog by ID (MUST BE LAST!)
+// ==========================================
+
+router.get('/:id', optionalAuth, async (req, res) => {
+  try {
+    const Blog = getBlog();
+    const { id } = req.params;
+
+    console.log(`📖 Fetching blog: ${id}`);
+
+    // Check if it's a valid ObjectId
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      // Try to find by slug instead
+      const blogBySlug = await Blog.findOne({ slug: id })
+        .populate('author', 'name username avatar bio')
+        .lean();
+
+      if (blogBySlug) {
+        // Increment views
+        await Blog.findByIdAndUpdate(blogBySlug._id, { $inc: { views: 1 } });
+        blogBySlug.views = (blogBySlug.views || 0) + 1;
+        return res.json({ ok: true, blog: blogBySlug });
+      }
+
+      return res.status(400).json({ ok: false, error: 'Invalid blog ID or slug' });
+    }
+
+    const blog = await Blog.findById(id)
+      .populate('author', 'name username avatar bio')
+      .lean();
+
+    if (!blog) {
+      return res.status(404).json({ ok: false, error: 'Blog not found' });
+    }
+
+    // Check access for drafts
+    const userId = req.user?.id || req.user?.userId;
+    const isOwner = userId && [blog.author?._id?.toString(), blog.user?.toString(), blog.userId?.toString()]
+      .includes(userId.toString());
+    
+    if (blog.status !== 'published' && !isOwner && req.user?.role !== 'admin') {
+      return res.status(403).json({ ok: false, error: 'Blog not available' });
+    }
+
+    // Increment views
+    await Blog.findByIdAndUpdate(id, { $inc: { views: 1 } });
+    blog.views = (blog.views || 0) + 1;
+
+    res.json({ ok: true, blog });
+  } catch (err) {
+    console.error('❌ Get blog error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+console.log('📝 Blog routes v2.3 loaded - GET / public listing + authorName fix');
+module.exports = router;
