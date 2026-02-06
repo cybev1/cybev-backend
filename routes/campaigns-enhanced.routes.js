@@ -354,10 +354,88 @@ router.get('/templates', authenticateToken, async (req, res) => {
   try {
     const userId = getUserId(req);
     const templates = await EmailTemplate.find({ $or: [{ user: userId }, { isSystem: true }] }).sort({ createdAt: -1 });
+    console.log(`📧 Found ${templates.length} templates for user ${userId}`);
     res.json({ templates });
   } catch (err) {
     console.error('Templates error:', err);
     res.status(500).json({ error: 'Failed to fetch templates' });
+  }
+});
+
+// Create/Save a template
+router.post('/templates', authenticateToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { name, category, html, designJson, thumbnail } = req.body;
+    
+    if (!name || !html) {
+      return res.status(400).json({ error: 'Name and HTML content are required' });
+    }
+    
+    const template = new EmailTemplate({
+      user: userId,
+      name,
+      category: category || 'General',
+      html,
+      designJson,
+      thumbnail,
+      isSystem: false
+    });
+    
+    await template.save();
+    console.log(`✅ Template "${name}" created for user ${userId}`);
+    
+    res.json({ ok: true, template });
+  } catch (err) {
+    console.error('Create template error:', err);
+    res.status(500).json({ error: 'Failed to create template' });
+  }
+});
+
+// Update a template
+router.put('/templates/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const { name, category, html, designJson, thumbnail } = req.body;
+    
+    const template = await EmailTemplate.findOne({ _id: req.params.id, user: userId });
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    if (name) template.name = name;
+    if (category) template.category = category;
+    if (html) template.html = html;
+    if (designJson !== undefined) template.designJson = designJson;
+    if (thumbnail) template.thumbnail = thumbnail;
+    
+    await template.save();
+    res.json({ ok: true, template });
+  } catch (err) {
+    console.error('Update template error:', err);
+    res.status(500).json({ error: 'Failed to update template' });
+  }
+});
+
+// Delete a template
+router.delete('/templates/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    
+    const template = await EmailTemplate.findOne({ _id: req.params.id, user: userId });
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    if (template.isSystem) {
+      return res.status(403).json({ error: 'Cannot delete system templates' });
+    }
+    
+    await template.deleteOne();
+    res.json({ ok: true, message: 'Template deleted' });
+  } catch (err) {
+    console.error('Delete template error:', err);
+    res.status(500).json({ error: 'Failed to delete template' });
   }
 });
 
