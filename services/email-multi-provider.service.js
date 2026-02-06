@@ -8,22 +8,24 @@ const AWS = require('aws-sdk');
 
 // ==========================================
 // PROVIDER CONFIGURATION
+// Priority: Lower number = tried first
+// Brevo is PRIMARY since AWS SES is in sandbox
 // ==========================================
 
 const PROVIDERS = {
-  ses: {
-    name: 'Amazon SES',
-    priority: 1,
-    enabled: !!process.env.AWS_SES_ACCESS_KEY,
-    rateLimit: 14, // emails per second (adjust based on your SES limits)
-    dailyLimit: 50000
-  },
   brevo: {
     name: 'Brevo (Sendinblue)',
-    priority: 2,
+    priority: 1,  // PRIMARY - tried first
     enabled: !!process.env.BREVO_API_KEY,
     rateLimit: 10,
     dailyLimit: 300 // Free tier: 300/day, upgrade for more
+  },
+  ses: {
+    name: 'Amazon SES',
+    priority: 2,  // FALLBACK - tried if Brevo fails
+    enabled: !!process.env.AWS_SES_ACCESS_KEY,
+    rateLimit: 14, // emails per second (adjust based on your SES limits)
+    dailyLimit: 50000
   }
 };
 
