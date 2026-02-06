@@ -1156,13 +1156,16 @@ router.post('/', authenticateToken, async (req, res) => {
     const userId = getUserId(req);
     const campaignData = { ...req.body, user: userId };
     
+    console.log('📧 Creating campaign:', campaignData.name);
+    
     const campaign = new Campaign(campaignData);
     await campaign.save();
     
-    res.json({ campaign });
+    console.log('✅ Campaign created:', campaign._id);
+    res.json({ ok: true, campaign });
   } catch (err) {
     console.error('Create campaign error:', err);
-    res.status(500).json({ error: 'Failed to create campaign' });
+    res.status(500).json({ ok: false, error: 'Failed to create campaign' });
   }
 });
 
@@ -1351,16 +1354,23 @@ router.put('/:id', authenticateToken, async (req, res) => {
     const userId = getUserId(req);
     const updates = req.body;
     
+    console.log('📝 Updating campaign:', req.params.id);
+    
     const campaign = await Campaign.findOneAndUpdate(
       { _id: req.params.id, user: userId },
       updates,
       { new: true }
     );
     
-    res.json({ campaign });
+    if (!campaign) {
+      return res.status(404).json({ ok: false, error: 'Campaign not found' });
+    }
+    
+    console.log('✅ Campaign updated:', campaign._id);
+    res.json({ ok: true, campaign });
   } catch (err) {
     console.error('Update campaign error:', err);
-    res.status(500).json({ error: 'Failed to update campaign' });
+    res.status(500).json({ ok: false, error: 'Failed to update campaign' });
   }
 });
 
