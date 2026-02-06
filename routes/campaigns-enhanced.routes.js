@@ -354,6 +354,277 @@ router.delete('/addresses/:id', authenticateToken, async (req, res) => {
 });
 
 // ---------- TEMPLATES ----------
+
+// Built-in templates with actual HTML content
+const BUILTIN_TEMPLATES = {
+  tpl_welcome: {
+    _id: 'tpl_welcome',
+    name: 'Welcome Series',
+    category: 'welcome',
+    subject: 'Welcome to {{company}}! 🎉',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 150 }, backgroundColor: '#7c3aed', padding: { top: 30, bottom: 30, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'image', data: { src: 'https://images.unsplash.com/photo-1557804506-669a67965ba0?w=600&h=300&fit=crop', alt: 'Welcome', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 0, left: 0, right: 0 } } },
+        { id: 'b3', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#7c3aed;">Welcome to Our Community! 🎉</h1>', fontSize: 32, lineHeight: 1.4, color: '#7c3aed', backgroundColor: '#ffffff', padding: { top: 30, bottom: 10, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b4', type: 'text', data: { content: '<p style="margin:0;text-align:center;font-size:18px;color:#6b7280;">We\'re thrilled to have you join us. Here\'s what you can expect:</p>', fontSize: 18, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 10, bottom: 20, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b5', type: 'text', data: { content: '<ul style="color:#374151;font-size:16px;line-height:2;"><li>✨ Exclusive content and updates</li><li>🎁 Special offers just for members</li><li>📚 Tips and resources to help you succeed</li><li>🤝 A supportive community</li></ul>', fontSize: 16, lineHeight: 2, color: '#374151', backgroundColor: '#f9fafb', padding: { top: 20, bottom: 20, left: 60, right: 40 }, alignment: 'left' } },
+        { id: 'b6', type: 'button', data: { text: 'Get Started Now', link: 'https://example.com/start', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
+        { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;">Need help? Just reply to this email - we\'re here for you!</p>', fontSize: 14, lineHeight: 1.6, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 30, bottom: 20, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b8', type: 'footer', data: { companyName: 'Your Company', address: '123 Main St, City, Country', showSocial: true, socialLinks: { facebook: '#', twitter: '#', instagram: '#' }, unsubscribeText: 'Unsubscribe from these emails', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_flash: {
+    _id: 'tpl_flash',
+    name: 'Flash Sale',
+    category: 'promotional',
+    subject: '⚡ Flash Sale - 24 Hours Only!',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 120 }, backgroundColor: '#dc2626', padding: { top: 20, bottom: 20, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#ffffff;font-size:48px;font-weight:800;">⚡ FLASH SALE ⚡</h1>', fontSize: 48, lineHeight: 1.2, color: '#ffffff', backgroundColor: '#dc2626', padding: { top: 30, bottom: 10, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="margin:0;text-align:center;color:#fecaca;font-size:24px;">24 HOURS ONLY</p>', fontSize: 24, lineHeight: 1.4, color: '#fecaca', backgroundColor: '#dc2626', padding: { top: 0, bottom: 30, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b4', type: 'text', data: { content: '<div style="text-align:center;"><span style="font-size:72px;font-weight:800;color:#dc2626;">50% OFF</span></div>', fontSize: 72, lineHeight: 1, color: '#dc2626', backgroundColor: '#ffffff', padding: { top: 40, bottom: 20, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b5', type: 'text', data: { content: '<p style="text-align:center;font-size:20px;color:#374151;">Everything in store! No code needed.</p>', fontSize: 20, lineHeight: 1.6, color: '#374151', backgroundColor: '#ffffff', padding: { top: 10, bottom: 30, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b6', type: 'image', data: { src: 'https://images.unsplash.com/photo-1607083206869-4c7672e72a8a?w=600&h=300&fit=crop', alt: 'Sale Products', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 20, left: 20, right: 20 } } },
+        { id: 'b7', type: 'button', data: { text: 'SHOP NOW →', link: 'https://example.com/sale', backgroundColor: '#dc2626', textColor: '#ffffff', fontSize: 20, fontWeight: 'bold', borderRadius: 0, padding: { top: 18, bottom: 18, left: 50, right: 50 }, alignment: 'center', fullWidth: false } },
+        { id: 'b8', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;margin-top:30px;">Sale ends at midnight. Don\'t miss out!</p>', fontSize: 14, lineHeight: 1.6, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 20, bottom: 30, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b9', type: 'footer', data: { companyName: 'Your Store', address: '123 Main St', showSocial: true, socialLinks: {}, unsubscribeText: 'Unsubscribe', backgroundColor: '#1f2937', textColor: '#9ca3af', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_digest: {
+    _id: 'tpl_digest',
+    name: 'Weekly Digest',
+    category: 'newsletter',
+    subject: 'Your Weekly Update 📬',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 150 }, backgroundColor: '#ffffff', padding: { top: 30, bottom: 20, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;color:#111827;font-size:28px;">Weekly Digest 📬</h1>', fontSize: 28, lineHeight: 1.4, color: '#111827', backgroundColor: '#ffffff', padding: { top: 20, bottom: 5, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="color:#6b7280;font-size:16px;">Here\'s what\'s new this week...</p>', fontSize: 16, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 5, bottom: 20, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b4', type: 'divider', data: { style: 'solid', color: '#e5e7eb', thickness: 1, width: '100%', padding: { top: 10, bottom: 10, left: 30, right: 30 } } },
+        { id: 'b5', type: 'text', data: { content: '<h2 style="margin:0;color:#7c3aed;font-size:20px;">📰 Featured Story</h2>', fontSize: 20, lineHeight: 1.4, color: '#7c3aed', backgroundColor: '#ffffff', padding: { top: 20, bottom: 10, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b6', type: 'image', data: { src: 'https://images.unsplash.com/photo-1586339949216-35c2747cc36d?w=600&h=250&fit=crop', alt: 'Featured', link: '', width: '100%', alignment: 'center', padding: { top: 10, bottom: 15, left: 30, right: 30 } } },
+        { id: 'b7', type: 'text', data: { content: '<h3 style="margin:0 0 10px;color:#111827;">This Week\'s Highlight Article</h3><p style="color:#4b5563;">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.</p>', fontSize: 16, lineHeight: 1.6, color: '#4b5563', backgroundColor: '#ffffff', padding: { top: 0, bottom: 15, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b8', type: 'button', data: { text: 'Read More', link: '#', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 14, fontWeight: '600', borderRadius: 6, padding: { top: 10, bottom: 10, left: 24, right: 24 }, alignment: 'left', fullWidth: false } },
+        { id: 'b9', type: 'divider', data: { style: 'solid', color: '#e5e7eb', thickness: 1, width: '100%', padding: { top: 25, bottom: 15, left: 30, right: 30 } } },
+        { id: 'b10', type: 'text', data: { content: '<h2 style="margin:0;color:#7c3aed;font-size:20px;">📚 Quick Reads</h2>', fontSize: 20, lineHeight: 1.4, color: '#7c3aed', backgroundColor: '#ffffff', padding: { top: 10, bottom: 15, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b11', type: 'text', data: { content: '<p style="margin:0 0 12px;"><strong>Article One:</strong> Brief description of the first article with a link to read more.</p><p style="margin:0 0 12px;"><strong>Article Two:</strong> Brief description of another interesting piece for your readers.</p><p style="margin:0;"><strong>Article Three:</strong> One more article summary to round out the digest.</p>', fontSize: 15, lineHeight: 1.7, color: '#374151', backgroundColor: '#f9fafb', padding: { top: 20, bottom: 20, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b12', type: 'footer', data: { companyName: 'Your Newsletter', address: 'your@email.com', showSocial: true, socialLinks: { twitter: '#', linkedin: '#' }, unsubscribeText: 'Unsubscribe from this newsletter', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_cart: {
+    _id: 'tpl_cart',
+    name: 'Cart Recovery',
+    category: 'ecommerce',
+    subject: 'You left something behind 🛒',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 140 }, backgroundColor: '#ffffff', padding: { top: 25, bottom: 25, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#111827;font-size:28px;">Forgot Something? 🛒</h1>', fontSize: 28, lineHeight: 1.4, color: '#111827', backgroundColor: '#ffffff', padding: { top: 30, bottom: 10, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="text-align:center;color:#6b7280;font-size:16px;">Your cart is waiting for you! Complete your purchase before these items sell out.</p>', fontSize: 16, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 10, bottom: 25, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b4', type: 'image', data: { src: 'https://images.unsplash.com/photo-1556742049-0cfed4f6a45d?w=500&h=300&fit=crop', alt: 'Your Cart', link: '', width: '80%', alignment: 'center', padding: { top: 10, bottom: 20, left: 30, right: 30 } } },
+        { id: 'b5', type: 'text', data: { content: '<div style="background:#f9fafb;border-radius:8px;padding:20px;text-align:center;"><p style="margin:0 0 5px;color:#374151;font-weight:600;">Product Name Here</p><p style="margin:0;color:#7c3aed;font-size:20px;font-weight:700;">$99.00</p></div>', fontSize: 16, lineHeight: 1.6, color: '#374151', backgroundColor: '#ffffff', padding: { top: 10, bottom: 20, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b6', type: 'button', data: { text: 'Complete My Order', link: 'https://example.com/cart', backgroundColor: '#10b981', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
+        { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;margin-top:20px;">🔒 Secure checkout • Free shipping on orders over $50</p>', fontSize: 14, lineHeight: 1.6, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 15, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b8', type: 'footer', data: { companyName: 'Your Store', address: '123 Shopping Lane', showSocial: false, socialLinks: {}, unsubscribeText: 'Unsubscribe', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 25, bottom: 25, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_event: {
+    _id: 'tpl_event',
+    name: 'Event Invitation',
+    category: 'event',
+    subject: 'You\'re Invited! 🎉',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'image', data: { src: 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=600&h=300&fit=crop', alt: 'Event Banner', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 0, left: 0, right: 0 } } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#7c3aed;font-size:32px;">You\'re Invited! 🎉</h1>', fontSize: 32, lineHeight: 1.3, color: '#7c3aed', backgroundColor: '#ffffff', padding: { top: 35, bottom: 10, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<h2 style="margin:0;text-align:center;color:#111827;font-size:24px;">Annual Conference 2026</h2>', fontSize: 24, lineHeight: 1.4, color: '#111827', backgroundColor: '#ffffff', padding: { top: 10, bottom: 25, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b4', type: 'text', data: { content: '<div style="background:#f3f4f6;border-radius:12px;padding:25px;text-align:center;"><p style="margin:0 0 8px;color:#6b7280;font-size:14px;">📅 DATE</p><p style="margin:0 0 20px;color:#111827;font-size:18px;font-weight:600;">March 15, 2026 • 10:00 AM</p><p style="margin:0 0 8px;color:#6b7280;font-size:14px;">📍 LOCATION</p><p style="margin:0;color:#111827;font-size:18px;font-weight:600;">Grand Convention Center, NYC</p></div>', fontSize: 16, lineHeight: 1.6, color: '#374151', backgroundColor: '#ffffff', padding: { top: 0, bottom: 25, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b5', type: 'text', data: { content: '<p style="text-align:center;color:#4b5563;font-size:16px;">Join us for an incredible day of learning, networking, and inspiration. We\'ve got amazing speakers, workshops, and surprises planned!</p>', fontSize: 16, lineHeight: 1.7, color: '#4b5563', backgroundColor: '#ffffff', padding: { top: 10, bottom: 25, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b6', type: 'button', data: { text: 'RSVP Now - It\'s Free!', link: 'https://example.com/rsvp', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 50, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
+        { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:13px;margin-top:20px;">Limited spots available • RSVP by March 1st</p>', fontSize: 13, lineHeight: 1.5, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 15, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b8', type: 'footer', data: { companyName: 'Event Organizers', address: 'events@example.com', showSocial: true, socialLinks: { twitter: '#', facebook: '#' }, unsubscribeText: 'Unsubscribe from event updates', backgroundColor: '#1f2937', textColor: '#9ca3af', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_launch: {
+    _id: 'tpl_launch',
+    name: 'Product Launch',
+    category: 'announcement',
+    subject: 'Introducing: {{product_name}} 🚀',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 130 }, backgroundColor: '#111827', padding: { top: 25, bottom: 25, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<p style="margin:0;text-align:center;color:#a78bfa;font-size:14px;letter-spacing:2px;text-transform:uppercase;">NOW AVAILABLE</p>', fontSize: 14, lineHeight: 1.4, color: '#a78bfa', backgroundColor: '#111827', padding: { top: 30, bottom: 10, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#ffffff;font-size:40px;font-weight:800;">The All-New Product</h1>', fontSize: 40, lineHeight: 1.2, color: '#ffffff', backgroundColor: '#111827', padding: { top: 10, bottom: 15, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b4', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:18px;">Redesigned from the ground up. More powerful than ever.</p>', fontSize: 18, lineHeight: 1.5, color: '#9ca3af', backgroundColor: '#111827', padding: { top: 5, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b5', type: 'image', data: { src: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=600&h=350&fit=crop', alt: 'New Product', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 0, left: 0, right: 0 } } },
+        { id: 'b6', type: 'text', data: { content: '<h2 style="margin:0 0 20px;text-align:center;color:#111827;font-size:24px;">Key Features</h2><p style="text-align:center;color:#4b5563;font-size:16px;">✨ <strong>Feature One</strong> - Description of amazing feature<br/>🚀 <strong>Feature Two</strong> - Another incredible capability<br/>💎 <strong>Feature Three</strong> - Something your customers will love</p>', fontSize: 16, lineHeight: 1.8, color: '#4b5563', backgroundColor: '#ffffff', padding: { top: 35, bottom: 30, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b7', type: 'button', data: { text: 'Learn More →', link: 'https://example.com/product', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
+        { id: 'b8', type: 'footer', data: { companyName: 'Your Company', address: 'hello@company.com', showSocial: true, socialLinks: { twitter: '#', instagram: '#' }, unsubscribeText: 'Unsubscribe', backgroundColor: '#111827', textColor: '#6b7280', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_winback: {
+    _id: 'tpl_winback',
+    name: 'We Miss You',
+    category: 'promotional',
+    subject: 'We miss you! Come back for 20% off',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 140 }, backgroundColor: '#ffffff', padding: { top: 25, bottom: 20, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#111827;font-size:32px;">We Miss You! 💔</h1>', fontSize: 32, lineHeight: 1.3, color: '#111827', backgroundColor: '#ffffff', padding: { top: 30, bottom: 15, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="text-align:center;color:#6b7280;font-size:18px;">It\'s been a while since we\'ve seen you. We\'d love to welcome you back with a special offer:</p>', fontSize: 18, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 0, bottom: 25, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b4', type: 'text', data: { content: '<div style="background:linear-gradient(135deg,#7c3aed,#a78bfa);border-radius:16px;padding:30px;text-align:center;"><p style="margin:0 0 10px;color:#ffffff;font-size:16px;">EXCLUSIVE OFFER</p><p style="margin:0;color:#ffffff;font-size:48px;font-weight:800;">20% OFF</p><p style="margin:10px 0 0;color:#e9d5ff;font-size:14px;">Use code: COMEBACK20</p></div>', fontSize: 16, lineHeight: 1.6, color: '#ffffff', backgroundColor: '#ffffff', padding: { top: 10, bottom: 30, left: 40, right: 40 }, alignment: 'center' } },
+        { id: 'b5', type: 'image', data: { src: 'https://images.unsplash.com/photo-1516321497487-e288fb19713f?w=500&h=250&fit=crop', alt: 'Products', link: '', width: '90%', alignment: 'center', padding: { top: 10, bottom: 25, left: 30, right: 30 } } },
+        { id: 'b6', type: 'button', data: { text: 'Claim My Discount', link: 'https://example.com/shop', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
+        { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;margin-top:20px;">Offer expires in 7 days • Free shipping included</p>', fontSize: 14, lineHeight: 1.5, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 15, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b8', type: 'footer', data: { companyName: 'Your Store', address: 'support@store.com', showSocial: false, socialLinks: {}, unsubscribeText: 'Unsubscribe', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 25, bottom: 25, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_order: {
+    _id: 'tpl_order',
+    name: 'Order Confirmation',
+    category: 'ecommerce',
+    subject: 'Order Confirmed ✓',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 140 }, backgroundColor: '#ffffff', padding: { top: 25, bottom: 20, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<div style="text-align:center;"><span style="display:inline-block;background:#10b981;color:#ffffff;padding:8px 20px;border-radius:50px;font-size:14px;font-weight:600;">✓ ORDER CONFIRMED</span></div>', fontSize: 14, lineHeight: 1.4, color: '#10b981', backgroundColor: '#ffffff', padding: { top: 30, bottom: 20, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#111827;font-size:28px;">Thank You for Your Order!</h1>', fontSize: 28, lineHeight: 1.4, color: '#111827', backgroundColor: '#ffffff', padding: { top: 10, bottom: 10, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b4', type: 'text', data: { content: '<p style="text-align:center;color:#6b7280;font-size:16px;">Order #12345 • Placed on Feb 6, 2026</p>', fontSize: 16, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 5, bottom: 25, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b5', type: 'text', data: { content: '<div style="background:#f9fafb;border-radius:12px;padding:25px;"><h3 style="margin:0 0 15px;color:#111827;font-size:16px;">Order Summary</h3><div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#374151;">Product Name × 1</span><span style="color:#111827;font-weight:600;">$99.00</span></div><div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #e5e7eb;"><span style="color:#374151;">Shipping</span><span style="color:#10b981;font-weight:600;">FREE</span></div><div style="display:flex;justify-content:space-between;padding:15px 0 0;"><span style="color:#111827;font-weight:700;font-size:18px;">Total</span><span style="color:#111827;font-weight:700;font-size:18px;">$99.00</span></div></div>', fontSize: 16, lineHeight: 1.6, color: '#374151', backgroundColor: '#ffffff', padding: { top: 0, bottom: 25, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b6', type: 'button', data: { text: 'Track My Order', link: 'https://example.com/track', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 16, fontWeight: '600', borderRadius: 8, padding: { top: 14, bottom: 14, left: 32, right: 32 }, alignment: 'center', fullWidth: false } },
+        { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#6b7280;font-size:14px;margin-top:25px;">Questions about your order? Reply to this email or contact support.</p>', fontSize: 14, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 10, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b8', type: 'footer', data: { companyName: 'Your Store', address: '123 Main Street, City', showSocial: false, socialLinks: {}, unsubscribeText: 'Email Preferences', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 25, bottom: 25, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_minimal: {
+    _id: 'tpl_minimal',
+    name: 'Minimal Clean',
+    category: 'newsletter',
+    subject: 'Quick Update',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'text', data: { content: '<p style="margin:0;color:#6b7280;font-size:14px;">YOUR COMPANY</p>', fontSize: 14, lineHeight: 1.4, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 40, bottom: 5, left: 40, right: 40 }, alignment: 'left' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;color:#111827;font-size:28px;font-weight:600;">A Quick Update for You</h1>', fontSize: 28, lineHeight: 1.4, color: '#111827', backgroundColor: '#ffffff', padding: { top: 10, bottom: 25, left: 40, right: 40 }, alignment: 'left' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="color:#374151;font-size:16px;line-height:1.8;">Hi there,</p><p style="color:#374151;font-size:16px;line-height:1.8;">Hope this email finds you well. I wanted to share a quick update on what we\'ve been working on.</p><p style="color:#374151;font-size:16px;line-height:1.8;">We\'ve been listening to your feedback and have made some exciting improvements that I think you\'ll love. Here\'s the summary:</p>', fontSize: 16, lineHeight: 1.8, color: '#374151', backgroundColor: '#ffffff', padding: { top: 0, bottom: 20, left: 40, right: 40 }, alignment: 'left' } },
+        { id: 'b4', type: 'text', data: { content: '<ul style="color:#374151;font-size:16px;line-height:2;margin:0;padding-left:20px;"><li>First important point to mention</li><li>Second item worth highlighting</li><li>Third thing you should know about</li></ul>', fontSize: 16, lineHeight: 2, color: '#374151', backgroundColor: '#f9fafb', padding: { top: 20, bottom: 20, left: 50, right: 40 }, alignment: 'left' } },
+        { id: 'b5', type: 'text', data: { content: '<p style="color:#374151;font-size:16px;line-height:1.8;">If you have any questions or feedback, just hit reply. I read every email personally.</p><p style="color:#374151;font-size:16px;line-height:1.8;">Best,<br/>Your Name</p>', fontSize: 16, lineHeight: 1.8, color: '#374151', backgroundColor: '#ffffff', padding: { top: 20, bottom: 40, left: 40, right: 40 }, alignment: 'left' } },
+        { id: 'b6', type: 'divider', data: { style: 'solid', color: '#e5e7eb', thickness: 1, width: '100%', padding: { top: 10, bottom: 10, left: 40, right: 40 } } },
+        { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:12px;">© 2026 Your Company • <a href="#" style="color:#9ca3af;">Unsubscribe</a></p>', fontSize: 12, lineHeight: 1.6, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 20, bottom: 40, left: 40, right: 40 }, alignment: 'center' } }
+      ]
+    }
+  },
+  tpl_dark: {
+    _id: 'tpl_dark',
+    name: 'Dark Mode',
+    category: 'newsletter',
+    subject: 'The Latest News',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 140 }, backgroundColor: '#0f172a', padding: { top: 30, bottom: 25, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#ffffff;font-size:32px;">The Latest News</h1>', fontSize: 32, lineHeight: 1.3, color: '#ffffff', backgroundColor: '#0f172a', padding: { top: 30, bottom: 10, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="text-align:center;color:#94a3b8;font-size:16px;">Your weekly dose of updates and insights</p>', fontSize: 16, lineHeight: 1.6, color: '#94a3b8', backgroundColor: '#0f172a', padding: { top: 5, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b4', type: 'image', data: { src: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=600&h=280&fit=crop', alt: 'Featured', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 0, left: 0, right: 0 } } },
+        { id: 'b5', type: 'text', data: { content: '<h2 style="margin:0 0 15px;color:#ffffff;font-size:22px;">Featured Story</h2><p style="color:#cbd5e1;font-size:16px;line-height:1.7;">Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam.</p>', fontSize: 16, lineHeight: 1.7, color: '#cbd5e1', backgroundColor: '#1e293b', padding: { top: 30, bottom: 25, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b6', type: 'button', data: { text: 'Read Full Article', link: '#', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 16, fontWeight: '600', borderRadius: 8, padding: { top: 12, bottom: 12, left: 28, right: 28 }, alignment: 'left', fullWidth: false } },
+        { id: 'b7', type: 'divider', data: { style: 'solid', color: '#334155', thickness: 1, width: '100%', padding: { top: 25, bottom: 25, left: 30, right: 30 } } },
+        { id: 'b8', type: 'text', data: { content: '<h3 style="margin:0 0 15px;color:#ffffff;font-size:18px;">More Stories</h3><p style="color:#94a3b8;font-size:15px;line-height:1.8;">• <a href="#" style="color:#a78bfa;text-decoration:none;">Article title one with a short description</a></p><p style="color:#94a3b8;font-size:15px;line-height:1.8;">• <a href="#" style="color:#a78bfa;text-decoration:none;">Another interesting article to read</a></p><p style="color:#94a3b8;font-size:15px;line-height:1.8;">• <a href="#" style="color:#a78bfa;text-decoration:none;">Third story you might enjoy</a></p>', fontSize: 15, lineHeight: 1.8, color: '#94a3b8', backgroundColor: '#1e293b', padding: { top: 0, bottom: 30, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b9', type: 'footer', data: { companyName: 'Your Newsletter', address: 'news@example.com', showSocial: true, socialLinks: { twitter: '#', linkedin: '#' }, unsubscribeText: 'Unsubscribe', backgroundColor: '#0f172a', textColor: '#64748b', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_holiday: {
+    _id: 'tpl_holiday',
+    name: 'Holiday Special',
+    category: 'promotional',
+    subject: '🎄 Holiday Special Inside!',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'text', data: { content: '<div style="text-align:center;font-size:40px;padding:20px 0;">🎄 ❄️ 🎁</div>', fontSize: 40, lineHeight: 1, color: '#111827', backgroundColor: '#dc2626', padding: { top: 20, bottom: 10, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#ffffff;font-size:36px;font-weight:800;">HOLIDAY SALE</h1>', fontSize: 36, lineHeight: 1.2, color: '#ffffff', backgroundColor: '#dc2626', padding: { top: 10, bottom: 10, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<p style="margin:0;text-align:center;color:#fecaca;font-size:18px;">The most wonderful time to save!</p>', fontSize: 18, lineHeight: 1.4, color: '#fecaca', backgroundColor: '#dc2626', padding: { top: 5, bottom: 30, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b4', type: 'image', data: { src: 'https://images.unsplash.com/photo-1512389142860-9c449e58a814?w=600&h=300&fit=crop', alt: 'Holiday Sale', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 0, left: 0, right: 0 } } },
+        { id: 'b5', type: 'text', data: { content: '<div style="text-align:center;padding:30px 0;"><p style="margin:0 0 10px;color:#6b7280;font-size:14px;">USE CODE</p><p style="margin:0;color:#dc2626;font-size:32px;font-weight:800;letter-spacing:4px;">HOLIDAY25</p></div>', fontSize: 16, lineHeight: 1.4, color: '#374151', backgroundColor: '#ffffff', padding: { top: 20, bottom: 0, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b6', type: 'text', data: { content: '<p style="text-align:center;color:#374151;font-size:20px;font-weight:600;">25% OFF EVERYTHING</p><p style="text-align:center;color:#6b7280;font-size:16px;">Free shipping on orders over $50</p>', fontSize: 16, lineHeight: 1.6, color: '#374151', backgroundColor: '#ffffff', padding: { top: 10, bottom: 25, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b7', type: 'button', data: { text: '🎁 Shop Holiday Deals', link: 'https://example.com/holiday', backgroundColor: '#dc2626', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 36, right: 36 }, alignment: 'center', fullWidth: false } },
+        { id: 'b8', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;margin-top:25px;">Offer valid through December 31st</p>', fontSize: 14, lineHeight: 1.5, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 15, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b9', type: 'footer', data: { companyName: 'Your Store', address: 'Happy Holidays from our team!', showSocial: true, socialLinks: { instagram: '#', facebook: '#' }, unsubscribeText: 'Unsubscribe', backgroundColor: '#166534', textColor: '#bbf7d0', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+      ]
+    }
+  },
+  tpl_course: {
+    _id: 'tpl_course',
+    name: 'Course Update',
+    category: 'educational',
+    subject: 'New lesson available 📚',
+    isSystem: true,
+    content: {
+      blocks: [
+        { id: 'b1', type: 'header', data: { logo: { url: '', alt: 'Logo', width: 140 }, backgroundColor: '#7c3aed', padding: { top: 25, bottom: 25, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b2', type: 'text', data: { content: '<p style="margin:0;text-align:center;color:#c4b5fd;font-size:14px;">NEW LESSON AVAILABLE</p>', fontSize: 14, lineHeight: 1.4, color: '#c4b5fd', backgroundColor: '#7c3aed', padding: { top: 20, bottom: 5, left: 20, right: 20 }, alignment: 'center' } },
+        { id: 'b3', type: 'text', data: { content: '<h1 style="margin:0;text-align:center;color:#ffffff;font-size:28px;">Module 5: Advanced Techniques</h1>', fontSize: 28, lineHeight: 1.4, color: '#ffffff', backgroundColor: '#7c3aed', padding: { top: 10, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b4', type: 'image', data: { src: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=600&h=280&fit=crop', alt: 'Lesson Preview', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 0, left: 0, right: 0 } } },
+        { id: 'b5', type: 'text', data: { content: '<p style="color:#374151;font-size:16px;line-height:1.7;">Hi there! 👋</p><p style="color:#374151;font-size:16px;line-height:1.7;">Great news! Your next lesson is now available. In this module, you\'ll learn:</p>', fontSize: 16, lineHeight: 1.7, color: '#374151', backgroundColor: '#ffffff', padding: { top: 30, bottom: 10, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b6', type: 'text', data: { content: '<ul style="color:#374151;font-size:16px;line-height:2;"><li>📌 Key concept one explained simply</li><li>📌 Practical exercises to reinforce learning</li><li>📌 Real-world applications and examples</li><li>📌 Bonus resources and downloads</li></ul>', fontSize: 16, lineHeight: 2, color: '#374151', backgroundColor: '#f3f4f6', padding: { top: 20, bottom: 20, left: 50, right: 30 }, alignment: 'left' } },
+        { id: 'b7', type: 'text', data: { content: '<p style="color:#6b7280;font-size:16px;line-height:1.7;">This lesson takes about 45 minutes to complete. Take your time and don\'t hesitate to reach out if you have questions!</p>', fontSize: 16, lineHeight: 1.7, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 15, bottom: 25, left: 30, right: 30 }, alignment: 'left' } },
+        { id: 'b8', type: 'button', data: { text: 'Start Learning →', link: 'https://example.com/lesson', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
+        { id: 'b9', type: 'text', data: { content: '<div style="background:#f3f4f6;border-radius:8px;padding:15px;margin-top:25px;text-align:center;"><p style="margin:0;color:#6b7280;font-size:14px;">📊 Your Progress: <strong style="color:#7c3aed;">4/10 modules completed</strong></p></div>', fontSize: 14, lineHeight: 1.6, color: '#6b7280', backgroundColor: '#ffffff', padding: { top: 10, bottom: 30, left: 30, right: 30 }, alignment: 'center' } },
+        { id: 'b10', type: 'footer', data: { companyName: 'Your Course', address: 'support@course.com', showSocial: false, socialLinks: {}, unsubscribeText: 'Update email preferences', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 25, bottom: 25, left: 20, right: 20 } } }
+      ]
+    }
+  }
+};
+
+// GET single template (including built-in templates)
+router.get('/templates/:id', authenticateToken, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const templateId = req.params.id;
+    
+    // Check if it's a built-in template
+    if (BUILTIN_TEMPLATES[templateId]) {
+      console.log(`📧 Returning built-in template: ${templateId}`);
+      return res.json({ template: BUILTIN_TEMPLATES[templateId] });
+    }
+    
+    // Otherwise look in database
+    const template = await EmailTemplate.findOne({ 
+      _id: templateId, 
+      $or: [{ user: userId }, { isSystem: true }] 
+    });
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    res.json({ template });
+  } catch (err) {
+    console.error('Get template error:', err);
+    res.status(500).json({ error: 'Failed to fetch template' });
+  }
+});
+
+// GET all templates
 router.get('/templates', authenticateToken, async (req, res) => {
   try {
     const userId = getUserId(req);
