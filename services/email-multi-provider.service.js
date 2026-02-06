@@ -1,7 +1,7 @@
 // ============================================
 // FILE: services/email-multi-provider.service.js
 // CYBEV Multi-Provider Email Service
-// VERSION: 1.0.0 - SES + Brevo + Mailgun
+// VERSION: 2.0.0 - Brevo Primary + Fixed ENV vars
 // ============================================
 
 const AWS = require('aws-sdk');
@@ -23,8 +23,8 @@ const PROVIDERS = {
   ses: {
     name: 'Amazon SES',
     priority: 2,  // FALLBACK - tried if Brevo fails
-    enabled: !!process.env.AWS_SES_ACCESS_KEY,
-    rateLimit: 14, // emails per second (adjust based on your SES limits)
+    enabled: !!(process.env.AWS_ACCESS_KEY_ID || process.env.AWS_SES_ACCESS_KEY),
+    rateLimit: 14,
     dailyLimit: 50000
   }
 };
@@ -39,10 +39,10 @@ const getSESClient = () => {
   if (!sesClient && PROVIDERS.ses.enabled) {
     sesClient = new AWS.SES({
       apiVersion: '2010-12-01',
-      region: process.env.AWS_SES_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || process.env.AWS_SES_REGION || 'us-east-1',
       credentials: {
-        accessKeyId: process.env.AWS_SES_ACCESS_KEY,
-        secretAccessKey: process.env.AWS_SES_SECRET_KEY
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID || process.env.AWS_SES_ACCESS_KEY,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || process.env.AWS_SES_SECRET_KEY
       }
     });
   }
@@ -59,7 +59,7 @@ const sendWithBrevo = async ({ to, from, fromName, subject, html, text, replyTo,
 
   const payload = {
     sender: {
-      email: from || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      email: from || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
       name: fromName || 'CYBEV'
     },
     to: Array.isArray(to) ? to.map(email => ({ email })) : [{ email: to }],
