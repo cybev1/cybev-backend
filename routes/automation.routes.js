@@ -1,477 +1,591 @@
 // ============================================
-// FILE: routes/automation.routes.js
-// CYBEV Email Automation API Routes
-// VERSION: 2.0.0 - Phase 6
+// FILE: routes/automations.routes.js
+// CYBEV Email Automation API - Workflow Builder
+// VERSION: 1.0.0 - Klaviyo-Quality Automations
 // ============================================
 
 const express = require('express');
 const router = express.Router();
-const { Automation, AutomationSubscriber, AutomationQueue, AutomationTemplate, EmailSubscription } = require('../models/automation.model');
-const { EmailContact } = require('../models/email.model');
-const verifyToken = require('../middleware/verifyToken');
+const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
+
+// Import models
+const { Automation, AutomationEnrollment, AutomationEmailLog } = require('../models/automation.model');
+
+// Email service
+let emailService = null;
+try {
+  emailService = require('../services/email-multi-provider.service');
+} catch (err) {
+  console.warn('⚠️ Email service not available for automations');
+}
+
+// ==========================================
+// AUTHENTICATION MIDDLEWARE
+// ==========================================
+
+const auth = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev-secret-key');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
+
+const getUserId = (req) => req.user.userId || req.user.id || req.user._id;
+
+// ==========================================
+// AUTOMATION TEMPLATES
+// ==========================================
+
+const AUTOMATION_TEMPLATES = [
+  {
+    id: 'welcome_series',
+    name: 'Welcome Series',
+    description: 'Onboard new subscribers with a 3-email welcome sequence',
+    icon: '👋',
+    category: 'engagement',
+    trigger: { type: 'list_signup' },
+    steps: [
+      { id: 'email1', type: 'email', config: { subject: 'Welcome to {{company}}! 🎉', delayType: 'fixed', delayValue: 0 } },
+      { id: 'delay1', type: 'delay', config: { delayType: 'fixed', delayValue: 2, delayUnit: 'days' } },
+      { id: 'email2', type: 'email', config: { subject: 'Here\'s what you can do with {{company}}' } },
+      { id: 'delay2', type: 'delay', config: { delayType: 'fixed', delayValue: 3, delayUnit: 'days' } },
+      { id: 'email3', type: 'email', config: { subject: 'Quick tip to get the most out of {{company}}' } }
+    ]
+  },
+  {
+    id: 'abandoned_cart',
+    name: 'Abandoned Cart Recovery',
+    description: 'Recover lost sales with timely reminders',
+    icon: '🛒',
+    category: 'ecommerce',
+    trigger: { type: 'abandoned_cart' },
+    steps: [
+      { id: 'delay1', type: 'delay', config: { delayType: 'fixed', delayValue: 1, delayUnit: 'hours' } },
+      { id: 'email1', type: 'email', config: { subject: 'You left something behind 🛒' } },
+      { id: 'condition1', type: 'condition', config: { conditionType: 'email_clicked', yesPath: 'end', noPath: 'delay2' } },
+      { id: 'delay2', type: 'delay', config: { delayType: 'fixed', delayValue: 24, delayUnit: 'hours' } },
+      { id: 'email2', type: 'email', config: { subject: 'Your cart is waiting - 10% off inside!' } }
+    ]
+  },
+  {
+    id: 'birthday',
+    name: 'Birthday Celebration',
+    description: 'Send personalized birthday wishes and offers',
+    icon: '🎂',
+    category: 'engagement',
+    trigger: { type: 'date_property', dateProperty: 'birthday' },
+    steps: [
+      { id: 'email1', type: 'email', config: { subject: 'Happy Birthday, {{firstName}}! 🎉 Here\'s a gift for you' } }
+    ]
+  },
+  {
+    id: 'win_back',
+    name: 'Win-Back Campaign',
+    description: 'Re-engage inactive subscribers',
+    icon: '💔',
+    category: 'engagement',
+    trigger: { type: 'inactivity', inactivityDays: 30 },
+    steps: [
+      { id: 'email1', type: 'email', config: { subject: 'We miss you! Here\'s 20% off to come back' } },
+      { id: 'delay1', type: 'delay', config: { delayType: 'fixed', delayValue: 5, delayUnit: 'days' } },
+      { id: 'condition1', type: 'condition', config: { conditionType: 'email_opened', yesPath: 'end', noPath: 'email2' } },
+      { id: 'email2', type: 'email', config: { subject: 'Last chance: Your special offer expires soon' } }
+    ]
+  },
+  {
+    id: 'post_purchase',
+    name: 'Post-Purchase Follow-up',
+    description: 'Thank customers and request reviews',
+    icon: '📦',
+    category: 'ecommerce',
+    trigger: { type: 'purchase' },
+    steps: [
+      { id: 'email1', type: 'email', config: { subject: 'Thank you for your order! 🎉' } },
+      { id: 'delay1', type: 'delay', config: { delayType: 'fixed', delayValue: 7, delayUnit: 'days' } },
+      { id: 'email2', type: 'email', config: { subject: 'How are you enjoying your purchase?' } },
+      { id: 'delay2', type: 'delay', config: { delayType: 'fixed', delayValue: 14, delayUnit: 'days' } },
+      { id: 'email3', type: 'email', config: { subject: 'Leave a review and get 10% off your next order' } }
+    ]
+  },
+  {
+    id: 'event_reminder',
+    name: 'Event Reminder',
+    description: 'Send reminders before an event',
+    icon: '📅',
+    category: 'engagement',
+    trigger: { type: 'date_property', dateProperty: 'event_date' },
+    steps: [
+      { id: 'email1', type: 'email', config: { subject: 'Reminder: {{event_name}} is in 7 days!', delayValue: -7, delayUnit: 'days' } },
+      { id: 'email2', type: 'email', config: { subject: '{{event_name}} is tomorrow!', delayValue: -1, delayUnit: 'days' } },
+      { id: 'email3', type: 'email', config: { subject: '{{event_name}} starts now!', delayValue: 0 } }
+    ]
+  }
+];
 
 // ==========================================
 // AUTOMATION CRUD
 // ==========================================
 
 // Get all automations
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', auth, async (req, res) => {
   try {
-    const { status, page = 1, limit = 20 } = req.query;
-    const query = { user: req.user._id };
+    const userId = getUserId(req);
+    const { status } = req.query;
+    
+    const query = { user: userId };
     if (status) query.status = status;
     
     const automations = await Automation.find(query)
-      .sort({ updatedAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .sort({ createdAt: -1 })
+      .populate('trigger.listId', 'name')
+      .populate('trigger.formId', 'name');
     
-    const total = await Automation.countDocuments(query);
-    
-    res.json({
-      success: true,
-      automations,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
-    });
-  } catch (error) {
-    console.error('Get automations error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ ok: true, automations });
+  } catch (err) {
+    console.error('Get automations error:', err);
+    res.status(500).json({ error: 'Failed to fetch automations' });
   }
+});
+
+// Get automation templates
+router.get('/templates', auth, async (req, res) => {
+  res.json({ ok: true, templates: AUTOMATION_TEMPLATES });
 });
 
 // Get single automation
-router.get('/:id', verifyToken, async (req, res) => {
+router.get('/:id', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
+    const userId = getUserId(req);
+    
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId })
+      .populate('trigger.listId', 'name')
+      .populate('trigger.formId', 'name');
+    
     if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
+      return res.status(404).json({ error: 'Automation not found' });
     }
-    res.json({ success: true, automation });
-  } catch (error) {
-    console.error('Get automation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    
+    res.json({ ok: true, automation });
+  } catch (err) {
+    console.error('Get automation error:', err);
+    res.status(500).json({ error: 'Failed to fetch automation' });
   }
 });
 
-// Create automation
-router.post('/', verifyToken, async (req, res) => {
+// Create automation (from scratch or template)
+router.post('/', auth, async (req, res) => {
   try {
-    // Check limit
-    const subscription = await EmailSubscription.findOne({ user: req.user._id });
-    const currentCount = await Automation.countDocuments({ user: req.user._id, status: { $ne: 'archived' } });
-    const limit = subscription?.limits?.automations || 1;
+    const userId = getUserId(req);
+    const { name, description, templateId, trigger, steps, settings } = req.body;
     
-    if (currentCount >= limit) {
-      return res.status(403).json({ 
-        success: false, 
-        message: `You've reached your automation limit (${limit}). Upgrade to create more.` 
-      });
+    let automationData = {
+      user: userId,
+      name: name || 'New Automation',
+      description,
+      status: 'draft'
+    };
+    
+    // If using template
+    if (templateId) {
+      const template = AUTOMATION_TEMPLATES.find(t => t.id === templateId);
+      if (template) {
+        automationData.name = name || template.name;
+        automationData.description = description || template.description;
+        automationData.trigger = { ...template.trigger };
+        automationData.steps = template.steps.map((step, i) => ({
+          ...step,
+          id: `step_${Date.now()}_${i}`,
+          position: { x: 250, y: 100 + (i * 120) }
+        }));
+      }
+    } else {
+      automationData.trigger = trigger || { type: 'list_signup' };
+      automationData.steps = steps || [];
     }
     
-    const automation = new Automation({
-      user: req.user._id,
-      name: req.body.name || 'New Automation',
-      description: req.body.description,
-      trigger: req.body.trigger || { type: 'manual' },
-      steps: req.body.steps || [],
-      entryStep: req.body.entryStep,
-      settings: req.body.settings || {},
-      status: 'draft'
-    });
+    automationData.settings = settings || {};
     
+    const automation = new Automation(automationData);
     await automation.save();
     
-    // Update usage
-    if (subscription) {
-      subscription.usage.automations = currentCount + 1;
-      await subscription.save();
-    }
-    
-    res.json({ success: true, automation });
-  } catch (error) {
-    console.error('Create automation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    console.log(`✅ Automation "${automation.name}" created for user ${userId}`);
+    res.json({ ok: true, automation });
+  } catch (err) {
+    console.error('Create automation error:', err);
+    res.status(500).json({ error: 'Failed to create automation' });
   }
 });
 
 // Update automation
-router.put('/:id', verifyToken, async (req, res) => {
+router.put('/:id', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
+    const userId = getUserId(req);
+    const updates = req.body;
+    
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId });
     if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
+      return res.status(404).json({ error: 'Automation not found' });
     }
     
-    // Can't update active automation's core structure
-    if (automation.status === 'active' && (req.body.trigger || req.body.steps)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Pause the automation before editing trigger or steps' 
-      });
+    // Can't update active automation's steps
+    if (automation.status === 'active' && updates.steps) {
+      return res.status(400).json({ error: 'Pause automation before editing workflow' });
     }
     
-    const updates = ['name', 'description', 'trigger', 'steps', 'entryStep', 'settings'];
-    updates.forEach(field => {
-      if (req.body[field] !== undefined) automation[field] = req.body[field];
+    const allowedUpdates = ['name', 'description', 'trigger', 'steps', 'settings'];
+    allowedUpdates.forEach(field => {
+      if (updates[field] !== undefined) {
+        automation[field] = updates[field];
+      }
     });
     
-    automation.version += 1;
     await automation.save();
-    
-    res.json({ success: true, automation });
-  } catch (error) {
-    console.error('Update automation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ ok: true, automation });
+  } catch (err) {
+    console.error('Update automation error:', err);
+    res.status(500).json({ error: 'Failed to update automation' });
   }
 });
 
 // Delete automation
-router.delete('/:id', verifyToken, async (req, res) => {
+router.delete('/:id', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
+    const userId = getUserId(req);
+    
+    const automation = await Automation.findOneAndDelete({ _id: req.params.id, user: userId });
     if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
+      return res.status(404).json({ error: 'Automation not found' });
     }
     
-    // Archive instead of delete if has subscribers
-    const subscriberCount = await AutomationSubscriber.countDocuments({ automation: automation._id });
-    if (subscriberCount > 0) {
-      automation.status = 'archived';
-      await automation.save();
-    } else {
-      await automation.deleteOne();
-    }
+    // Delete enrollments and logs
+    await AutomationEnrollment.deleteMany({ automation: req.params.id });
+    await AutomationEmailLog.deleteMany({ automation: req.params.id });
     
-    res.json({ success: true, message: 'Automation deleted' });
-  } catch (error) {
-    console.error('Delete automation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ ok: true, message: 'Automation deleted' });
+  } catch (err) {
+    console.error('Delete automation error:', err);
+    res.status(500).json({ error: 'Failed to delete automation' });
   }
 });
 
 // ==========================================
-// AUTOMATION STATUS CONTROL
+// AUTOMATION STATUS OPERATIONS
 // ==========================================
 
 // Activate automation
-router.post('/:id/activate', verifyToken, async (req, res) => {
+router.post('/:id/activate', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
+    const userId = getUserId(req);
+    
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId });
     if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
+      return res.status(404).json({ error: 'Automation not found' });
     }
     
-    // Validate automation has required components
+    // Validate automation has required elements
     if (!automation.trigger?.type) {
-      return res.status(400).json({ success: false, message: 'Automation needs a trigger' });
+      return res.status(400).json({ error: 'Automation must have a trigger configured' });
     }
-    if (!automation.steps?.length || !automation.entryStep) {
-      return res.status(400).json({ success: false, message: 'Automation needs at least one step' });
+    
+    if (!automation.steps || automation.steps.length === 0) {
+      return res.status(400).json({ error: 'Automation must have at least one step' });
     }
     
     automation.status = 'active';
     automation.activatedAt = new Date();
     await automation.save();
     
-    res.json({ success: true, automation, message: 'Automation activated' });
-  } catch (error) {
-    console.error('Activate automation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    console.log(`✅ Automation "${automation.name}" activated`);
+    res.json({ ok: true, automation });
+  } catch (err) {
+    console.error('Activate automation error:', err);
+    res.status(500).json({ error: 'Failed to activate automation' });
   }
 });
 
 // Pause automation
-router.post('/:id/pause', verifyToken, async (req, res) => {
+router.post('/:id/pause', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
-    if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
-    }
+    const userId = getUserId(req);
     
-    automation.status = 'paused';
-    automation.pausedAt = new Date();
-    await automation.save();
-    
-    // Cancel pending queue items
-    await AutomationQueue.updateMany(
-      { automation: automation._id, status: 'pending' },
-      { status: 'cancelled' }
+    const automation = await Automation.findOneAndUpdate(
+      { _id: req.params.id, user: userId },
+      { status: 'paused', pausedAt: new Date() },
+      { new: true }
     );
     
-    res.json({ success: true, automation, message: 'Automation paused' });
-  } catch (error) {
-    console.error('Pause automation error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    if (!automation) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
+    
+    res.json({ ok: true, automation });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to pause automation' });
+  }
+});
+
+// Duplicate automation
+router.post('/:id/duplicate', auth, async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    
+    const original = await Automation.findOne({ _id: req.params.id, user: userId });
+    if (!original) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
+    
+    const duplicate = new Automation({
+      ...original.toObject(),
+      _id: undefined,
+      name: `${original.name} (Copy)`,
+      status: 'draft',
+      stats: {
+        totalEntered: 0,
+        currentlyActive: 0,
+        completed: 0,
+        exitedEarly: 0,
+        goalReached: 0,
+        emailsSent: 0,
+        revenue: 0
+      },
+      createdAt: undefined,
+      updatedAt: undefined,
+      activatedAt: undefined,
+      pausedAt: undefined,
+      lastTriggeredAt: undefined
+    });
+    
+    await duplicate.save();
+    res.json({ ok: true, automation: duplicate });
+  } catch (err) {
+    console.error('Duplicate automation error:', err);
+    res.status(500).json({ error: 'Failed to duplicate automation' });
   }
 });
 
 // ==========================================
-// SUBSCRIBER MANAGEMENT
+// ENROLLMENT OPERATIONS
 // ==========================================
 
-// Get automation subscribers
-router.get('/:id/subscribers', verifyToken, async (req, res) => {
+// Get enrollments for an automation
+router.get('/:id/enrollments', auth, async (req, res) => {
   try {
+    const userId = getUserId(req);
     const { status, page = 1, limit = 50 } = req.query;
-    const query = { automation: req.params.id, user: req.user._id };
+    
+    // Verify ownership
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId });
+    if (!automation) {
+      return res.status(404).json({ error: 'Automation not found' });
+    }
+    
+    const query = { automation: req.params.id };
     if (status) query.status = status;
     
-    const subscribers = await AutomationSubscriber.find(query)
-      .populate('contact', 'email name')
+    const enrollments = await AutomationEnrollment.find(query)
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .populate('contact', 'email firstName lastName');
     
-    const total = await AutomationSubscriber.countDocuments(query);
+    const total = await AutomationEnrollment.countDocuments(query);
     
     res.json({
-      success: true,
-      subscribers,
+      ok: true,
+      enrollments,
       pagination: { page: parseInt(page), limit: parseInt(limit), total, pages: Math.ceil(total / limit) }
     });
-  } catch (error) {
-    console.error('Get subscribers error:', error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error('Get enrollments error:', err);
+    res.status(500).json({ error: 'Failed to fetch enrollments' });
   }
 });
 
-// Add subscriber to automation (manual enrollment)
-router.post('/:id/subscribers', verifyToken, async (req, res) => {
+// Manually enroll a contact
+router.post('/:id/enroll', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
+    const userId = getUserId(req);
+    const { contactId, contactIds } = req.body;
+    
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId });
     if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
+      return res.status(404).json({ error: 'Automation not found' });
     }
     
     if (automation.status !== 'active') {
-      return res.status(400).json({ success: false, message: 'Automation must be active to add subscribers' });
+      return res.status(400).json({ error: 'Automation must be active to enroll contacts' });
     }
     
-    const { contactId, contactIds } = req.body;
-    const idsToAdd = contactIds || (contactId ? [contactId] : []);
-    
-    if (!idsToAdd.length) {
-      return res.status(400).json({ success: false, message: 'Provide contactId or contactIds' });
+    const idsToEnroll = contactIds || (contactId ? [contactId] : []);
+    if (idsToEnroll.length === 0) {
+      return res.status(400).json({ error: 'No contacts specified' });
     }
     
     const results = [];
-    for (const cId of idsToAdd) {
+    for (const cId of idsToEnroll) {
       try {
         // Check if already enrolled
-        const existing = await AutomationSubscriber.findOne({ 
-          automation: automation._id, 
-          contact: cId,
-          status: { $in: ['active', 'paused'] }
+        const existing = await AutomationEnrollment.findOne({
+          automation: automation._id,
+          contact: cId
         });
         
-        if (existing) {
-          results.push({ contactId: cId, success: false, reason: 'Already enrolled' });
+        if (existing && !automation.settings.allowReentry) {
+          results.push({ contactId: cId, status: 'skipped', reason: 'Already enrolled' });
           continue;
         }
         
-        // Check re-entry settings
-        if (!automation.settings.allowReEntry) {
-          const previousEntry = await AutomationSubscriber.findOne({
-            automation: automation._id,
-            contact: cId
-          });
-          if (previousEntry) {
-            results.push({ contactId: cId, success: false, reason: 'Re-entry not allowed' });
-            continue;
-          }
-        }
-        
-        // Create subscriber
-        const subscriber = new AutomationSubscriber({
+        // Create enrollment
+        const enrollment = new AutomationEnrollment({
           automation: automation._id,
           contact: cId,
-          user: req.user._id,
-          currentStep: automation.entryStep,
+          user: userId,
           status: 'active',
-          journey: [{
-            stepId: automation.entryStep,
-            stepType: 'entry',
+          currentStep: automation.steps[0]?.id,
+          history: [{
+            stepId: 'entry',
             action: 'entered',
             timestamp: new Date()
           }],
-          triggerData: { source: 'manual' },
-          lastEntryAt: new Date()
+          nextActionAt: new Date()
         });
         
-        await subscriber.save();
+        await enrollment.save();
         
-        // Schedule first step
-        const firstStep = automation.steps.find(s => s.id === automation.entryStep);
-        if (firstStep) {
-          const queueItem = new AutomationQueue({
-            automation: automation._id,
-            subscriber: subscriber._id,
-            contact: cId,
-            user: req.user._id,
-            stepId: firstStep.id,
-            stepType: firstStep.type,
-            scheduledAt: new Date()
-          });
-          await queueItem.save();
-        }
+        // Update automation stats
+        await Automation.updateOne(
+          { _id: automation._id },
+          { 
+            $inc: { 'stats.totalEntered': 1, 'stats.currentlyActive': 1 },
+            lastTriggeredAt: new Date()
+          }
+        );
         
-        // Update stats
-        automation.stats.enrolled += 1;
-        automation.stats.active += 1;
-        
-        results.push({ contactId: cId, success: true, subscriberId: subscriber._id });
+        results.push({ contactId: cId, status: 'enrolled' });
       } catch (err) {
-        results.push({ contactId: cId, success: false, reason: err.message });
+        results.push({ contactId: cId, status: 'error', reason: err.message });
       }
     }
     
-    await automation.save();
-    
-    res.json({ success: true, results });
-  } catch (error) {
-    console.error('Add subscribers error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ ok: true, results });
+  } catch (err) {
+    console.error('Enroll contacts error:', err);
+    res.status(500).json({ error: 'Failed to enroll contacts' });
   }
 });
 
-// Remove subscriber from automation
-router.delete('/:id/subscribers/:subscriberId', verifyToken, async (req, res) => {
+// Remove enrollment
+router.delete('/:id/enrollments/:enrollmentId', auth, async (req, res) => {
   try {
-    const subscriber = await AutomationSubscriber.findOne({
-      _id: req.params.subscriberId,
-      automation: req.params.id,
-      user: req.user._id
-    });
+    const userId = getUserId(req);
     
-    if (!subscriber) {
-      return res.status(404).json({ success: false, message: 'Subscriber not found' });
+    // Verify automation ownership
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId });
+    if (!automation) {
+      return res.status(404).json({ error: 'Automation not found' });
     }
     
-    subscriber.status = 'exited';
-    subscriber.exitReason = 'manual_removal';
-    subscriber.exitedAt = new Date();
-    subscriber.journey.push({
-      stepId: subscriber.currentStep,
-      stepType: 'exit',
-      action: 'removed',
-      timestamp: new Date()
-    });
-    await subscriber.save();
-    
-    // Cancel pending actions
-    await AutomationQueue.updateMany(
-      { subscriber: subscriber._id, status: 'pending' },
-      { status: 'cancelled' }
+    const enrollment = await AutomationEnrollment.findOneAndUpdate(
+      { _id: req.params.enrollmentId, automation: req.params.id },
+      { status: 'exited', exitedAt: new Date(), exitReason: 'Manual removal' },
+      { new: true }
     );
     
-    // Update automation stats
+    if (!enrollment) {
+      return res.status(404).json({ error: 'Enrollment not found' });
+    }
+    
+    // Update stats
     await Automation.updateOne(
-      { _id: req.params.id },
-      { $inc: { 'stats.active': -1, 'stats.exited': 1 } }
+      { _id: automation._id },
+      { $inc: { 'stats.currentlyActive': -1, 'stats.exitedEarly': 1 } }
     );
     
-    res.json({ success: true, message: 'Subscriber removed' });
-  } catch (error) {
-    console.error('Remove subscriber error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    res.json({ ok: true, enrollment });
+  } catch (err) {
+    console.error('Remove enrollment error:', err);
+    res.status(500).json({ error: 'Failed to remove enrollment' });
   }
 });
 
 // ==========================================
-// ANALYTICS
+// AUTOMATION ANALYTICS
 // ==========================================
 
 // Get automation analytics
-router.get('/:id/analytics', verifyToken, async (req, res) => {
+router.get('/:id/analytics', auth, async (req, res) => {
   try {
-    const automation = await Automation.findOne({ _id: req.params.id, user: req.user._id });
+    const userId = getUserId(req);
+    const { period = '30d' } = req.query;
+    
+    const automation = await Automation.findOne({ _id: req.params.id, user: userId });
     if (!automation) {
-      return res.status(404).json({ success: false, message: 'Automation not found' });
+      return res.status(404).json({ error: 'Automation not found' });
     }
     
-    // Get step-by-step analytics
-    const stepAnalytics = await AutomationSubscriber.aggregate([
-      { $match: { automation: automation._id } },
-      { $unwind: '$journey' },
-      { $group: {
-        _id: '$journey.stepId',
-        entered: { $sum: { $cond: [{ $eq: ['$journey.action', 'entered'] }, 1, 0] } },
-        completed: { $sum: { $cond: [{ $eq: ['$journey.action', 'completed'] }, 1, 0] } },
-        failed: { $sum: { $cond: [{ $eq: ['$journey.action', 'failed'] }, 1, 0] } }
-      }}
-    ]);
+    // Calculate date range
+    const now = new Date();
+    let startDate = new Date();
+    switch (period) {
+      case '7d': startDate.setDate(now.getDate() - 7); break;
+      case '30d': startDate.setDate(now.getDate() - 30); break;
+      case '90d': startDate.setDate(now.getDate() - 90); break;
+      default: startDate.setDate(now.getDate() - 30);
+    }
     
-    // Get daily enrollment trend
-    const enrollmentTrend = await AutomationSubscriber.aggregate([
-      { $match: { automation: automation._id } },
-      { $group: {
-        _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-        count: { $sum: 1 }
-      }},
-      { $sort: { _id: 1 } },
-      { $limit: 30 }
-    ]);
+    // Get email stats
+    const emailLogs = await AutomationEmailLog.find({
+      automation: req.params.id,
+      createdAt: { $gte: startDate }
+    });
+    
+    const emailStats = {
+      sent: emailLogs.length,
+      delivered: emailLogs.filter(e => e.status !== 'failed' && e.status !== 'bounced').length,
+      opened: emailLogs.filter(e => e.status === 'opened' || e.status === 'clicked').length,
+      clicked: emailLogs.filter(e => e.status === 'clicked').length
+    };
+    
+    // Step performance
+    const stepPerformance = {};
+    automation.steps.filter(s => s.type === 'email').forEach(step => {
+      const stepLogs = emailLogs.filter(l => l.stepId === step.id);
+      stepPerformance[step.id] = {
+        name: step.config?.subject || step.id,
+        sent: stepLogs.length,
+        opened: stepLogs.filter(l => l.status === 'opened' || l.status === 'clicked').length,
+        clicked: stepLogs.filter(l => l.status === 'clicked').length,
+        openRate: stepLogs.length > 0 ? (stepLogs.filter(l => l.status === 'opened' || l.status === 'clicked').length / stepLogs.length * 100).toFixed(1) : 0,
+        clickRate: stepLogs.length > 0 ? (stepLogs.filter(l => l.status === 'clicked').length / stepLogs.length * 100).toFixed(1) : 0
+      };
+    });
+    
+    // Revenue (if tracked)
+    const totalRevenue = emailLogs.reduce((sum, log) => sum + (log.revenue || 0), 0);
     
     res.json({
-      success: true,
-      stats: automation.stats,
-      stepAnalytics,
-      enrollmentTrend
+      ok: true,
+      analytics: {
+        period,
+        overview: automation.stats,
+        emailStats,
+        stepPerformance,
+        revenue: totalRevenue,
+        conversionRate: automation.stats.totalEntered > 0 
+          ? (automation.stats.goalReached / automation.stats.totalEntered * 100).toFixed(1) 
+          : 0
+      }
     });
-  } catch (error) {
-    console.error('Get analytics error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// ==========================================
-// TEMPLATES
-// ==========================================
-
-// Get automation templates
-router.get('/templates/list', verifyToken, async (req, res) => {
-  try {
-    const { category } = req.query;
-    const query = {};
-    if (category) query.category = category;
-    
-    const templates = await AutomationTemplate.find(query).sort({ usageCount: -1 });
-    res.json({ success: true, templates });
-  } catch (error) {
-    console.error('Get templates error:', error);
-    res.status(500).json({ success: false, message: error.message });
-  }
-});
-
-// Create automation from template
-router.post('/templates/:templateId/use', verifyToken, async (req, res) => {
-  try {
-    const template = await AutomationTemplate.findById(req.params.templateId);
-    if (!template) {
-      return res.status(404).json({ success: false, message: 'Template not found' });
-    }
-    
-    const automation = new Automation({
-      user: req.user._id,
-      name: req.body.name || `${template.name} Copy`,
-      description: template.description,
-      trigger: template.trigger,
-      steps: template.steps,
-      entryStep: template.entryStep,
-      settings: template.settings,
-      status: 'draft'
-    });
-    
-    await automation.save();
-    
-    // Update template usage count
-    template.usageCount += 1;
-    await template.save();
-    
-    res.json({ success: true, automation });
-  } catch (error) {
-    console.error('Use template error:', error);
-    res.status(500).json({ success: false, message: error.message });
+  } catch (err) {
+    console.error('Get automation analytics error:', err);
+    res.status(500).json({ error: 'Failed to fetch analytics' });
   }
 });
 
