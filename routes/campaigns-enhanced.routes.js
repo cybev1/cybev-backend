@@ -802,7 +802,7 @@ router.post('/test', authenticateToken, async (req, res) => {
       try {
         const result = await emailService.sendEmail({
           to: email,
-          from: fromEmail || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+          from: fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
           fromName: fromName || 'CYBEV',
           subject: `[TEST] ${subject}`,
           html: html,
@@ -908,7 +908,7 @@ router.post('/send', authenticateToken, async (req, res) => {
     // Send in background
     emailService.sendBulkEmails({
       recipients: emailRecipients,
-      from: campaignData.fromEmail || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      from: campaignData.fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
       fromName: campaignData.fromName || 'CYBEV',
       subject: campaignData.subject,
       html: campaignData.html,
@@ -1057,7 +1057,7 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
     // Send in background (don't wait)
     emailService.sendBulkEmails({
       recipients: emailRecipients,
-      from: campaign.fromEmail || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      from: campaign.fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
       fromName: campaign.fromName || 'CYBEV',
       subject: campaign.subject,
       html: campaign.html,
