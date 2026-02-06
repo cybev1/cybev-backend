@@ -202,11 +202,15 @@ router.get('/stats', authenticateToken, async (req, res) => {
 router.get('/lists', authenticateToken, async (req, res) => {
   try {
     const userId = getUserId(req);
+    console.log('📋 Fetching lists for user:', userId);
+    
     const lists = await ContactList.find({ user: userId }).sort({ createdAt: -1 });
+    console.log('📋 Found', lists.length, 'lists');
     
     // Get contact counts for each list
     const listsWithCounts = await Promise.all(lists.map(async (list) => {
       const count = await CampaignContact.countDocuments({ user: userId, list: list._id });
+      console.log(`📋 List "${list.name}" (${list._id}): ${count} contacts`);
       return { ...list.toObject(), contactCount: count };
     }));
     
@@ -517,11 +521,24 @@ router.post('/contacts/bulk-move', authenticateToken, async (req, res) => {
     const userId = getUserId(req);
     const { contactIds, listId } = req.body;
     
+    console.log('📦 Bulk move:', contactIds?.length, 'contacts to list:', listId);
+    
+    // FIX: Ensure listId is stored as ObjectId
+    let listObjectId = null;
+    if (listId) {
+      try {
+        listObjectId = new mongoose.Types.ObjectId(listId);
+      } catch (e) {
+        listObjectId = listId;
+      }
+    }
+    
     const result = await CampaignContact.updateMany(
       { _id: { $in: contactIds }, user: userId },
-      { list: listId || null }
+      { list: listObjectId }
     );
     
+    console.log('📦 Moved', result.modifiedCount, 'contacts');
     res.json({ ok: true, updated: result.modifiedCount });
   } catch (err) {
     console.error('Bulk move error:', err);
@@ -817,10 +834,21 @@ router.post('/segments/preview', authenticateToken, async (req, res) => {
     const userId = getUserId(req);
     const { audienceType, lists, includeTags, excludeTags } = req.body;
     
+    console.log('📊 Segment preview:', { audienceType, lists, includeTags });
+    
     let query = { user: userId, status: 'subscribed' };
     
     if (audienceType === 'list' && lists?.length > 0) {
-      query.list = { $in: lists };
+      // FIX: Convert string IDs to ObjectIds for proper matching
+      const listObjectIds = lists.map(id => {
+        try {
+          return new mongoose.Types.ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      });
+      query.list = { $in: listObjectIds };
+      console.log('📊 Querying lists:', listObjectIds);
     } else if (audienceType === 'tags' && includeTags?.length > 0) {
       query.tags = { $in: includeTags };
       if (excludeTags?.length > 0) {
@@ -829,6 +857,7 @@ router.post('/segments/preview', authenticateToken, async (req, res) => {
     }
     
     const count = await CampaignContact.countDocuments(query);
+    console.log('📊 Preview count:', count);
     res.json({ count });
   } catch (err) {
     console.error('Segment preview error:', err);
@@ -936,7 +965,16 @@ router.post('/send', authenticateToken, async (req, res) => {
     let query = { user: userId, status: 'subscribed' };
     
     if (campaignData.audienceType === 'list' && campaignData.selectedLists?.length > 0) {
-      query.list = { $in: campaignData.selectedLists };
+      // FIX: Convert to ObjectIds
+      const listObjectIds = campaignData.selectedLists.map(id => {
+        try {
+          return new mongoose.Types.ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      });
+      query.list = { $in: listObjectIds };
+      console.log('📧 Sending to lists:', listObjectIds);
     } else if (campaignData.audienceType === 'tags' && campaignData.includeTags?.length > 0) {
       query.tags = { $in: campaignData.includeTags };
     }
@@ -1087,7 +1125,16 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
     let query = { user: userId, status: 'subscribed' };
 
     if (campaign.audienceType === 'list' && campaign.lists?.length > 0) {
-      query.list = { $in: campaign.lists };
+      // FIX: Convert to ObjectIds
+      const listObjectIds = campaign.lists.map(id => {
+        try {
+          return new mongoose.Types.ObjectId(id);
+        } catch (e) {
+          return id;
+        }
+      });
+      query.list = { $in: listObjectIds };
+      console.log('📧 Sending campaign', campaign._id, 'to lists:', listObjectIds);
     } else if (campaign.audienceType === 'tags' && campaign.includeTags?.length > 0) {
       query.tags = { $in: campaign.includeTags };
       if (campaign.excludeTags?.length > 0) {
