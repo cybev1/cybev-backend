@@ -35,9 +35,22 @@ const auth = (req, res, next) => {
 router.get('/', auth, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
+    console.log('📧 Fetching sender domains for user:', userId);
     
     const domains = await SenderDomain.find({ user: userId })
       .sort({ createdAt: -1 });
+    
+    console.log(`📧 Found ${domains.length} domains for user ${userId}`);
+    
+    // If no domains, also check by string match (handle ObjectId vs string mismatch)
+    if (domains.length === 0) {
+      const allDomains = await SenderDomain.find().limit(5);
+      console.log('📧 Sample domains in DB:', allDomains.map(d => ({ 
+        domain: d.domain, 
+        userId: d.user?.toString(),
+        requestedUserId: userId
+      })));
+    }
     
     res.json({ domains });
   } catch (err) {
