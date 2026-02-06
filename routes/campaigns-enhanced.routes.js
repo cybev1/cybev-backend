@@ -1,20 +1,28 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
-// CYBEV Enhanced Campaign API - FIXED v6.0
-// VERSION: 6.0.0 - ACTUAL EMAIL SENDING VIA SES
+// CYBEV Enhanced Campaign API - FIXED v6.1
+// VERSION: 6.1.0 - Multi-Provider Email (SES + Brevo)
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// Import SES service for actual email sending
-let sesService = null;
+// Import Multi-Provider Email Service (SES + Brevo with auto-fallback)
+let emailService = null;
 try {
-  sesService = require('../services/ses.service');
-  console.log('✅ SES Service loaded for campaign emails');
+  emailService = require('../services/email-multi-provider.service');
+  const providers = emailService.getAvailableProviders();
+  console.log('✅ Email Service loaded with providers:', providers.map(p => p.name).join(', ') || 'none');
 } catch (err) {
-  console.warn('⚠️ SES Service not available:', err.message);
+  console.warn('⚠️ Multi-Provider Email Service not available:', err.message);
+  // Try fallback to SES-only service
+  try {
+    emailService = require('../services/ses.service');
+    console.log('✅ Fallback: SES Service loaded');
+  } catch (e) {
+    console.warn('⚠️ No email service available');
+  }
 }
 
 // ==========================================
@@ -160,6 +168,16 @@ router.get('/stats', authenticateToken, async (req, res) => {
       Campaign.countDocuments({ user: userId, status: 'sent' })
     ]);
     
+    // Get email provider status
+    let emailProviders = [];
+    if (emailService && emailService.getProviderStatus) {
+      emailProviders = emailService.getProviderStatus();
+    } else if (emailService && emailService.getServiceStatus) {
+      // Fallback for ses.service
+      const status = await emailService.getServiceStatus();
+      emailProviders = [{ name: 'ses', displayName: 'Amazon SES', enabled: status.enabled }];
+    }
+    
     res.json({
       contacts: {
         total: totalContacts,
@@ -171,7 +189,8 @@ router.get('/stats', authenticateToken, async (req, res) => {
         total: totalCampaigns,
         sent: sentCampaigns,
         draft: totalCampaigns - sentCampaigns
-      }
+      },
+      emailProviders
     });
   } catch (err) {
     console.error('Stats error:', err);
@@ -778,29 +797,39 @@ router.post('/test', authenticateToken, async (req, res) => {
       return res.status(400).json({ ok: false, error: 'Email, subject, and HTML content are required' });
     }
     
-    // Actually send via SES if available
-    if (sesService && sesService.sendEmail) {
+    // Send via multi-provider service (tries SES first, then Brevo)
+    if (emailService && emailService.sendEmail) {
       try {
-        const result = await sesService.sendEmail({
+        const result = await emailService.sendEmail({
           to: email,
-          from: fromEmail || 'noreply@cybev.io',
+          from: fromEmail || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
           fromName: fromName || 'CYBEV',
           subject: `[TEST] ${subject}`,
           html: html,
-          headers: { type: 'test' }
+          tags: ['test', 'campaign']
         });
         
-        console.log(`📧 Test email sent to ${email} | MessageId: ${result.messageId}`);
-        return res.json({ ok: true, message: `Test email sent to ${email}`, messageId: result.messageId });
-      } catch (sesError) {
-        console.error('SES test email error:', sesError.message);
-        // Fall through to simulation if SES fails
+        console.log(`📧 Test email sent to ${email} via ${result.provider} | MessageId: ${result.messageId}`);
+        return res.json({ 
+          ok: true, 
+          message: `Test email sent to ${email}`, 
+          messageId: result.messageId,
+          provider: result.provider 
+        });
+      } catch (emailError) {
+        console.error('Email send error:', emailError.message);
+        return res.status(500).json({ 
+          ok: false, 
+          error: `Failed to send: ${emailError.message}. Check BREVO_API_KEY or AWS SES config.` 
+        });
       }
     }
     
-    // Simulation mode if SES not configured
-    console.log(`📧 [SIMULATION] Test email to ${email}: ${subject}`);
-    res.json({ ok: true, message: `Test email sent to ${email} (simulation mode - configure AWS SES for real sending)` });
+    // No email service configured
+    return res.status(503).json({ 
+      ok: false, 
+      error: 'No email service configured. Set BREVO_API_KEY in environment variables.' 
+    });
   } catch (err) {
     console.error('Test email error:', err);
     res.status(500).json({ ok: false, error: 'Failed to send test email' });
@@ -815,6 +844,14 @@ router.post('/send', authenticateToken, async (req, res) => {
     
     if (!campaignData.subject || !campaignData.html) {
       return res.status(400).json({ ok: false, error: 'Subject and HTML content are required' });
+    }
+    
+    // Check if email service is available
+    if (!emailService || !emailService.sendBulkEmails) {
+      return res.status(503).json({ 
+        ok: false, 
+        error: 'Email service not configured. Set BREVO_API_KEY in environment.' 
+      });
     }
     
     // Build recipient query
@@ -856,53 +893,48 @@ router.post('/send', authenticateToken, async (req, res) => {
     
     console.log(`📤 Sending campaign "${campaign.name}" to ${recipientCount} recipients`);
     
-    // Send via SES if available
-    if (sesService && sesService.sendBulkEmail) {
-      try {
-        const emailRecipients = recipients.map(contact => ({
-          email: contact.email,
-          name: contact.firstName || contact.lastName ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim() : null,
-          data: {
-            firstName: contact.firstName || '',
-            lastName: contact.lastName || '',
-            email: contact.email
-          }
-        }));
-        
-        // Send in background
-        sesService.sendBulkEmail({
-          recipients: emailRecipients,
-          from: campaignData.fromEmail || 'noreply@cybev.io',
-          fromName: campaignData.fromName || 'CYBEV',
-          subject: campaignData.subject,
-          html: campaignData.html,
-          campaignId: campaign._id.toString()
-        }).then(async (result) => {
-          try {
-            await Campaign.findByIdAndUpdate(campaign._id, {
-              status: 'sent',
-              'stats.sent': result.sent,
-              'stats.delivered': result.sent,
-              'stats.failed': result.failed
-            });
-          } catch (e) {}
-        }).catch(async (err) => {
-          console.error('Send error:', err);
-          await Campaign.findByIdAndUpdate(campaign._id, { status: 'draft' });
-        });
-        
-        return res.json({ ok: true, sent: recipientCount, campaign });
-      } catch (sesError) {
-        console.error('SES error:', sesError);
+    // Prepare recipients
+    const emailRecipients = recipients.map(contact => ({
+      email: contact.email,
+      name: contact.firstName || contact.lastName ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim() : null,
+      data: {
+        firstName: contact.firstName || '',
+        lastName: contact.lastName || '',
+        name: contact.firstName || contact.lastName ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim() : 'there',
+        email: contact.email
       }
-    }
+    }));
     
-    // Simulation mode
-    campaign.status = 'sent';
-    campaign.stats = { sent: recipientCount, delivered: recipientCount };
-    await campaign.save();
+    // Send in background
+    emailService.sendBulkEmails({
+      recipients: emailRecipients,
+      from: campaignData.fromEmail || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      fromName: campaignData.fromName || 'CYBEV',
+      subject: campaignData.subject,
+      html: campaignData.html,
+      tags: ['campaign', campaign._id.toString()]
+    }).then(async (result) => {
+      try {
+        const successCount = result.results ? result.results.filter(r => r.success).length : recipientCount;
+        const failCount = result.results ? result.results.filter(r => !r.success).length : 0;
+        
+        await Campaign.findByIdAndUpdate(campaign._id, {
+          status: 'sent',
+          'stats.sent': successCount,
+          'stats.delivered': successCount,
+          'stats.failed': failCount
+        });
+        console.log(`✅ Campaign completed via ${result.provider}: ${successCount} sent`);
+      } catch (e) {
+        console.error('Update stats error:', e);
+      }
+    }).catch(async (err) => {
+      console.error('Send error:', err);
+      await Campaign.findByIdAndUpdate(campaign._id, { status: 'draft' });
+    });
     
-    res.json({ ok: true, sent: recipientCount, campaign, message: 'Sent (simulation mode)' });
+    return res.json({ ok: true, sent: recipientCount, campaign });
+    
   } catch (err) {
     console.error('Send campaign error:', err);
     res.status(500).json({ ok: false, error: 'Failed to send campaign' });
@@ -1001,86 +1033,75 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
 
     console.log(`📤 Sending campaign "${campaign.name}" to ${recipientCount} recipients`);
 
-    // Actually send emails via SES if available
-    if (sesService && sesService.sendBulkEmail) {
-      try {
-        // Prepare recipients with personalization data
-        const emailRecipients = recipients.map(contact => ({
-          email: contact.email,
-          name: contact.firstName || contact.lastName ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim() : null,
-          data: {
-            firstName: contact.firstName || '',
-            lastName: contact.lastName || '',
-            email: contact.email,
-            company: contact.company || ''
-          }
-        }));
-
-        // Send in background (don't wait)
-        sesService.sendBulkEmail({
-          recipients: emailRecipients,
-          from: campaign.fromEmail || 'noreply@cybev.io',
-          fromName: campaign.fromName || 'CYBEV',
-          subject: campaign.subject,
-          html: campaign.html,
-          campaignId: campaign._id.toString()
-        }).then(async (result) => {
-          // Update campaign stats after sending completes
-          try {
-            const updatedCampaign = await Campaign.findById(campaign._id);
-            if (updatedCampaign) {
-              updatedCampaign.status = 'sent';
-              updatedCampaign.stats = {
-                ...updatedCampaign.stats,
-                sent: result.sent || recipientCount,
-                delivered: result.sent || recipientCount,
-                failed: result.failed || 0
-              };
-              await updatedCampaign.save();
-              console.log(`✅ Campaign "${campaign.name}" completed: ${result.sent} sent, ${result.failed} failed`);
-            }
-          } catch (updateErr) {
-            console.error('Failed to update campaign stats:', updateErr);
-          }
-        }).catch(async (sendErr) => {
-          console.error('Bulk send error:', sendErr);
-          // Mark campaign as failed
-          try {
-            await Campaign.findByIdAndUpdate(campaign._id, { 
-              status: 'draft', 
-              'stats.error': sendErr.message 
-            });
-          } catch (e) {}
-        });
-
-        // Return immediately while emails send in background
-        return res.json({ 
-          ok: true, 
-          message: `Campaign is being sent to ${recipientCount} recipients`,
-          recipientCount,
-          campaign: { ...campaign.toObject(), status: 'sending' }
-        });
-
-      } catch (sesError) {
-        console.error('SES send error:', sesError.message);
-        // Fall through to simulation
-      }
+    // Check if email service is available
+    if (!emailService || !emailService.sendBulkEmails) {
+      return res.status(503).json({ 
+        ok: false, 
+        error: 'Email service not configured. Set BREVO_API_KEY in environment.' 
+      });
     }
 
-    // Simulation mode if SES not available
-    console.log(`📧 [SIMULATION] Would send to ${recipientCount} recipients`);
-    
-    // Mark as sent (simulation)
-    campaign.status = 'sent';
-    campaign.stats = { ...campaign.stats, sent: recipientCount, delivered: recipientCount };
-    await campaign.save();
+    // Prepare recipients with personalization data
+    const emailRecipients = recipients.map(contact => ({
+      email: contact.email,
+      name: contact.firstName || contact.lastName ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim() : null,
+      data: {
+        firstName: contact.firstName || '',
+        lastName: contact.lastName || '',
+        name: contact.firstName || contact.lastName ? `${contact.firstName || ''} ${contact.lastName || ''}`.trim() : 'there',
+        email: contact.email,
+        company: contact.company || ''
+      }
+    }));
 
-    res.json({ 
-      ok: true, 
-      sent: recipientCount, 
-      campaign,
-      message: 'Campaign sent (simulation mode - configure AWS SES for real sending)'
+    // Send in background (don't wait)
+    emailService.sendBulkEmails({
+      recipients: emailRecipients,
+      from: campaign.fromEmail || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      fromName: campaign.fromName || 'CYBEV',
+      subject: campaign.subject,
+      html: campaign.html,
+      tags: ['campaign', campaign._id.toString()]
+    }).then(async (result) => {
+      // Update campaign stats after sending completes
+      try {
+        const successCount = result.results ? result.results.filter(r => r.success).length : recipientCount;
+        const failCount = result.results ? result.results.filter(r => !r.success).length : 0;
+        
+        const updatedCampaign = await Campaign.findById(campaign._id);
+        if (updatedCampaign) {
+          updatedCampaign.status = 'sent';
+          updatedCampaign.stats = {
+            ...updatedCampaign.stats,
+            sent: successCount,
+            delivered: successCount,
+            failed: failCount
+          };
+          await updatedCampaign.save();
+          console.log(`✅ Campaign "${campaign.name}" completed via ${result.provider}: ${successCount} sent, ${failCount} failed`);
+        }
+      } catch (updateErr) {
+        console.error('Failed to update campaign stats:', updateErr);
+      }
+    }).catch(async (sendErr) => {
+      console.error('Bulk send error:', sendErr);
+      // Mark campaign as failed/draft
+      try {
+        await Campaign.findByIdAndUpdate(campaign._id, { 
+          status: 'draft', 
+          'stats.error': sendErr.message 
+        });
+      } catch (e) {}
     });
+
+    // Return immediately while emails send in background
+    return res.json({ 
+      ok: true, 
+      message: `Campaign is being sent to ${recipientCount} recipients`,
+      recipientCount,
+      campaign: { ...campaign.toObject(), status: 'sending' }
+    });
+
   } catch (err) {
     console.error('Send campaign error:', err);
     res.status(500).json({ ok: false, error: 'Failed to send campaign' });
