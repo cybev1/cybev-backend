@@ -1,263 +1,224 @@
 // ============================================
-// FILE: models/automation.model.js
-// CYBEV Email Automation Models - Workflow Builder
-// VERSION: 1.0.0 - Klaviyo-Quality Automations
+// FILE: models/form.model.js
+// CYBEV Form Builder Models - Pop-ups, Embedded, Landing Pages
+// VERSION: 1.0.0 - Klaviyo-Quality Forms
 // ============================================
 
 const mongoose = require('mongoose');
 
 // ==========================================
-// AUTOMATION WORKFLOW SCHEMA
+// FORM SCHEMA
 // ==========================================
 
-const automationSchema = new mongoose.Schema({
+const formSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   
   // Basic info
   name: { type: String, required: true },
   description: { type: String },
   
+  // Form type
+  type: { 
+    type: String, 
+    enum: ['popup', 'embedded', 'flyout', 'fullscreen', 'banner', 'landing'],
+    default: 'popup'
+  },
+  
   // Status
   status: { type: String, enum: ['draft', 'active', 'paused', 'archived'], default: 'draft' },
   
-  // Trigger configuration
-  trigger: {
-    type: { 
-      type: String, 
-      enum: [
-        'list_signup',      // Someone joins a list
-        'form_submit',      // Form submission
-        'tag_added',        // Tag added to contact
-        'purchase',         // Made a purchase
-        'abandoned_cart',   // Cart abandoned
-        'date_property',    // Birthday, anniversary
-        'inactivity',       // No engagement for X days
-        'custom_event',     // API-triggered
-        'manual'            // Manual enrollment
-      ],
-      required: true 
+  // Design
+  design: {
+    // Layout
+    layout: { type: String, enum: ['single', 'two-column', 'image-left', 'image-right'], default: 'single' },
+    width: { type: Number, default: 400 },
+    padding: { type: Number, default: 24 },
+    borderRadius: { type: Number, default: 12 },
+    
+    // Colors
+    backgroundColor: { type: String, default: '#ffffff' },
+    textColor: { type: String, default: '#1f2937' },
+    accentColor: { type: String, default: '#7c3aed' },
+    
+    // Typography
+    fontFamily: { type: String, default: 'Inter, sans-serif' },
+    headingSize: { type: Number, default: 24 },
+    bodySize: { type: Number, default: 14 },
+    
+    // Image
+    image: {
+      url: String,
+      position: { type: String, enum: ['top', 'left', 'right', 'background'], default: 'top' },
+      size: { type: String, enum: ['cover', 'contain', 'auto'], default: 'cover' }
     },
     
-    // Trigger-specific settings
-    listId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
-    formId: { type: mongoose.Schema.Types.ObjectId, ref: 'Form' },
-    tagName: String,
-    dateProperty: String, // 'birthday', 'signup_date', etc.
-    inactivityDays: Number,
-    eventName: String,
-    
-    // Filters
-    filters: [{
-      field: String,
-      operator: { type: String, enum: ['equals', 'not_equals', 'contains', 'greater_than', 'less_than', 'exists'] },
-      value: mongoose.Schema.Types.Mixed
-    }]
+    // Custom CSS
+    customCSS: String
   },
   
-  // Workflow steps (nodes)
-  steps: [{
+  // Content
+  content: {
+    heading: { type: String, default: 'Join our newsletter' },
+    subheading: { type: String, default: 'Get exclusive updates and offers' },
+    successMessage: { type: String, default: 'Thanks for subscribing!' },
+    submitButtonText: { type: String, default: 'Subscribe' },
+    privacyText: String,
+    privacyLink: String
+  },
+  
+  // Form fields
+  fields: [{
     id: { type: String, required: true },
-    type: { 
-      type: String, 
-      enum: ['email', 'delay', 'condition', 'action', 'split'],
-      required: true 
+    type: { type: String, enum: ['email', 'text', 'phone', 'select', 'checkbox', 'date'], required: true },
+    label: { type: String, required: true },
+    placeholder: String,
+    required: { type: Boolean, default: false },
+    order: { type: Number, default: 0 },
+    options: [String], // For select fields
+    validation: {
+      pattern: String,
+      minLength: Number,
+      maxLength: Number
     },
-    
-    // Position in visual builder
-    position: {
-      x: { type: Number, default: 0 },
-      y: { type: Number, default: 0 }
-    },
-    
-    // Connections
-    nextSteps: [String], // IDs of next steps
-    
-    // Step-specific configuration
-    config: {
-      // For 'email' type
-      campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign' },
-      subject: String,
-      html: String,
-      previewText: String,
-      fromName: String,
-      fromEmail: String,
-      
-      // For 'delay' type
-      delayType: { type: String, enum: ['fixed', 'until_time', 'until_day'] },
-      delayValue: Number, // minutes for fixed
-      delayUnit: { type: String, enum: ['minutes', 'hours', 'days', 'weeks'] },
-      untilTime: String, // "09:00"
-      untilDay: String, // "monday"
-      
-      // For 'condition' type
-      conditionType: { type: String, enum: ['email_opened', 'email_clicked', 'has_tag', 'custom'] },
-      conditionField: String,
-      conditionOperator: String,
-      conditionValue: mongoose.Schema.Types.Mixed,
-      yesPath: String, // Step ID for yes
-      noPath: String,  // Step ID for no
-      
-      // For 'action' type
-      actionType: { type: String, enum: ['add_tag', 'remove_tag', 'add_to_list', 'remove_from_list', 'update_field', 'webhook', 'notify'] },
-      tagName: String,
-      listId: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
-      fieldName: String,
-      fieldValue: String,
-      webhookUrl: String,
-      notifyEmail: String,
-      
-      // For 'split' type (A/B test in workflow)
-      splitType: { type: String, enum: ['random', 'weighted'] },
-      splitPaths: [{
-        id: String,
-        name: String,
-        percentage: Number,
-        nextStep: String
-      }]
-    }
+    mapTo: { type: String, enum: ['email', 'firstName', 'lastName', 'phone', 'company', 'custom'] }
   }],
   
-  // Settings
-  settings: {
-    // Entry limits
-    allowReentry: { type: Boolean, default: false },
-    reentryDelay: { type: Number, default: 0 }, // days
-    maxEntriesPerContact: { type: Number, default: 1 },
+  // Targeting & Display Rules
+  targeting: {
+    // When to show
+    trigger: { 
+      type: String, 
+      enum: ['immediate', 'delay', 'scroll', 'exit', 'click'],
+      default: 'delay'
+    },
+    delay: { type: Number, default: 5 }, // seconds
+    scrollPercentage: { type: Number, default: 50 },
+    clickSelector: String,
     
-    // Exit conditions
-    exitOnUnsubscribe: { type: Boolean, default: true },
-    exitOnPurchase: { type: Boolean, default: false },
+    // Frequency
+    showOnce: { type: Boolean, default: false },
+    showEvery: { type: Number, default: 7 }, // days
+    maxShows: { type: Number, default: 3 },
     
-    // Timing
-    sendingWindow: {
-      enabled: { type: Boolean, default: false },
-      startTime: String, // "09:00"
-      endTime: String,   // "17:00"
-      timezone: String,
-      days: [String]     // ["monday", "tuesday", ...]
+    // Pages
+    showOn: { type: String, enum: ['all', 'specific', 'exclude'], default: 'all' },
+    pageUrls: [String],
+    excludeUrls: [String],
+    
+    // Devices
+    devices: {
+      desktop: { type: Boolean, default: true },
+      tablet: { type: Boolean, default: true },
+      mobile: { type: Boolean, default: true }
     },
     
-    // Goals
-    goalType: { type: String, enum: ['purchase', 'click', 'custom'] },
-    goalValue: Number
+    // Visitor targeting
+    visitorType: { type: String, enum: ['all', 'new', 'returning'], default: 'all' },
+    
+    // Geographic
+    countries: [String],
+    excludeCountries: [String]
   },
+  
+  // Integration
+  integration: {
+    // Where to save contacts
+    addToList: { type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' },
+    addTags: [String],
+    
+    // Double opt-in
+    doubleOptIn: { type: Boolean, default: false },
+    confirmationEmailId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign' },
+    
+    // Automation trigger
+    triggerAutomation: { type: mongoose.Schema.Types.ObjectId, ref: 'Automation' },
+    
+    // Webhooks
+    webhookUrl: String,
+    
+    // Third-party
+    zapierWebhook: String,
+    googleAnalyticsEvent: String
+  },
+  
+  // Embed code (generated)
+  embedCode: String,
+  shortCode: { type: String, unique: true, sparse: true },
   
   // Stats
   stats: {
-    totalEntered: { type: Number, default: 0 },
-    currentlyActive: { type: Number, default: 0 },
-    completed: { type: Number, default: 0 },
-    exitedEarly: { type: Number, default: 0 },
-    goalReached: { type: Number, default: 0 },
-    emailsSent: { type: Number, default: 0 },
-    revenue: { type: Number, default: 0 }
-  },
-  
-  // Timestamps
-  lastTriggeredAt: Date,
-  activatedAt: Date,
-  pausedAt: Date
+    views: { type: Number, default: 0 },
+    submissions: { type: Number, default: 0 },
+    conversionRate: { type: Number, default: 0 }
+  }
 }, { timestamps: true });
 
-automationSchema.index({ user: 1, status: 1 });
+// Generate short code for embedding
+formSchema.pre('save', function(next) {
+  if (!this.shortCode) {
+    this.shortCode = 'frm_' + Math.random().toString(36).substring(2, 10);
+  }
+  
+  // Calculate conversion rate
+  if (this.stats.views > 0) {
+    this.stats.conversionRate = (this.stats.submissions / this.stats.views * 100).toFixed(2);
+  }
+  
+  next();
+});
 
 // ==========================================
-// AUTOMATION ENROLLMENT SCHEMA
-// Tracks contacts in automations
+// FORM SUBMISSION SCHEMA
 // ==========================================
 
-const automationEnrollmentSchema = new mongoose.Schema({
-  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'Automation', required: true, index: true },
-  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'CampaignContact', required: true, index: true },
+const formSubmissionSchema = new mongoose.Schema({
+  form: { type: mongoose.Schema.Types.ObjectId, ref: 'Form', required: true, index: true },
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  
+  // Submitted data
+  data: { type: mongoose.Schema.Types.Mixed, required: true },
+  email: { type: String, index: true },
+  
+  // Contact created
+  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'CampaignContact' },
+  
+  // Source info
+  source: {
+    url: String,
+    referrer: String,
+    userAgent: String,
+    ip: String,
+    country: String,
+    city: String,
+    device: { type: String, enum: ['desktop', 'tablet', 'mobile'] }
+  },
+  
+  // UTM parameters
+  utm: {
+    source: String,
+    medium: String,
+    campaign: String,
+    term: String,
+    content: String
+  },
   
   // Status
   status: { 
     type: String, 
-    enum: ['active', 'paused', 'completed', 'exited', 'failed'],
-    default: 'active',
-    index: true
+    enum: ['pending', 'confirmed', 'unsubscribed'],
+    default: 'pending'
   },
-  
-  // Current position
-  currentStep: String, // Step ID
-  
-  // History
-  history: [{
-    stepId: String,
-    stepType: String,
-    action: { type: String, enum: ['entered', 'completed', 'skipped', 'waiting', 'failed'] },
-    timestamp: { type: Date, default: Date.now },
-    data: mongoose.Schema.Types.Mixed // Email ID, condition result, etc.
-  }],
-  
-  // Scheduling
-  nextActionAt: { type: Date, index: true },
-  
-  // Entry info
-  entryData: mongoose.Schema.Types.Mixed, // Data that triggered the automation
-  
-  // Exit info
-  exitedAt: Date,
-  exitReason: String,
-  
-  // Goal tracking
-  goalReached: { type: Boolean, default: false },
-  goalReachedAt: Date,
-  goalValue: Number
+  confirmedAt: Date
 }, { timestamps: true });
 
-automationEnrollmentSchema.index({ automation: 1, contact: 1 }, { unique: true });
-automationEnrollmentSchema.index({ status: 1, nextActionAt: 1 });
-
-// ==========================================
-// AUTOMATION EMAIL LOG
-// Track emails sent by automations
-// ==========================================
-
-const automationEmailLogSchema = new mongoose.Schema({
-  automation: { type: mongoose.Schema.Types.ObjectId, ref: 'Automation', required: true, index: true },
-  enrollment: { type: mongoose.Schema.Types.ObjectId, ref: 'AutomationEnrollment', required: true },
-  contact: { type: mongoose.Schema.Types.ObjectId, ref: 'CampaignContact', required: true, index: true },
-  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  
-  stepId: String,
-  
-  // Email details
-  subject: String,
-  previewText: String,
-  
-  // Status
-  status: { type: String, enum: ['sent', 'delivered', 'opened', 'clicked', 'bounced', 'failed'], default: 'sent' },
-  
-  // Tracking
-  sentAt: { type: Date, default: Date.now },
-  deliveredAt: Date,
-  openedAt: Date,
-  clickedAt: Date,
-  
-  // Links clicked
-  clicks: [{
-    url: String,
-    timestamp: Date
-  }],
-  
-  // Error info
-  errorMessage: String,
-  
-  // Revenue attribution
-  revenue: { type: Number, default: 0 },
-  orderId: String
-}, { timestamps: true });
-
-automationEmailLogSchema.index({ automation: 1, createdAt: -1 });
+formSubmissionSchema.index({ form: 1, createdAt: -1 });
+formSubmissionSchema.index({ email: 1, form: 1 });
 
 // ==========================================
 // EXPORTS
 // ==========================================
 
-const Automation = mongoose.models.Automation || mongoose.model('Automation', automationSchema);
-const AutomationEnrollment = mongoose.models.AutomationEnrollment || mongoose.model('AutomationEnrollment', automationEnrollmentSchema);
-const AutomationEmailLog = mongoose.models.AutomationEmailLog || mongoose.model('AutomationEmailLog', automationEmailLogSchema);
+const Form = mongoose.models.Form || mongoose.model('Form', formSchema);
+const FormSubmission = mongoose.models.FormSubmission || mongoose.model('FormSubmission', formSubmissionSchema);
 
-module.exports = { Automation, AutomationEnrollment, AutomationEmailLog };
+module.exports = { Form, FormSubmission };
