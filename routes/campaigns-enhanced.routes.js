@@ -1,8 +1,10 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
 // CYBEV Enhanced Campaign API
-// VERSION: 6.5.0 - Built-in Templates + Save Fix
+// VERSION: 6.7.0 - Fixed Campaign Model Caching + Proper Content Handling
 // CHANGELOG:
+//   6.7.0 - Delete cached Campaign model, strict:false, proper POST handling
+//   6.6.0 - Added content field as Mixed type, made subject optional
 //   6.5.0 - Include built-in templates in GET /templates response
 //   6.4.0 - Fixed campaign save endpoints to return ok:true
 //   6.3.0 - Added 12 built-in email templates with full content
@@ -72,17 +74,23 @@ const listSchema = new mongoose.Schema({
 const ContactList = mongoose.models.ContactList || mongoose.model('ContactList', listSchema);
 
 // Campaign Schema
+// Delete cached model if exists to ensure fresh schema
+if (mongoose.models.Campaign) {
+  delete mongoose.models.Campaign;
+}
+
 const campaignSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   name: { type: String, required: true },
-  subject: { type: String, required: true },
+  subject: { type: String, default: 'Newsletter' },
   previewText: String,
   fromName: String,
   fromEmail: String,
   type: { type: String, enum: ['regular', 'automated', 'ab_test'], default: 'regular' },
   status: { type: String, enum: ['draft', 'scheduled', 'sending', 'sent', 'paused'], default: 'draft' },
   html: String,
-  designJson: mongoose.Schema.Types.Mixed,
+  content: { type: mongoose.Schema.Types.Mixed }, // Stores blocks, html, and json together
+  designJson: { type: mongoose.Schema.Types.Mixed },
   audienceType: { type: String, default: 'all' },
   lists: [{ type: mongoose.Schema.Types.ObjectId, ref: 'ContactList' }],
   includeTags: [String],
@@ -97,9 +105,9 @@ const campaignSchema = new mongoose.Schema({
     bounced: { type: Number, default: 0 },
     unsubscribed: { type: Number, default: 0 }
   }
-}, { timestamps: true });
+}, { timestamps: true, strict: false }); // strict: false allows additional fields
 
-const Campaign = mongoose.models.Campaign || mongoose.model('Campaign', campaignSchema);
+const Campaign = mongoose.model('Campaign', campaignSchema);
 
 // Sender Address Schema
 const senderAddressSchema = new mongoose.Schema({
@@ -1212,9 +1220,23 @@ router.get('/', authenticateToken, async (req, res) => {
 router.post('/', authenticateToken, async (req, res) => {
   try {
     const userId = getUserId(req);
-    const campaignData = { ...req.body, user: userId };
+    const { name, subject, content, html, ...rest } = req.body;
     
-    console.log('📧 Creating campaign:', campaignData.name);
+    console.log('📧 Creating campaign:', name);
+    console.log('📧 Content type:', typeof content);
+    
+    // Build campaign data with defaults
+    const campaignData = {
+      user: userId,
+      name: name || 'Untitled Campaign',
+      subject: subject || 'Newsletter',
+      type: 'regular', // Ensure type is set
+      status: 'draft',
+      html: html || (typeof content === 'object' ? content.html : ''),
+      content: content, // Mixed type - can be object
+      designJson: typeof content === 'object' ? content.json : null,
+      ...rest
+    };
     
     const campaign = new Campaign(campaignData);
     await campaign.save();
@@ -1222,8 +1244,9 @@ router.post('/', authenticateToken, async (req, res) => {
     console.log('✅ Campaign created:', campaign._id);
     res.json({ ok: true, campaign });
   } catch (err) {
-    console.error('Create campaign error:', err);
-    res.status(500).json({ ok: false, error: 'Failed to create campaign' });
+    console.error('Create campaign error:', err.message);
+    console.error('Full error:', err);
+    res.status(500).json({ ok: false, error: err.message || 'Failed to create campaign' });
   }
 });
 
