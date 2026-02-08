@@ -1,8 +1,9 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
 // CYBEV Enhanced Campaign API
-// VERSION: 6.7.0 - Fixed Campaign Model Caching + Proper Content Handling
+// VERSION: 6.8.0 - Social Links in Templates
 // CHANGELOG:
+//   6.8.0 - Added full social media links to built-in templates
 //   6.7.0 - Delete cached Campaign model, strict:false, proper POST handling
 //   6.6.0 - Added content field as Mixed type, made subject optional
 //   6.5.0 - Include built-in templates in GET /templates response
@@ -386,7 +387,7 @@ const BUILTIN_TEMPLATES = {
         { id: 'b5', type: 'text', data: { content: '<ul style="color:#374151;font-size:16px;line-height:2;"><li>✨ Exclusive content and updates</li><li>🎁 Special offers just for members</li><li>📚 Tips and resources to help you succeed</li><li>🤝 A supportive community</li></ul>', fontSize: 16, lineHeight: 2, color: '#374151', backgroundColor: '#f9fafb', padding: { top: 20, bottom: 20, left: 60, right: 40 }, alignment: 'left' } },
         { id: 'b6', type: 'button', data: { text: 'Get Started Now', link: 'https://example.com/start', backgroundColor: '#7c3aed', textColor: '#ffffff', fontSize: 18, fontWeight: 'bold', borderRadius: 8, padding: { top: 16, bottom: 16, left: 40, right: 40 }, alignment: 'center', fullWidth: false } },
         { id: 'b7', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;">Need help? Just reply to this email - we\'re here for you!</p>', fontSize: 14, lineHeight: 1.6, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 30, bottom: 20, left: 40, right: 40 }, alignment: 'center' } },
-        { id: 'b8', type: 'footer', data: { companyName: 'Your Company', address: '123 Main St, City, Country', showSocial: true, socialLinks: { facebook: '#', twitter: '#', instagram: '#' }, unsubscribeText: 'Unsubscribe from these emails', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+        { id: 'b8', type: 'footer', data: { companyName: 'Your Company', address: '123 Main St, City, Country', showSocial: true, socialLinks: { facebook: 'https://facebook.com/yourpage', twitter: 'https://twitter.com/yourhandle', instagram: 'https://instagram.com/yourhandle', linkedin: 'https://linkedin.com/company/yourcompany' }, unsubscribeText: 'Unsubscribe from these emails', backgroundColor: '#f3f4f6', textColor: '#6b7280', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
       ]
     }
   },
@@ -406,7 +407,7 @@ const BUILTIN_TEMPLATES = {
         { id: 'b6', type: 'image', data: { src: 'https://images.unsplash.com/photo-1607083206869-4c7672e72a8a?w=600&h=300&fit=crop', alt: 'Sale Products', link: '', width: '100%', alignment: 'center', padding: { top: 0, bottom: 20, left: 20, right: 20 } } },
         { id: 'b7', type: 'button', data: { text: 'SHOP NOW →', link: 'https://example.com/sale', backgroundColor: '#dc2626', textColor: '#ffffff', fontSize: 20, fontWeight: 'bold', borderRadius: 0, padding: { top: 18, bottom: 18, left: 50, right: 50 }, alignment: 'center', fullWidth: false } },
         { id: 'b8', type: 'text', data: { content: '<p style="text-align:center;color:#9ca3af;font-size:14px;margin-top:30px;">Sale ends at midnight. Don\'t miss out!</p>', fontSize: 14, lineHeight: 1.6, color: '#9ca3af', backgroundColor: '#ffffff', padding: { top: 20, bottom: 30, left: 20, right: 20 }, alignment: 'center' } },
-        { id: 'b9', type: 'footer', data: { companyName: 'Your Store', address: '123 Main St', showSocial: true, socialLinks: {}, unsubscribeText: 'Unsubscribe', backgroundColor: '#1f2937', textColor: '#9ca3af', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
+        { id: 'b9', type: 'footer', data: { companyName: 'Your Store', address: '123 Main St', showSocial: true, socialLinks: { facebook: 'https://facebook.com/yourstore', instagram: 'https://instagram.com/yourstore', twitter: 'https://twitter.com/yourstore' }, unsubscribeText: 'Unsubscribe', backgroundColor: '#1f2937', textColor: '#9ca3af', padding: { top: 30, bottom: 30, left: 20, right: 20 } } }
       ]
     }
   },
