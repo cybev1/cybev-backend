@@ -1,12 +1,11 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
 // CYBEV Enhanced Campaign API
-// VERSION: 7.0.0 - Brevo-Only Email Service
+// VERSION: 7.1.0 - Brevo Sender Integration
 // CHANGELOG:
+//   7.1.0 - Added Brevo verified senders to addresses endpoint
 //   7.0.0 - Uses new Brevo-only email service (no aws-sdk dependency)
 //   6.9.0 - Default sender changed to info@cybev.io (verified in Brevo)
-//   6.8.0 - Added full social media links to built-in templates
-//   6.7.0 - Delete cached Campaign model, strict:false, proper POST handling
 // ============================================
 
 const express = require('express');
@@ -288,6 +287,37 @@ router.get('/tags', authenticateToken, async (req, res) => {
 });
 
 // ---------- SENDER ADDRESSES ----------
+// ==========================================
+// BREVO SENDERS HELPER
+// ==========================================
+
+async function getBrevoSenders() {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) return [];
+  
+  try {
+    const response = await fetch('https://api.brevo.com/v3/senders', {
+      method: 'GET',
+      headers: {
+        'accept': 'application/json',
+        'api-key': apiKey
+      }
+    });
+    
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    return data.senders || [];
+  } catch (err) {
+    console.error('Failed to fetch Brevo senders:', err.message);
+    return [];
+  }
+}
+
+// ==========================================
+// SENDER ADDRESSES
+// ==========================================
+
 router.get('/addresses', authenticateToken, async (req, res) => {
   try {
     const userId = getUserId(req);
@@ -302,7 +332,15 @@ router.get('/addresses', authenticateToken, async (req, res) => {
       addresses = await SenderAddress.insertMany(defaults);
     }
     
-    res.json({ addresses });
+    // Also fetch Brevo verified senders
+    const brevoSenders = await getBrevoSenders();
+    const verifiedSenders = brevoSenders.filter(function(s) { return s.active; });
+    
+    res.json({ 
+      addresses: addresses,
+      brevoSenders: verifiedSenders,
+      hint: 'Use brevoSenders for domains verified in Brevo'
+    });
   } catch (err) {
     console.error('Addresses error:', err);
     res.status(500).json({ error: 'Failed to fetch addresses' });
