@@ -1,18 +1,70 @@
 // ============================================
 // FILE: routes/sender-domains.routes.js
 // CYBEV Sender Domain Verification API
-// VERSION: 1.0.0 - Custom Domain Email Setup
+// VERSION: 2.0.0 - Brevo Domain Verification
+// CHANGELOG:
+//   2.0.0 - Switch from AWS SES to Brevo for domain verification
+//   1.0.0 - Initial AWS SES implementation
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const dns = require('dns').promises;
+const mongoose = require('mongoose');
 
-// Import models and services
-const { SenderDomain, EmailAddress } = require('../models/email.model');
-const sesService = require('../services/ses.service');
+// ==========================================
+// MODELS
+// ==========================================
 
-// Auth middleware
+// Sender Domain Schema
+const SenderDomainSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  domain: { type: String, required: true, unique: true },
+  status: { type: String, enum: ['pending', 'verifying', 'verified', 'failed'], default: 'pending' },
+  brevoId: { type: Number },
+  verification: {
+    txtRecord: {
+      name: String,
+      value: String,
+      verified: { type: Boolean, default: false },
+      verifiedAt: Date
+    },
+    spfRecord: {
+      name: String,
+      value: String,
+      verified: { type: Boolean, default: false },
+      verifiedAt: Date
+    },
+    dkimRecord: {
+      name: String,
+      value: String,
+      verified: { type: Boolean, default: false },
+      verifiedAt: Date
+    },
+    dmarcRecord: {
+      name: String,
+      value: String,
+      verified: { type: Boolean, default: false },
+      verifiedAt: Date
+    }
+  },
+  verifiedAt: Date,
+  lastVerificationAttempt: Date,
+  verificationAttempts: { type: Number, default: 0 }
+}, { timestamps: true });
+
+// Get or create model
+let SenderDomain;
+try {
+  SenderDomain = mongoose.model('SenderDomain');
+} catch (e) {
+  SenderDomain = mongoose.model('SenderDomain', SenderDomainSchema);
+}
+
+// ==========================================
+// AUTH MIDDLEWARE
+// ==========================================
+
 const auth = (req, res, next) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token provided' });
@@ -28,7 +80,88 @@ const auth = (req, res, next) => {
 };
 
 // ==========================================
-// DOMAIN MANAGEMENT
+// BREVO API HELPERS
+// ==========================================
+
+const BREVO_API = 'https://api.brevo.com/v3';
+
+async function brevoRequest(endpoint, method, body) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) {
+    throw new Error('BREVO_API_KEY not configured');
+  }
+
+  const options = {
+    method: method || 'GET',
+    headers: {
+      'accept': 'application/json',
+      'api-key': apiKey,
+      'content-type': 'application/json'
+    }
+  };
+
+  if (body) {
+    options.body = JSON.stringify(body);
+  }
+
+  const response = await fetch(BREVO_API + endpoint, options);
+  
+  // Handle empty responses
+  const text = await response.text();
+  let data = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      data = { message: text };
+    }
+  }
+
+  if (!response.ok) {
+    const errorMsg = data?.message || data?.error || 'Brevo API error: ' + response.status;
+    throw new Error(errorMsg);
+  }
+
+  return data;
+}
+
+// Get domains from Brevo
+async function getBrevoSenders() {
+  try {
+    const data = await brevoRequest('/senders', 'GET');
+    return data?.senders || [];
+  } catch (err) {
+    console.error('Failed to get Brevo senders:', err.message);
+    return [];
+  }
+}
+
+// Add domain to Brevo
+async function addBrevoSender(name, email) {
+  return await brevoRequest('/senders', 'POST', {
+    name: name,
+    email: email
+  });
+}
+
+// Get domain authentication details from Brevo
+async function getBrevoDomainDetails(domain) {
+  try {
+    const data = await brevoRequest('/senders/domains/' + encodeURIComponent(domain), 'GET');
+    return data;
+  } catch (err) {
+    console.error('Failed to get Brevo domain details:', err.message);
+    return null;
+  }
+}
+
+// Authenticate/verify domain in Brevo
+async function authenticateBrevoDomain(domain) {
+  return await brevoRequest('/senders/domains/' + encodeURIComponent(domain) + '/authenticate', 'PUT');
+}
+
+// ==========================================
+// DOMAIN ROUTES
 // ==========================================
 
 // Get all sender domains for user
@@ -37,22 +170,11 @@ router.get('/', auth, async (req, res) => {
     const userId = req.user.userId || req.user.id;
     console.log('📧 Fetching sender domains for user:', userId);
     
-    const domains = await SenderDomain.find({ user: userId })
-      .sort({ createdAt: -1 });
+    const domains = await SenderDomain.find({ user: userId }).sort({ createdAt: -1 });
     
-    console.log(`📧 Found ${domains.length} domains for user ${userId}`);
+    console.log('📧 Found ' + domains.length + ' domains');
     
-    // If no domains, also check by string match (handle ObjectId vs string mismatch)
-    if (domains.length === 0) {
-      const allDomains = await SenderDomain.find().limit(5);
-      console.log('📧 Sample domains in DB:', allDomains.map(d => ({ 
-        domain: d.domain, 
-        userId: d.user?.toString(),
-        requestedUserId: userId
-      })));
-    }
-    
-    res.json({ domains });
+    res.json({ domains: domains });
   } catch (err) {
     console.error('Get domains error:', err);
     res.status(500).json({ error: 'Failed to fetch domains' });
@@ -78,7 +200,7 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid domain format' });
     }
     
-    // Check if domain already exists
+    // Check if domain already exists in our DB
     const existing = await SenderDomain.findOne({ domain: cleanDomain });
     if (existing) {
       if (existing.user.toString() === userId) {
@@ -87,29 +209,68 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'This domain is already registered by another user' });
     }
     
-    // Initialize verification with SES
-    let sesResult;
-    try {
-      sesResult = await sesService.verifyDomain(cleanDomain);
-    } catch (sesErr) {
-      console.error('SES verification error:', sesErr);
-      // Continue without SES for now
-      sesResult = {
-        verificationToken: `cybev-verify-${Date.now()}`,
-        txtRecord: {
-          name: `_amazonses.${cleanDomain}`,
-          value: `cybev-verify-${Date.now()}`
-        }
-      };
+    // Get domain details from Brevo to get DNS records
+    let brevoDetails = await getBrevoDomainDetails(cleanDomain);
+    
+    // If domain not in Brevo yet, add a sender with this domain
+    if (!brevoDetails) {
+      try {
+        // Add a sender to register the domain
+        const senderEmail = 'noreply@' + cleanDomain;
+        await addBrevoSender('CYBEV', senderEmail);
+        console.log('📧 Added sender to Brevo: ' + senderEmail);
+        
+        // Wait a moment for Brevo to process
+        await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+        
+        // Get domain details again
+        brevoDetails = await getBrevoDomainDetails(cleanDomain);
+      } catch (addErr) {
+        console.error('Failed to add Brevo sender:', addErr.message);
+      }
     }
     
-    // Setup DKIM
-    let dkimResult;
-    try {
-      dkimResult = await sesService.setupDkim(cleanDomain);
-    } catch (dkimErr) {
-      console.error('DKIM setup error:', dkimErr);
-      dkimResult = { dkimRecords: [] };
+    // Generate DNS records based on Brevo requirements
+    const verification = {
+      txtRecord: {
+        name: '_amazonses.' + cleanDomain,
+        value: brevoDetails?.dns?.domain_verification?.value || 'brevo-verification-' + Date.now(),
+        verified: false
+      },
+      spfRecord: {
+        name: '@ or ' + cleanDomain,
+        value: 'v=spf1 include:spf.sendinblue.com ~all',
+        verified: brevoDetails?.dns?.spf?.verified || false
+      },
+      dkimRecord: {
+        name: brevoDetails?.dns?.dkim?.host || 'mail._domainkey.' + cleanDomain,
+        value: brevoDetails?.dns?.dkim?.value || 'TBD - Check Brevo dashboard',
+        verified: brevoDetails?.dns?.dkim?.verified || false
+      },
+      dmarcRecord: {
+        name: '_dmarc.' + cleanDomain,
+        value: 'v=DMARC1; p=none; rua=mailto:dmarc@cybev.io',
+        verified: false
+      }
+    };
+    
+    // If we got Brevo details, use their DNS records
+    if (brevoDetails && brevoDetails.dns) {
+      if (brevoDetails.dns.domain_verification) {
+        verification.txtRecord.name = brevoDetails.dns.domain_verification.host || verification.txtRecord.name;
+        verification.txtRecord.value = brevoDetails.dns.domain_verification.value || verification.txtRecord.value;
+        verification.txtRecord.verified = brevoDetails.dns.domain_verification.verified || false;
+      }
+      if (brevoDetails.dns.spf) {
+        verification.spfRecord.name = brevoDetails.dns.spf.host || verification.spfRecord.name;
+        verification.spfRecord.value = brevoDetails.dns.spf.value || verification.spfRecord.value;
+        verification.spfRecord.verified = brevoDetails.dns.spf.verified || false;
+      }
+      if (brevoDetails.dns.dkim) {
+        verification.dkimRecord.name = brevoDetails.dns.dkim.host || verification.dkimRecord.name;
+        verification.dkimRecord.value = brevoDetails.dns.dkim.value || verification.dkimRecord.value;
+        verification.dkimRecord.verified = brevoDetails.dns.dkim.verified || false;
+      }
     }
     
     // Create domain record
@@ -117,43 +278,23 @@ router.post('/', auth, async (req, res) => {
       user: userId,
       domain: cleanDomain,
       status: 'pending',
-      verification: {
-        txtRecord: {
-          name: sesResult.txtRecord.name,
-          value: sesResult.txtRecord.value,
-          verified: false
-        },
-        spfRecord: {
-          name: cleanDomain,
-          value: 'v=spf1 include:amazonses.com ~all',
-          verified: false
-        },
-        dkimRecords: dkimResult.dkimRecords?.map(r => ({
-          name: r.name,
-          value: r.value,
-          verified: false
-        })) || [],
-        dmarcRecord: {
-          name: `_dmarc.${cleanDomain}`,
-          value: 'v=DMARC1; p=none; rua=mailto:dmarc@cybev.io',
-          verified: false
-        }
-      },
-      dkimTokens: dkimResult.dkimTokens || []
+      brevoId: brevoDetails?.id,
+      verification: verification
     });
     
     res.json({ 
       ok: true, 
       domain: senderDomain,
-      instructions: generateDnsInstructions(senderDomain)
+      instructions: generateDnsInstructions(senderDomain),
+      brevoDetails: brevoDetails
     });
   } catch (err) {
     console.error('Add domain error:', err);
-    res.status(500).json({ error: 'Failed to add domain' });
+    res.status(500).json({ error: err.message || 'Failed to add domain' });
   }
 });
 
-// Get domain details with DNS records
+// Get domain details
 router.get('/:id', auth, async (req, res) => {
   try {
     const userId = req.user.userId || req.user.id;
@@ -163,9 +304,13 @@ router.get('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Domain not found' });
     }
     
+    // Get latest status from Brevo
+    const brevoDetails = await getBrevoDomainDetails(domain.domain);
+    
     res.json({ 
-      domain,
-      instructions: generateDnsInstructions(domain)
+      domain: domain,
+      instructions: generateDnsInstructions(domain),
+      brevoDetails: brevoDetails
     });
   } catch (err) {
     console.error('Get domain error:', err);
@@ -186,116 +331,81 @@ router.post('/:id/verify', auth, async (req, res) => {
     domain.lastVerificationAttempt = new Date();
     domain.verificationAttempts += 1;
     
+    // Try to authenticate domain with Brevo
+    let brevoResult = null;
+    try {
+      brevoResult = await authenticateBrevoDomain(domain.domain);
+      console.log('📧 Brevo authentication result:', brevoResult);
+    } catch (brevoErr) {
+      console.log('📧 Brevo authentication attempt:', brevoErr.message);
+    }
+    
+    // Get latest domain status from Brevo
+    const brevoDetails = await getBrevoDomainDetails(domain.domain);
+    
     const results = {
       txt: false,
       spf: false,
-      dkim: [],
+      dkim: false,
       dmarc: false
     };
     
-    // Check TXT record
+    // Update from Brevo status
+    if (brevoDetails && brevoDetails.dns) {
+      if (brevoDetails.dns.domain_verification) {
+        results.txt = brevoDetails.dns.domain_verification.verified || false;
+        domain.verification.txtRecord.verified = results.txt;
+        if (results.txt) domain.verification.txtRecord.verifiedAt = new Date();
+      }
+      if (brevoDetails.dns.spf) {
+        results.spf = brevoDetails.dns.spf.verified || false;
+        domain.verification.spfRecord.verified = results.spf;
+        if (results.spf) domain.verification.spfRecord.verifiedAt = new Date();
+      }
+      if (brevoDetails.dns.dkim) {
+        results.dkim = brevoDetails.dns.dkim.verified || false;
+        domain.verification.dkimRecord.verified = results.dkim;
+        if (results.dkim) domain.verification.dkimRecord.verifiedAt = new Date();
+      }
+    }
+    
+    // Also do manual DNS check for DMARC
     try {
-      const txtRecords = await dns.resolveTxt(domain.verification.txtRecord.name.replace(domain.domain, '').replace('.', '') + '.' + domain.domain);
+      const txtRecords = await dns.resolveTxt('_dmarc.' + domain.domain);
       const flatTxt = txtRecords.flat();
-      results.txt = flatTxt.some(r => r.includes(domain.verification.txtRecord.value));
-      
-      if (results.txt) {
-        domain.verification.txtRecord.verified = true;
-        domain.verification.txtRecord.verifiedAt = new Date();
-      }
+      results.dmarc = flatTxt.some(function(r) { return r.includes('DMARC1'); });
+      domain.verification.dmarcRecord.verified = results.dmarc;
+      if (results.dmarc) domain.verification.dmarcRecord.verifiedAt = new Date();
     } catch (dnsErr) {
-      console.log(`TXT lookup failed for ${domain.domain}:`, dnsErr.code);
-    }
-    
-    // Check SPF record
-    try {
-      const txtRecords = await dns.resolveTxt(domain.domain);
-      const flatTxt = txtRecords.flat();
-      results.spf = flatTxt.some(r => r.includes('amazonses.com') || r.includes('spf'));
-      
-      if (results.spf) {
-        domain.verification.spfRecord.verified = true;
-        domain.verification.spfRecord.verifiedAt = new Date();
-      }
-    } catch (dnsErr) {
-      console.log(`SPF lookup failed for ${domain.domain}:`, dnsErr.code);
-    }
-    
-    // Check DKIM records
-    for (let i = 0; i < domain.verification.dkimRecords.length; i++) {
-      const dkimRecord = domain.verification.dkimRecords[i];
-      try {
-        const cnameRecords = await dns.resolveCname(dkimRecord.name);
-        const verified = cnameRecords.some(r => r.includes('dkim.amazonses.com'));
-        results.dkim.push(verified);
-        
-        if (verified) {
-          domain.verification.dkimRecords[i].verified = true;
-          domain.verification.dkimRecords[i].verifiedAt = new Date();
-        }
-      } catch (dnsErr) {
-        results.dkim.push(false);
-        console.log(`DKIM lookup failed for ${dkimRecord.name}:`, dnsErr.code);
-      }
-    }
-    
-    // Check DMARC record
-    try {
-      const txtRecords = await dns.resolveTxt(`_dmarc.${domain.domain}`);
-      const flatTxt = txtRecords.flat();
-      results.dmarc = flatTxt.some(r => r.includes('DMARC1'));
-      
-      if (results.dmarc) {
-        domain.verification.dmarcRecord.verified = true;
-        domain.verification.dmarcRecord.verifiedAt = new Date();
-      }
-    } catch (dnsErr) {
-      console.log(`DMARC lookup failed for ${domain.domain}:`, dnsErr.code);
-    }
-    
-    // Check SES status
-    try {
-      const sesStatus = await sesService.checkDomainStatus(domain.domain);
-      if (sesStatus.verification.status === 'Success') {
-        results.txt = true;
-        domain.verification.txtRecord.verified = true;
-      }
-      if (sesStatus.dkim.status === 'Success') {
-        results.dkim = domain.verification.dkimRecords.map(() => true);
-        domain.verification.dkimRecords.forEach((r, i) => {
-          domain.verification.dkimRecords[i].verified = true;
-        });
-      }
-    } catch (sesErr) {
-      console.log('SES status check failed:', sesErr.message);
+      console.log('DMARC lookup failed for ' + domain.domain + ':', dnsErr.code);
     }
     
     // Update domain status
-    const allDkimVerified = results.dkim.length > 0 && results.dkim.every(v => v);
-    const isFullyVerified = results.txt && results.spf && allDkimVerified;
+    const isFullyVerified = results.txt && results.spf && results.dkim;
     
     if (isFullyVerified) {
       domain.status = 'verified';
       domain.verifiedAt = new Date();
-    } else if (results.txt) {
-      domain.status = 'verifying'; // Partially verified
+    } else if (results.txt || results.spf || results.dkim) {
+      domain.status = 'verifying';
     }
     
     await domain.save();
     
     res.json({
       ok: true,
-      domain,
+      domain: domain,
       verification: {
         txt: { verified: results.txt, record: domain.verification.txtRecord },
         spf: { verified: results.spf, record: domain.verification.spfRecord },
-        dkim: { verified: allDkimVerified, records: domain.verification.dkimRecords },
+        dkim: { verified: results.dkim, record: domain.verification.dkimRecord },
         dmarc: { verified: results.dmarc, record: domain.verification.dmarcRecord }
       },
-      isFullyVerified,
+      isFullyVerified: isFullyVerified,
+      brevoDetails: brevoDetails,
       message: isFullyVerified 
         ? 'Domain verified successfully! You can now send emails from this domain.'
-        : 'Some DNS records are not yet propagated. DNS changes can take up to 48 hours.'
+        : 'Some DNS records are not yet verified. DNS changes can take up to 48 hours.'
     });
   } catch (err) {
     console.error('Verify domain error:', err);
@@ -313,15 +423,8 @@ router.delete('/:id', auth, async (req, res) => {
       return res.status(404).json({ error: 'Domain not found' });
     }
     
-    // Delete associated email addresses
-    await EmailAddress.deleteMany({ senderDomain: domain._id });
-    
-    // Remove from SES
-    try {
-      await sesService.removeDomain(domain.domain);
-    } catch (sesErr) {
-      console.log('SES domain removal failed:', sesErr.message);
-    }
+    // Note: Brevo doesn't have a direct domain delete API
+    // The domain will remain in Brevo but we remove from our DB
     
     await domain.deleteOne();
     
@@ -339,64 +442,83 @@ router.delete('/:id', auth, async (req, res) => {
 function generateDnsInstructions(domain) {
   const records = [];
   
-  // TXT Record for verification
-  records.push({
-    type: 'TXT',
-    name: domain.verification.txtRecord.name,
-    value: domain.verification.txtRecord.value,
-    verified: domain.verification.txtRecord.verified,
-    description: 'Domain ownership verification',
-    required: true
-  });
-  
-  // SPF Record
-  records.push({
-    type: 'TXT',
-    name: domain.domain,
-    value: domain.verification.spfRecord.value,
-    verified: domain.verification.spfRecord.verified,
-    description: 'SPF record for email authentication',
-    required: true
-  });
-  
-  // DKIM Records
-  domain.verification.dkimRecords.forEach((dkim, i) => {
+  // Domain Verification TXT Record
+  if (domain.verification.txtRecord) {
     records.push({
-      type: 'CNAME',
-      name: dkim.name,
-      value: dkim.value,
-      verified: dkim.verified,
-      description: `DKIM signature ${i + 1}`,
+      type: 'TXT',
+      name: domain.verification.txtRecord.name,
+      value: domain.verification.txtRecord.value,
+      verified: domain.verification.txtRecord.verified,
+      description: 'Domain Verification',
       required: true
     });
-  });
+  }
+  
+  // SPF Record
+  if (domain.verification.spfRecord) {
+    records.push({
+      type: 'TXT',
+      name: domain.verification.spfRecord.name,
+      value: domain.verification.spfRecord.value,
+      verified: domain.verification.spfRecord.verified,
+      description: 'SPF Record',
+      required: true
+    });
+  }
+  
+  // DKIM Record
+  if (domain.verification.dkimRecord) {
+    records.push({
+      type: 'TXT',
+      name: domain.verification.dkimRecord.name,
+      value: domain.verification.dkimRecord.value,
+      verified: domain.verification.dkimRecord.verified,
+      description: 'DKIM',
+      required: true
+    });
+  }
   
   // DMARC Record (recommended)
-  records.push({
-    type: 'TXT',
-    name: domain.verification.dmarcRecord.name,
-    value: domain.verification.dmarcRecord.value,
-    verified: domain.verification.dmarcRecord.verified,
-    description: 'DMARC policy (recommended)',
-    required: false
-  });
+  if (domain.verification.dmarcRecord) {
+    records.push({
+      type: 'TXT',
+      name: domain.verification.dmarcRecord.name,
+      value: domain.verification.dmarcRecord.value,
+      verified: domain.verification.dmarcRecord.verified,
+      description: 'DMARC (Recommended)',
+      required: false
+    });
+  }
   
   return {
-    records,
+    records: records,
     tips: [
       'DNS changes can take up to 48 hours to propagate',
       'Make sure to copy the record values exactly',
-      'If using Cloudflare, turn off the orange cloud (proxy) for CNAME records',
-      'Contact your domain registrar if you need help adding DNS records'
+      'If using Cloudflare, disable proxy (orange cloud) for CNAME records',
+      'You must verify your domain in Brevo to send emails from it'
     ]
   };
 }
 
 // ==========================================
-// QUICK CHECK ENDPOINT
+// GET BREVO SENDERS (for dropdown)
 // ==========================================
 
-// Quick DNS check without saving
+router.get('/brevo/senders', auth, async (req, res) => {
+  try {
+    const senders = await getBrevoSenders();
+    res.json({ senders: senders });
+  } catch (err) {
+    console.error('Get Brevo senders error:', err);
+    res.status(500).json({ error: 'Failed to fetch Brevo senders' });
+  }
+});
+
+// ==========================================
+// QUICK DNS CHECK
+// ==========================================
+
 router.post('/check-dns', auth, async (req, res) => {
   try {
     const { domain, recordType, recordName, expectedValue } = req.body;
@@ -407,18 +529,18 @@ router.post('/check-dns', auth, async (req, res) => {
     try {
       switch (recordType) {
         case 'TXT':
-          const txtRecords = await dns.resolveTxt(recordName);
+          var txtRecords = await dns.resolveTxt(recordName);
           records = txtRecords.flat();
-          found = records.some(r => r.includes(expectedValue));
+          found = records.some(function(r) { return r.includes(expectedValue); });
           break;
         case 'CNAME':
           records = await dns.resolveCname(recordName);
-          found = records.some(r => r.includes(expectedValue));
+          found = records.some(function(r) { return r.includes(expectedValue); });
           break;
         case 'MX':
-          const mxRecords = await dns.resolveMx(recordName);
-          records = mxRecords.map(r => `${r.priority} ${r.exchange}`);
-          found = mxRecords.some(r => r.exchange.includes(expectedValue));
+          var mxRecords = await dns.resolveMx(recordName);
+          records = mxRecords.map(function(r) { return r.priority + ' ' + r.exchange; });
+          found = mxRecords.some(function(r) { return r.exchange.includes(expectedValue); });
           break;
       }
     } catch (dnsErr) {
@@ -427,8 +549,8 @@ router.post('/check-dns', auth, async (req, res) => {
     }
     
     res.json({
-      found,
-      records,
+      found: found,
+      records: records,
       message: found ? 'Record found!' : 'Record not found. DNS may still be propagating.'
     });
   } catch (err) {
