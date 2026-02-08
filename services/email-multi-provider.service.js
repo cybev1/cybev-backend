@@ -1,7 +1,10 @@
 // ============================================
 // FILE: services/email-multi-provider.service.js
 // CYBEV Multi-Provider Email Service
-// VERSION: 2.0.0 - Brevo Primary + Fixed ENV vars
+// VERSION: 2.1.0 - Dynamic ENV Check Fix
+// CHANGELOG:
+//   2.1.0 - Check BREVO_API_KEY dynamically at runtime, not just at module load
+//   2.0.0 - Brevo Primary + Fixed ENV vars
 // ============================================
 
 const AWS = require('aws-sdk');
@@ -249,7 +252,25 @@ const sendBulkWithSES = async ({ recipients, from, fromName, subject, html, text
 // ==========================================
 
 const getAvailableProviders = () => {
-  return Object.entries(PROVIDERS)
+  // Check env vars dynamically at runtime, not just at module load
+  const providers = {
+    brevo: {
+      name: 'Brevo (Sendinblue)',
+      priority: 1,
+      enabled: !!process.env.BREVO_API_KEY,
+      rateLimit: 10,
+      dailyLimit: 300
+    },
+    ses: {
+      name: 'Amazon SES',
+      priority: 2,
+      enabled: !!(process.env.AWS_ACCESS_KEY_ID || process.env.AWS_SES_ACCESS_KEY),
+      rateLimit: 14,
+      dailyLimit: 50000
+    }
+  };
+  
+  return Object.entries(providers)
     .filter(([_, config]) => config.enabled)
     .sort((a, b) => a[1].priority - b[1].priority)
     .map(([name, config]) => ({ name, ...config }));
@@ -262,11 +283,15 @@ const selectProvider = (preferredProvider = null) => {
     throw new Error('No email providers configured');
   }
 
-  if (preferredProvider && PROVIDERS[preferredProvider]?.enabled) {
-    return preferredProvider;
+  // Check if preferred provider is available
+  if (preferredProvider) {
+    const providerAvailable = available.find(p => p.name.toLowerCase().includes(preferredProvider.toLowerCase()));
+    if (providerAvailable) {
+      return preferredProvider;
+    }
   }
 
-  return available[0].name;
+  return available[0].name === 'Brevo (Sendinblue)' ? 'brevo' : 'ses';
 };
 
 // ==========================================
