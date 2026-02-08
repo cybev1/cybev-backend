@@ -1,38 +1,26 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
 // CYBEV Enhanced Campaign API
-// VERSION: 6.9.0 - Fixed Default Sender Email
+// VERSION: 7.0.0 - Brevo-Only Email Service
 // CHANGELOG:
+//   7.0.0 - Uses new Brevo-only email service (no aws-sdk dependency)
 //   6.9.0 - Default sender changed to info@cybev.io (verified in Brevo)
 //   6.8.0 - Added full social media links to built-in templates
 //   6.7.0 - Delete cached Campaign model, strict:false, proper POST handling
-//   6.6.0 - Added content field as Mixed type, made subject optional
-//   6.5.0 - Include built-in templates in GET /templates response
-//   6.4.0 - Fixed campaign save endpoints to return ok:true
-//   6.3.0 - Added 12 built-in email templates with full content
-//   6.2.0 - Fixed ObjectId conversion for list targeting
-//   6.1.0 - Multi-Provider Email (SES + Brevo)
 // ============================================
 
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// Import Multi-Provider Email Service (SES + Brevo with auto-fallback)
+// Import Multi-Provider Email Service (Brevo primary)
 let emailService = null;
 try {
   emailService = require('../services/email-multi-provider.service');
   const providers = emailService.getAvailableProviders();
-  console.log('✅ Email Service loaded with providers:', providers.map(p => p.name).join(', ') || 'none');
+  console.log('✅ Email Service loaded:', providers.map(p => p.displayName).join(', ') || 'none configured');
 } catch (err) {
-  console.warn('⚠️ Multi-Provider Email Service not available:', err.message);
-  // Try fallback to SES-only service
-  try {
-    emailService = require('../services/ses.service');
-    console.log('✅ Fallback: SES Service loaded');
-  } catch (e) {
-    console.warn('⚠️ No email service available');
-  }
+  console.warn('⚠️ Email Service not available:', err.message);
 }
 
 // ==========================================
