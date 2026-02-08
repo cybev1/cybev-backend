@@ -1,8 +1,9 @@
 // ============================================
 // FILE: routes/campaigns-enhanced.routes.js
 // CYBEV Enhanced Campaign API
-// VERSION: 6.8.0 - Social Links in Templates
+// VERSION: 6.9.0 - Fixed Default Sender Email
 // CHANGELOG:
+//   6.9.0 - Default sender changed to info@cybev.io (verified in Brevo)
 //   6.8.0 - Added full social media links to built-in templates
 //   6.7.0 - Delete cached Campaign model, strict:false, proper POST handling
 //   6.6.0 - Added content field as Mixed type, made subject optional
@@ -307,8 +308,8 @@ router.get('/addresses', authenticateToken, async (req, res) => {
     // Create default addresses if none exist
     if (addresses.length === 0) {
       const defaults = [
-        { user: userId, email: 'noreply@cybev.io', displayName: 'CYBEV', isDefault: true, verified: true },
-        { user: userId, email: 'info@cybev.io', displayName: 'CYBEV Info', isDefault: false, verified: true }
+        { user: userId, email: 'info@cybev.io', displayName: 'CYBEV', isDefault: true, verified: true },
+        { user: userId, email: 'noreply@cybev.io', displayName: 'CYBEV Notifications', isDefault: false, verified: true }
       ];
       addresses = await SenderAddress.insertMany(defaults);
     }
@@ -1265,7 +1266,7 @@ router.post('/test', authenticateToken, async (req, res) => {
       try {
         const result = await emailService.sendEmail({
           to: email,
-          from: fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+          from: fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'info@cybev.io',
           fromName: fromName || 'CYBEV',
           subject: `[TEST] ${subject}`,
           html: html,
@@ -1380,7 +1381,7 @@ router.post('/send', authenticateToken, async (req, res) => {
     // Send in background
     emailService.sendBulkEmails({
       recipients: emailRecipients,
-      from: campaignData.fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      from: campaignData.fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'info@cybev.io',
       fromName: campaignData.fromName || 'CYBEV',
       subject: campaignData.subject,
       html: campaignData.html,
@@ -1545,7 +1546,7 @@ router.post('/:id/send', authenticateToken, async (req, res) => {
     // Send in background (don't wait)
     emailService.sendBulkEmails({
       recipients: emailRecipients,
-      from: campaign.fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      from: campaign.fromEmail || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'info@cybev.io',
       fromName: campaign.fromName || 'CYBEV',
       subject: campaign.subject,
       html: campaign.html,
