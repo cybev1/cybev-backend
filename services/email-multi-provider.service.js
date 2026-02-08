@@ -1,8 +1,9 @@
 // ============================================
 // FILE: services/email-multi-provider.service.js
 // CYBEV Multi-Provider Email Service
-// VERSION: 2.1.0 - Dynamic ENV Check Fix
+// VERSION: 2.2.0 - Fixed Provider Name Mapping
 // CHANGELOG:
+//   2.2.0 - Fixed provider name mapping (was using displayName instead of key), default sender to info@cybev.io
 //   2.1.0 - Check BREVO_API_KEY dynamically at runtime, not just at module load
 //   2.0.0 - Brevo Primary + Fixed ENV vars
 // ============================================
@@ -62,7 +63,7 @@ const sendWithBrevo = async ({ to, from, fromName, subject, html, text, replyTo,
 
   const payload = {
     sender: {
-      email: from || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'noreply@cybev.io',
+      email: from || process.env.BREVO_SENDER_EMAIL || process.env.BREVO_FROM_EMAIL || 'info@cybev.io',
       name: fromName || 'CYBEV'
     },
     to: Array.isArray(to) ? to.map(email => ({ email })) : [{ email: to }],
@@ -255,14 +256,14 @@ const getAvailableProviders = () => {
   // Check env vars dynamically at runtime, not just at module load
   const providers = {
     brevo: {
-      name: 'Brevo (Sendinblue)',
+      displayName: 'Brevo (Sendinblue)',
       priority: 1,
       enabled: !!process.env.BREVO_API_KEY,
       rateLimit: 10,
       dailyLimit: 300
     },
     ses: {
-      name: 'Amazon SES',
+      displayName: 'Amazon SES',
       priority: 2,
       enabled: !!(process.env.AWS_ACCESS_KEY_ID || process.env.AWS_SES_ACCESS_KEY),
       rateLimit: 14,
@@ -270,10 +271,13 @@ const getAvailableProviders = () => {
     }
   };
   
-  return Object.entries(providers)
+  const available = Object.entries(providers)
     .filter(([_, config]) => config.enabled)
     .sort((a, b) => a[1].priority - b[1].priority)
-    .map(([name, config]) => ({ name, ...config }));
+    .map(([key, config]) => ({ name: key, ...config }));
+  
+  console.log('📧 Available providers:', available.map(p => `${p.name} (priority: ${p.priority})`).join(', ') || 'none');
+  return available;
 };
 
 const selectProvider = (preferredProvider = null) => {
