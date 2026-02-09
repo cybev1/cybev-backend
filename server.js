@@ -2,16 +2,17 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.12.0 - Added WebRTC WebSocket namespace init
-// PREVIOUS: 7.11.0 - Fixed uploads, streaming, AI generation
+// VERSION: 7.13.0 - Added DNS Providers for One-Click Domain Setup
+// PREVIOUS: 7.12.0 - Fixed WebRTC WebSocket namespace init
 // 
-// FIXES IN 7.12.0:
-//   - Initialize WebRTC WebSocket namespace for live streaming
-//   - Fixed browser streaming (camera mode)
+// FIXES IN 7.13.0:
+//   - Added dns-providers routes for one-click DNS setup
+//   - Users can connect Cloudflare, GoDaddy, Namecheap, Porkbun
+//   - Auto-add DNS records with connected providers
 //
-// ROLLBACK: If issues, revert to VERSION 7.3.0
+// ROLLBACK: If issues, revert to VERSION 7.12.0
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-01-28
+// UPDATED: 2026-02-09
 // ============================================
 
 const express = require('express');
@@ -1323,6 +1324,7 @@ const routes = [
   // Email Platform
   ['email', '/api/email', './routes/email.routes'],
   ['sender-domains', '/api/sender-domains', './routes/sender-domains.routes'],
+  ['dns-providers', '/api/dns-providers', './routes/dns-providers.routes'],
   ['campaigns-enhanced', '/api/campaigns-enhanced', './routes/campaigns-enhanced.routes'],
   ['email-webhooks', '/api/email-webhooks', './routes/email-webhooks.routes'],
   ['automation', '/api/automation', './routes/automation.routes'],
@@ -1541,21 +1543,22 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.12.0
-  Live Streaming WebSocket Fix
+  CYBEV API Server v7.13.0
+  DNS Providers One-Click Setup
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.12.0 Fixes:
-  ✅ WebRTC WebSocket namespace initialized
-  ✅ Browser camera streaming should work now
+  v7.13.0 Features:
+  ✅ DNS Providers (Cloudflare, GoDaddy, Namecheap, Porkbun)
+  ✅ One-click DNS record setup
+  ✅ Encrypted credential storage
   
   Previous Fixes:
+  ✅ WebRTC WebSocket namespace initialized
   ✅ AI Website Generator with images
   ✅ Image uploads (FormData + base64)
-  ✅ OBS streaming (streamKey at top level)
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
