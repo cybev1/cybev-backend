@@ -1,12 +1,20 @@
 // ============================================
 // FILE: routes/church.routes.js
 // Online Church Management System API
-// VERSION: 2.8.0 - Direct /members routes for frontend
-// FIXES:
-//   - Added /members/:orgId/:memberId routes (frontend path)
-//   - PUT members accepts all personal fields
-//   - POST upload-logo and upload-cover endpoints
-//   - Leader name/title on create and edit
+// VERSION: 3.0.0 - Ministry Selection + CE Zones Support
+// PREVIOUS: 2.8.0 - Direct /members routes for frontend
+// 
+// NEW IN 3.0.0:
+//   - Added ministry field (christ_embassy / others)
+//   - Added 185+ Christ Embassy zones as preset data
+//   - GET /zones - List all CE zones with filtering
+//   - GET /zones/:id - Get single zone
+//   - GET /dashboard/stats - Dashboard statistics
+//   - POST /organizations now accepts ministry & ceZone
+//   - GET /organizations supports ministry filter
+//   - POST /souls supports ceZone assignment
+//
+// ROLLBACK: If issues, revert to VERSION 2.8.0
 // ============================================
 
 const express = require('express');
@@ -47,6 +55,190 @@ const optionalAuth = (req, res, next) => {
   }
   next();
 };
+
+// ==========================================
+// CHRIST EMBASSY ZONES DATA (185+ Zones)
+// ==========================================
+const CE_ZONES = [
+  // Main Zones (Nigeria)
+  { id: '1-0', name: 'Aba Zone', category: 'zone' },
+  { id: '2-0', name: 'Abeokuta Zone', category: 'zone' },
+  { id: '3-0', name: 'Abuja Zone', category: 'zone' },
+  { id: '4-0', name: 'Accra Ghana Zone', category: 'zone' },
+  { id: '5-0', name: 'Akure Zone', category: 'zone' },
+  { id: '6-0', name: 'Asaba Zone', category: 'zone' },
+  { id: '7-0', name: 'Bayelsa Zone', category: 'zone' },
+  { id: '8-0', name: 'Benin Zone 1', category: 'zone' },
+  { id: '9-0', name: 'Benin Zone 2', category: 'zone' },
+  { id: '10-0', name: 'Bonny Zone', category: 'zone' },
+  { id: '11-0', name: 'Calabar Zone', category: 'zone' },
+  { id: '12-0', name: 'Delta Zone', category: 'zone' },
+  { id: '13-0', name: 'Edo North Zone', category: 'zone' },
+  { id: '14-0', name: 'Ekiti Zone', category: 'zone' },
+  { id: '15-0', name: 'Enugu Zone', category: 'zone' },
+  { id: '16-0', name: 'Ibadan Zone 1', category: 'zone' },
+  { id: '17-0', name: 'Ibadan Zone 2', category: 'zone' },
+  { id: '18-0', name: 'Ikorodu Zone', category: 'zone' },
+  { id: '19-0', name: 'Ilorin Zone', category: 'zone' },
+  { id: '20-0', name: 'Imo Zone', category: 'zone' },
+  { id: '21-0', name: 'Jos Zone', category: 'zone' },
+  { id: '22-0', name: 'Kaduna Zone', category: 'zone' },
+  { id: '23-0', name: 'Kano Zone', category: 'zone' },
+  { id: '24-0', name: 'Kwara Zone', category: 'zone' },
+  { id: '25-0', name: 'Lagos Zone 1', category: 'zone' },
+  { id: '26-0', name: 'Lagos Zone 2', category: 'zone' },
+  { id: '27-0', name: 'Lagos Zone 3', category: 'zone' },
+  { id: '28-0', name: 'Lagos Zone 4', category: 'zone' },
+  { id: '29-0', name: 'Lagos Zone 5', category: 'zone' },
+  { id: '30-0', name: 'Lekki Zone', category: 'zone' },
+  { id: '31-0', name: 'Makurdi Zone', category: 'zone' },
+  { id: '32-0', name: 'Minna Zone', category: 'zone' },
+  { id: '33-0', name: 'Nasarawa Zone', category: 'zone' },
+  { id: '34-0', name: 'Ogbomoso Zone', category: 'zone' },
+  { id: '35-0', name: 'Ogun Zone', category: 'zone' },
+  { id: '36-0', name: 'Ondo Zone', category: 'zone' },
+  { id: '37-0', name: 'Owerri Zone', category: 'zone' },
+  { id: '38-0', name: 'Oyo Zone', category: 'zone' },
+  { id: '39-0', name: 'Port Harcourt Zone 1', category: 'zone' },
+  { id: '40-0', name: 'Port Harcourt Zone 2', category: 'zone' },
+  { id: '41-0', name: 'Port Harcourt Zone 3', category: 'zone' },
+  { id: '42-0', name: 'Rivers Zone', category: 'zone' },
+  { id: '43-0', name: 'Sapele Zone', category: 'zone' },
+  { id: '44-0', name: 'Sokoto Zone', category: 'zone' },
+  { id: '45-0', name: 'Umuahia Zone', category: 'zone' },
+  { id: '46-0', name: 'Uyo Zone', category: 'zone' },
+  { id: '47-0', name: 'Warri Zone', category: 'zone' },
+  { id: '48-0', name: 'Yenagoa Zone', category: 'zone' },
+  { id: '49-0', name: 'Yola Zone', category: 'zone' },
+  
+  // International Zones (Africa)
+  { id: '50-0', name: 'Cameroon Zone', category: 'zone' },
+  { id: '51-0', name: 'Congo Zone', category: 'zone' },
+  { id: '52-0', name: 'Cote d\'Ivoire Zone', category: 'zone' },
+  { id: '53-0', name: 'East Africa Zone', category: 'zone' },
+  { id: '54-0', name: 'Ethiopia Zone', category: 'zone' },
+  { id: '55-0', name: 'Gabon Zone', category: 'zone' },
+  { id: '56-0', name: 'Kenya Zone', category: 'zone' },
+  { id: '57-0', name: 'Malawi Zone', category: 'zone' },
+  { id: '58-0', name: 'Mozambique Zone', category: 'zone' },
+  { id: '59-0', name: 'Rwanda Zone', category: 'zone' },
+  { id: '60-0', name: 'Senegal Zone', category: 'zone' },
+  { id: '61-0', name: 'South Africa Zone 1', category: 'zone' },
+  { id: '62-0', name: 'South Africa Zone 2', category: 'zone' },
+  { id: '63-0', name: 'Tanzania Zone', category: 'zone' },
+  { id: '64-0', name: 'Uganda Zone', category: 'zone' },
+  { id: '65-0', name: 'Zambia Zone', category: 'zone' },
+  { id: '66-0', name: 'Zimbabwe Zone', category: 'zone' },
+  
+  // International Zones (Europe)
+  { id: '67-0', name: 'UK Zone 1', category: 'zone' },
+  { id: '68-0', name: 'UK Zone 2', category: 'zone' },
+  { id: '69-0', name: 'UK Zone 3', category: 'zone' },
+  { id: '70-0', name: 'UK Zone 4', category: 'zone' },
+  { id: '71-0', name: 'Germany Zone', category: 'zone' },
+  { id: '72-0', name: 'France Zone', category: 'zone' },
+  { id: '73-0', name: 'Netherlands Zone', category: 'zone' },
+  { id: '74-0', name: 'Italy Zone', category: 'zone' },
+  { id: '75-0', name: 'Spain Zone', category: 'zone' },
+  { id: '76-0', name: 'Belgium Zone', category: 'zone' },
+  { id: '77-0', name: 'Switzerland Zone', category: 'zone' },
+  { id: '78-0', name: 'Austria Zone', category: 'zone' },
+  { id: '79-0', name: 'Ireland Zone', category: 'zone' },
+  { id: '80-0', name: 'Scandinavia Zone', category: 'zone' },
+  
+  // International Zones (Americas)
+  { id: '81-0', name: 'USA Zone 1 (East)', category: 'zone' },
+  { id: '82-0', name: 'USA Zone 2 (West)', category: 'zone' },
+  { id: '83-0', name: 'USA Zone 3 (South)', category: 'zone' },
+  { id: '84-0', name: 'USA Zone 4 (Midwest)', category: 'zone' },
+  { id: '85-0', name: 'Canada Zone 1 (East)', category: 'zone' },
+  { id: '86-0', name: 'Canada Zone 2 (West)', category: 'zone' },
+  { id: '87-0', name: 'Caribbean Zone', category: 'zone' },
+  { id: '88-0', name: 'Brazil Zone', category: 'zone' },
+  { id: '89-0', name: 'Mexico Zone', category: 'zone' },
+  
+  // International Zones (Asia/Pacific)
+  { id: '90-0', name: 'India Zone', category: 'zone' },
+  { id: '91-0', name: 'Australia Zone', category: 'zone' },
+  { id: '92-0', name: 'Malaysia Zone', category: 'zone' },
+  { id: '93-0', name: 'Singapore Zone', category: 'zone' },
+  { id: '94-0', name: 'Philippines Zone', category: 'zone' },
+  { id: '95-0', name: 'South Korea Zone', category: 'zone' },
+  { id: '96-0', name: 'Japan Zone', category: 'zone' },
+  { id: '97-0', name: 'China Zone', category: 'zone' },
+  { id: '98-0', name: 'Dubai/UAE Zone', category: 'zone' },
+  { id: '99-0', name: 'Israel Zone', category: 'zone' },
+  
+  // BLW Zones
+  { id: '100-1', name: 'BLW Zone A', category: 'blw' },
+  { id: '101-1', name: 'BLW Zone B', category: 'blw' },
+  { id: '102-1', name: 'BLW Zone C', category: 'blw' },
+  { id: '103-1', name: 'BLW Zone D', category: 'blw' },
+  { id: '104-1', name: 'BLW Zone E', category: 'blw' },
+  { id: '105-1', name: 'BLW Zone F', category: 'blw' },
+  { id: '106-1', name: 'BLW Zone G', category: 'blw' },
+  { id: '107-1', name: 'BLW Zone H', category: 'blw' },
+  { id: '108-1', name: 'BLW Zone I', category: 'blw' },
+  { id: '109-1', name: 'BLW Zone J', category: 'blw' },
+  { id: '110-1', name: 'BLW Zone K', category: 'blw' },
+  { id: '111-1', name: 'BLW Zone L', category: 'blw' },
+  { id: '112-1', name: 'BLW Zone M', category: 'blw' },
+  { id: '113-1', name: 'BLW Zone N', category: 'blw' },
+  { id: '114-1', name: 'BLW Ghana Zone', category: 'blw' },
+  { id: '115-1', name: 'BLW Kenya Zone', category: 'blw' },
+  { id: '116-1', name: 'BLW South Africa Zone', category: 'blw' },
+  { id: '117-1', name: 'BLW UK Zone', category: 'blw' },
+  { id: '118-1', name: 'BLW USA Zone', category: 'blw' },
+  { id: '119-1', name: 'BLW Canada Zone', category: 'blw' },
+  { id: '120-1', name: 'BLW Europe Zone', category: 'blw' },
+  { id: '121-1', name: 'BLW Asia Zone', category: 'blw' },
+  
+  // Ministry Zones
+  { id: '130-2', name: 'GYLF Africa', category: 'ministry' },
+  { id: '131-2', name: 'GYLF Europe', category: 'ministry' },
+  { id: '132-2', name: 'GYLF Americas', category: 'ministry' },
+  { id: '133-2', name: 'GYLF Asia Pacific', category: 'ministry' },
+  { id: '134-2', name: 'Healing School Africa', category: 'ministry' },
+  { id: '135-2', name: 'Healing School Europe', category: 'ministry' },
+  { id: '136-2', name: 'Healing School Americas', category: 'ministry' },
+  { id: '137-2', name: 'Healing School Asia Pacific', category: 'ministry' },
+  { id: '138-2', name: 'Future Africa Leaders Foundation', category: 'ministry' },
+  { id: '139-2', name: 'InnerCity Mission Africa', category: 'ministry' },
+  { id: '140-2', name: 'InnerCity Mission International', category: 'ministry' },
+  { id: '141-2', name: 'Rhapsody of Realities Distribution', category: 'ministry' },
+  { id: '142-2', name: 'Loveworld Medical Missions', category: 'ministry' },
+  { id: '143-2', name: 'International School of Ministry', category: 'ministry' },
+  
+  // ISM Zones
+  { id: '150-3', name: 'ISM Nigeria Zone 1', category: 'ism' },
+  { id: '151-3', name: 'ISM Nigeria Zone 2', category: 'ism' },
+  { id: '152-3', name: 'ISM Ghana Zone', category: 'ism' },
+  { id: '153-3', name: 'ISM South Africa Zone', category: 'ism' },
+  { id: '154-3', name: 'ISM UK Zone', category: 'ism' },
+  { id: '155-3', name: 'ISM USA Zone', category: 'ism' },
+  { id: '156-3', name: 'ISM Canada Zone', category: 'ism' },
+  { id: '157-3', name: 'ISM Europe Zone', category: 'ism' },
+  { id: '158-3', name: 'ISM Asia Zone', category: 'ism' },
+  { id: '159-3', name: 'ISM Online Campus', category: 'ism' },
+  
+  // Departments
+  { id: '170-4', name: 'Loveworld Music & Arts Ministry', category: 'department' },
+  { id: '171-4', name: 'Loveworld Films', category: 'department' },
+  { id: '172-4', name: 'Loveworld Publishing', category: 'department' },
+  { id: '173-4', name: 'Loveworld Television Ministry', category: 'department' },
+  { id: '174-4', name: 'Loveworld Radio Ministry', category: 'department' },
+  { id: '175-4', name: 'Loveworld Digital Network', category: 'department' },
+  { id: '176-4', name: 'Pastor Chris Digital Library', category: 'department' },
+  { id: '177-4', name: 'KingsChat', category: 'department' },
+  { id: '178-4', name: 'Yookos', category: 'department' },
+  { id: '179-4', name: 'CeFlix', category: 'department' },
+  { id: '180-4', name: 'Loveworld USA Network', category: 'department' },
+  { id: '181-4', name: 'Loveworld UK Network', category: 'department' },
+  { id: '182-4', name: 'Loveworld SAT', category: 'department' },
+  { id: '183-4', name: 'Rhapsody of Realities Translations', category: 'department' },
+  { id: '184-4', name: 'Loveworld Innovations', category: 'department' },
+  { id: '185-4', name: 'Believers Loveworld Incorporated', category: 'department' },
+].sort((a, b) => a.name.localeCompare(b.name));
 
 // ==========================================
 // AUTHORIZATION HELPERS
@@ -115,6 +307,155 @@ async function getUserRole(userId, orgId) {
 const canManageOrg = isOwnerOrAdmin;
 
 // ==========================================
+// CE ZONES ROUTES (NEW in v3.0.0)
+// ==========================================
+
+// GET /zones - List all CE zones with filtering
+router.get('/zones', verifyToken, (req, res) => {
+  try {
+    const { category, search } = req.query;
+    
+    let zones = [...CE_ZONES];
+    
+    // Filter by category
+    if (category && category !== 'all') {
+      zones = zones.filter(z => z.category === category);
+    }
+    
+    // Filter by search
+    if (search) {
+      const query = search.toLowerCase();
+      zones = zones.filter(z => 
+        z.name.toLowerCase().includes(query) ||
+        z.id.toLowerCase().includes(query)
+      );
+    }
+    
+    res.json({
+      ok: true,
+      zones,
+      total: zones.length,
+      categories: ['zone', 'blw', 'ministry', 'ism', 'department']
+    });
+  } catch (err) {
+    console.error('GET /zones error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /zones/:id - Get single zone
+router.get('/zones/:id', verifyToken, (req, res) => {
+  try {
+    const zone = CE_ZONES.find(z => z.id === req.params.id);
+    
+    if (!zone) {
+      return res.status(404).json({ ok: false, error: 'Zone not found' });
+    }
+    
+    res.json({ ok: true, zone });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// GET /dashboard/stats - Dashboard statistics (NEW in v3.0.0)
+router.get('/dashboard/stats', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id || req.user._id || req.user.userId;
+    
+    // Get organizations where user is leader or admin
+    const orgs = await ChurchOrg.find({
+      $or: [
+        { leader: userId },
+        { createdBy: userId },
+        { admins: userId }
+      ],
+      isActive: { $ne: false }
+    }).lean();
+    
+    const orgIds = orgs.map(o => o._id);
+    
+    // Count souls
+    const totalSouls = await Soul.countDocuments({
+      $or: [
+        { organization: { $in: orgIds } },
+        { zone: { $in: orgIds } },
+        { church: { $in: orgIds } },
+        { fellowship: { $in: orgIds } },
+        { cell: { $in: orgIds } },
+        { addedBy: userId }
+      ],
+      isActive: { $ne: false }
+    });
+    
+    // Count new souls this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    
+    const newSoulsThisMonth = await Soul.countDocuments({
+      $or: [
+        { organization: { $in: orgIds } },
+        { zone: { $in: orgIds } },
+        { church: { $in: orgIds } },
+        { fellowship: { $in: orgIds } },
+        { cell: { $in: orgIds } },
+        { addedBy: userId }
+      ],
+      isActive: { $ne: false },
+      createdAt: { $gte: startOfMonth }
+    });
+    
+    // Count members
+    const totalMembers = orgs.reduce((sum, org) => 
+      sum + (org.members?.length || org.memberCount || 0), 0);
+    
+    // Count FS graduates
+    const fsGraduates = orgs.reduce((sum, org) => 
+      sum + (org.stats?.foundationSchoolGraduates || 0), 0);
+    
+    // Souls by status
+    const soulsByStatus = await Soul.aggregate([
+      {
+        $match: {
+          $or: [
+            { organization: { $in: orgIds } },
+            { zone: { $in: orgIds } },
+            { church: { $in: orgIds } },
+            { addedBy: new ObjectId(userId) }
+          ],
+          isActive: { $ne: false }
+        }
+      },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    const statusCounts = {};
+    soulsByStatus.forEach(s => {
+      statusCounts[s._id || 'new'] = s.count;
+    });
+    
+    res.json({
+      ok: true,
+      totalOrgs: orgs.length,
+      totalSouls,
+      newSoulsThisMonth,
+      totalMembers,
+      fsGraduates,
+      soulsByStatus: statusCounts
+    });
+  } catch (err) {
+    console.error('GET /dashboard/stats error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ==========================================
 // ORGANIZATION ROUTES - SPECIFIC FIRST!
 // Order: /create, /my, then /:id
 // ==========================================
@@ -127,8 +468,8 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
     
     // Get ALL active organizations that can be parents (not just user's own)
     // This allows users to create organizations under existing ones
-    const allOrgs = await ChurchOrg.find({ isActive: true })
-      .select('_id name type slug leader')
+    const allOrgs = await ChurchOrg.find({ isActive: { $ne: false } })
+      .select('_id name type slug leader ceZone ministry leaderName leaderTitle')
       .populate('leader', 'name username')
       .sort({ type: 1, name: 1 });
     
@@ -144,6 +485,12 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
     // Color themes available
     const colorThemes = ['purple', 'blue', 'green', 'red', 'orange', 'pink', 'teal', 'indigo'];
     
+    // Ministry options (NEW in v3.0.0)
+    const ministryOptions = [
+      { value: 'christ_embassy', label: 'Christ Embassy', description: 'Loveworld Inc. / Christ Embassy churches' },
+      { value: 'others', label: 'Other Ministry', description: 'Other churches and organizations' }
+    ];
+    
     // Return a placeholder org object so frontend doesn't show "not found"
     const placeholderOrg = {
       _id: 'create',
@@ -151,7 +498,8 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
       type: 'church',
       description: '',
       isCreateMode: true,
-      colorTheme: 'purple'
+      colorTheme: 'purple',
+      ministry: 'christ_embassy'
     };
     
     res.json({ 
@@ -163,15 +511,19 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
       isNew: true,
       formData: {
         validTypes,
-        parentOptions: allOrgs, // ALL organizations, not just user's
+        parentOptions: allOrgs,
         colorThemes,
+        ministryOptions,
+        ceZones: CE_ZONES,
         defaults: {
           type: 'church',
-          colorTheme: 'purple'
+          colorTheme: 'purple',
+          ministry: 'christ_embassy'
         }
       },
       validTypes: validTypes.map(t => t.value),
-      parentOrganizations: allOrgs, // ALL organizations available as parents
+      parentOrganizations: allOrgs,
+      ceZones: CE_ZONES,
       // Permissions for create page
       permissions: {
         canEdit: true,
@@ -188,13 +540,15 @@ router.get('/organizations/create', verifyToken, async (req, res) => {
 // This is used by the create form to show all orgs users can build under
 router.get('/organizations/available-parents', verifyToken, async (req, res) => {
   try {
-    const { type } = req.query; // Optional: filter by type
+    const { type, ministry, ceZoneId } = req.query; // Optional filters
     
     const query = { isActive: { $ne: false } }; // Include orgs without isActive field
     if (type) query.type = type;
+    if (ministry) query.ministry = ministry;
+    if (ceZoneId) query['ceZone.id'] = ceZoneId;
     
     const orgs = await ChurchOrg.find(query)
-      .select('_id name type slug leader memberCount parent zone church leaderName leaderTitle')
+      .select('_id name type slug leader memberCount parent zone church leaderName leaderTitle ministry ceZone')
       .populate('leader', 'name username')
       .sort({ type: 1, name: 1 });
     
@@ -213,7 +567,8 @@ router.get('/organizations/available-parents', verifyToken, async (req, res) => 
       ok: true, 
       organizations: orgs,
       grouped,
-      total: orgs.length
+      total: orgs.length,
+      ceZones: CE_ZONES
     });
   } catch (err) {
     console.error('Get available parents error:', err);
@@ -227,8 +582,8 @@ router.get('/org/create', verifyToken, async (req, res) => {
     const userId = req.user.id || req.user._id || req.user.userId;
     
     // Get ALL active organizations (not just user's own)
-    const allOrgs = await ChurchOrg.find({ isActive: true })
-      .select('_id name type slug leader')
+    const allOrgs = await ChurchOrg.find({ isActive: { $ne: false } })
+      .select('_id name type slug leader ceZone ministry')
       .populate('leader', 'name username')
       .sort({ type: 1, name: 1 });
     
@@ -246,7 +601,8 @@ router.get('/org/create', verifyToken, async (req, res) => {
       type: 'church',
       description: '',
       isCreateMode: true,
-      colorTheme: 'purple'
+      colorTheme: 'purple',
+      ministry: 'christ_embassy'
     };
     
     res.json({ 
@@ -258,10 +614,12 @@ router.get('/org/create', verifyToken, async (req, res) => {
       formData: {
         validTypes,
         parentOptions: allOrgs,
-        colorThemes: ['purple', 'blue', 'green', 'red', 'orange', 'pink', 'teal', 'indigo']
+        colorThemes: ['purple', 'blue', 'green', 'red', 'orange', 'pink', 'teal', 'indigo'],
+        ceZones: CE_ZONES
       },
       validTypes: validTypes.map(t => t.value),
       parentOrganizations: allOrgs,
+      ceZones: CE_ZONES,
       permissions: { canEdit: true, canCreate: true }
     });
   } catch (err) {
@@ -341,11 +699,16 @@ router.get('/organizations/my', verifyToken, async (req, res) => {
   }
 });
 
-// POST /organizations - Create
+// POST /organizations - Create (UPDATED in v3.0.0 for ministry + ceZone)
 router.post('/organizations', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
-    const { name, type, description, motto, parentId, contact, meetingSchedule, colorTheme, structureMode, leaderName, leaderTitle } = req.body;
+    const { 
+      name, type, description, motto, parentId, contact, meetingSchedule, colorTheme, structureMode, 
+      leaderName, leaderTitle,
+      // NEW v3.0.0 fields
+      ministry, customMinistry, ceZone, ceZoneId
+    } = req.body;
     
     if (!name || !type) {
       return res.status(400).json({ ok: false, error: 'Name and type are required' });
@@ -380,6 +743,23 @@ router.post('/organizations', verifyToken, async (req, res) => {
       church = parent.church || (parent.type === 'church' ? parent._id : null);
     }
     
+    // Handle CE Zone (NEW in v3.0.0)
+    let ceZoneData = null;
+    if (ceZone) {
+      // ceZone object passed directly
+      ceZoneData = ceZone;
+    } else if (ceZoneId) {
+      // Lookup zone by ID
+      const foundZone = CE_ZONES.find(z => z.id === ceZoneId);
+      if (foundZone) {
+        ceZoneData = {
+          id: foundZone.id,
+          name: foundZone.name,
+          category: foundZone.category
+        };
+      }
+    }
+    
     const org = new ChurchOrg({
       name, slug, type,
       ...(structureMode ? { structureMode } : {}),
@@ -387,8 +767,12 @@ router.post('/organizations', verifyToken, async (req, res) => {
       parent: parentId || null,
       zone, church,
       leader: userId,
-      leaderName: leaderName || '',      // Actual leader's name (may differ from CYBEV account)
-      leaderTitle: leaderTitle || '',    // e.g., Pastor, Deacon, Brother
+      leaderName: leaderName || '',
+      leaderTitle: leaderTitle || '',
+      // NEW v3.0.0 fields
+      ministry: ministry || 'christ_embassy',
+      customMinistry: customMinistry || '',
+      ceZone: ceZoneData,
       admins: [userId],
       members: [{
         user: userId,
@@ -403,7 +787,7 @@ router.post('/organizations', verifyToken, async (req, res) => {
     });
     
     await org.save();
-    console.log(`⛪ Created ${type}: ${name} by user ${userId}${leaderName ? ` (Leader: ${leaderTitle || ''} ${leaderName})` : ''}`);
+    console.log(`⛪ Created ${type}: ${name} by user ${userId}${ceZoneData ? ` (Zone: ${ceZoneData.name})` : ''}${leaderName ? ` (Leader: ${leaderTitle || ''} ${leaderName})` : ''}`);
     
     res.status(201).json({ ok: true, org, organization: org });
   } catch (err) {
@@ -412,10 +796,10 @@ router.post('/organizations', verifyToken, async (req, res) => {
   }
 });
 
-// GET /organizations - List ONLY user's organizations (not all!)
+// GET /organizations - List ONLY user's organizations (UPDATED in v3.0.0 for ministry filter)
 router.get('/organizations', verifyToken, async (req, res) => {
   try {
-    const { type, parentId, zoneId, churchId, page = 1, limit = 20, search } = req.query;
+    const { type, parentId, zoneId, churchId, ministry, ceZoneId, page = 1, limit = 20, search } = req.query;
     const userId = req.user?.id || req.user?._id || req.user?.userId;
     const isAdmin = req.user?.role === 'admin' || req.user?.isAdmin;
     
@@ -482,17 +866,22 @@ router.get('/organizations', verifyToken, async (req, res) => {
     if (churchId) {
       try { userQuery.church = new ObjectId(churchId); } catch(e) { userQuery.church = churchId; }
     }
+    // NEW v3.0.0 filters
+    if (ministry) userQuery.ministry = ministry;
+    if (ceZoneId) userQuery['ceZone.id'] = ceZoneId;
+    
     if (search) {
       const searchCondition = {
         $or: [
           { name: { $regex: search, $options: 'i' } },
-          { description: { $regex: search, $options: 'i' } }
+          { description: { $regex: search, $options: 'i' } },
+          { 'ceZone.name': { $regex: search, $options: 'i' } }
         ]
       };
       if (userQuery.$and) {
         userQuery.$and.push(searchCondition);
       } else {
-        userQuery.$and = [userQuery, searchCondition];
+        userQuery = { $and: [userQuery, searchCondition] };
       }
     }
     
@@ -582,9 +971,9 @@ router.get('/organizations/:id', verifyToken, async (req, res) => {
     
     const canManage = ['owner', 'admin', 'assistant'].includes(userRole);
     
-    const children = await ChurchOrg.find({ parent: org._id, isActive: true })
+    const children = await ChurchOrg.find({ parent: org._id, isActive: { $ne: false } })
       .populate('leader', 'name username profilePicture')
-      .select('name type slug memberCount leader logo')
+      .select('name type slug memberCount leader logo ceZone ministry')
       .sort({ name: 1 });
     
     const recentSouls = await Soul.countDocuments({
@@ -651,7 +1040,7 @@ router.get('/organizations/:id', verifyToken, async (req, res) => {
   }
 });
 
-// PUT /organizations/:id - Update (requires owner/admin)
+// PUT /organizations/:id - Update (requires owner/admin) - UPDATED for ministry/ceZone
 router.put('/organizations/:id', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
@@ -662,7 +1051,11 @@ router.put('/organizations/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ ok: false, error: 'Not authorized', yourRole: userRole });
     }
     
-    const { name, description, motto, contact, meetingSchedule, socialLinks, settings, logo, coverImage, colorTheme, leaderName, leaderTitle } = req.body;
+    const { 
+      name, description, motto, contact, meetingSchedule, socialLinks, settings, logo, coverImage, colorTheme, leaderName, leaderTitle,
+      // NEW v3.0.0 fields
+      ministry, customMinistry, ceZone
+    } = req.body;
     
     const org = await ChurchOrg.findByIdAndUpdate(id, {
       $set: {
@@ -676,8 +1069,12 @@ router.put('/organizations/:id', verifyToken, async (req, res) => {
         ...(logo && { logo }),
         ...(coverImage && { coverImage }),
         ...(colorTheme && { colorTheme }),
-        ...(leaderName !== undefined && { leaderName }),  // Actual leader's name
-        ...(leaderTitle !== undefined && { leaderTitle }), // e.g., Pastor, Deacon
+        ...(leaderName !== undefined && { leaderName }),
+        ...(leaderTitle !== undefined && { leaderTitle }),
+        // NEW v3.0.0 fields
+        ...(ministry && { ministry }),
+        ...(customMinistry !== undefined && { customMinistry }),
+        ...(ceZone && { ceZone }),
         updatedAt: new Date()
       }
     }, { new: true }).populate('leader', 'name username profilePicture');
@@ -720,7 +1117,7 @@ router.post('/organizations/:id/upload-logo', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     const { id } = req.params;
-    const { image, logo, url } = req.body; // Accept base64 image or URL
+    const { image, logo, url } = req.body;
     
     const userRole = await getUserRole(userId, id);
     if (!['owner', 'admin', 'assistant'].includes(userRole)) {
@@ -904,11 +1301,13 @@ router.get('/organizations/:id/members', verifyToken, async (req, res) => {
     
     // Filter by search
     if (search) {
-      const searchLower = search.toLowerCase();
+      const query = search.toLowerCase();
       members = members.filter(m => 
-        m.user?.name?.toLowerCase().includes(searchLower) ||
-        m.user?.username?.toLowerCase().includes(searchLower) ||
-        m.user?.email?.toLowerCase().includes(searchLower)
+        m.user?.name?.toLowerCase().includes(query) ||
+        m.user?.username?.toLowerCase().includes(query) ||
+        m.firstName?.toLowerCase().includes(query) ||
+        m.lastName?.toLowerCase().includes(query) ||
+        m.email?.toLowerCase().includes(query)
       );
     }
     
@@ -922,9 +1321,10 @@ router.get('/organizations/:id/members', verifyToken, async (req, res) => {
       members = members.filter(m => m.status === status);
     }
     
-    // SECURITY: Hide sensitive contact info for regular members
+    // If not manager, hide sensitive info
     if (!canManage) {
       members = members.map(m => ({
+        _id: m._id,
         user: {
           _id: m.user?._id,
           name: m.user?.name,
@@ -939,13 +1339,19 @@ router.get('/organizations/:id/members', verifyToken, async (req, res) => {
     
     // Pagination
     const total = members.length;
-    const startIndex = (parseInt(page) - 1) * parseInt(limit);
-    const paginatedMembers = members.slice(startIndex, startIndex + parseInt(limit));
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const paginatedMembers = members.slice((pageNum - 1) * limitNum, pageNum * limitNum);
     
     res.json({
       ok: true,
       members: paginatedMembers,
-      pagination: { page: parseInt(page), limit: parseInt(limit), total },
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        pages: Math.ceil(total / limitNum)
+      },
       canManage,
       userRole
     });
@@ -955,21 +1361,15 @@ router.get('/organizations/:id/members', verifyToken, async (req, res) => {
   }
 });
 
-// POST /organizations/:id/members - Add member (admin only)
+// POST /organizations/:id/members - Add member
 router.post('/organizations/:id/members', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     const { id } = req.params;
-    const { memberId, role = 'member', email, phone, notes } = req.body;
     
-    // Check authorization
     const userRole = await getUserRole(userId, id);
     if (!['owner', 'admin', 'assistant'].includes(userRole)) {
-      return res.status(403).json({ ok: false, error: 'Only admins can add members' });
-    }
-    
-    if (!memberId) {
-      return res.status(400).json({ ok: false, error: 'Member ID is required' });
+      return res.status(403).json({ ok: false, error: 'Not authorized' });
     }
     
     const org = await ChurchOrg.findById(id);
@@ -977,402 +1377,28 @@ router.post('/organizations/:id/members', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Organization not found' });
     }
     
-    // Check if already a member
-    const existingMember = org.members?.find(m => m.user?.toString() === memberId);
-    if (existingMember) {
-      return res.status(400).json({ ok: false, error: 'User is already a member' });
-    }
-    
-    // Add member
-    org.members.push({
-      user: memberId,
-      role: role,
+    const memberData = {
+      ...req.body,
       joinedAt: new Date(),
       status: 'active',
-      email,
-      phone,
-      notes,
       addedBy: userId
-    });
+    };
+    
+    org.members.push(memberData);
     org.memberCount = org.members.length;
     await org.save();
     
-    console.log(`👥 Member added to ${org.name} by ${userId}`);
+    const newMember = org.members[org.members.length - 1];
+    console.log(`👤 Added member to ${org.name}`);
     
-    res.json({ ok: true, message: 'Member added', memberCount: org.memberCount });
+    res.status(201).json({ ok: true, member: newMember });
   } catch (err) {
     console.error('Add member error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// PUT /organizations/:id/members/:memberId - Update member (admin only)
-router.put('/organizations/:id/members/:memberId', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id || req.user._id || req.user.userId;
-    const { id, memberId } = req.params;
-    
-    // Check authorization
-    const userRole = await getUserRole(userId, id);
-    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
-      return res.status(403).json({ ok: false, error: 'Only admins can edit members' });
-    }
-    
-    const org = await ChurchOrg.findById(id);
-    if (!org) {
-      return res.status(404).json({ ok: false, error: 'Organization not found' });
-    }
-    
-    // Find member by _id or user field (support both formats)
-    let memberIndex = org.members?.findIndex(m => 
-      m._id?.toString() === memberId || 
-      m.user?.toString() === memberId ||
-      (m.user?._id && m.user._id.toString() === memberId)
-    );
-    
-    if (memberIndex === -1 || memberIndex === undefined) {
-      console.log('Member not found. memberId:', memberId, 'members:', org.members?.map(m => ({ _id: m._id, user: m.user })));
-      return res.status(404).json({ ok: false, error: 'Member not found in organization' });
-    }
-    
-    // Extract all possible fields from request body
-    const {
-      role, status, notes,
-      // Personal info
-      title, firstName, lastName, name,
-      phone, whatsapp, email,
-      gender, dob, dateOfBirth,
-      maritalStatus, anniversary,
-      // Address
-      address, city, state, country,
-      // Church info
-      department, cellGroup, serviceUnit,
-      // Spiritual info
-      baptized, baptismDate, savedDate, foundationSchool, foundationSchoolDate,
-      // Professional
-      occupation, employer, skills
-    } = req.body;
-    
-    // Update member fields
-    const member = org.members[memberIndex];
-    
-    // Role and status
-    if (role) member.role = role;
-    if (status) member.status = status;
-    if (notes !== undefined) member.notes = notes;
-    
-    // Personal info
-    if (title !== undefined) member.title = title;
-    if (firstName !== undefined) member.firstName = firstName;
-    if (lastName !== undefined) member.lastName = lastName;
-    if (name !== undefined) member.name = name;
-    if (phone !== undefined) member.phone = phone;
-    if (whatsapp !== undefined) member.whatsapp = whatsapp;
-    if (email !== undefined) member.email = email;
-    if (gender !== undefined) member.gender = gender;
-    if (dob !== undefined) member.dob = dob;
-    if (dateOfBirth !== undefined) member.dateOfBirth = dateOfBirth;
-    if (maritalStatus !== undefined) member.maritalStatus = maritalStatus;
-    if (anniversary !== undefined) member.anniversary = anniversary;
-    
-    // Address
-    if (address !== undefined) member.address = address;
-    if (city !== undefined) member.city = city;
-    if (state !== undefined) member.state = state;
-    if (country !== undefined) member.country = country;
-    
-    // Church info
-    if (department !== undefined) member.department = department;
-    if (cellGroup !== undefined) member.cellGroup = cellGroup;
-    if (serviceUnit !== undefined) member.serviceUnit = serviceUnit;
-    
-    // Spiritual info
-    if (baptized !== undefined) member.baptized = baptized;
-    if (baptismDate !== undefined) member.baptismDate = baptismDate;
-    if (savedDate !== undefined) member.savedDate = savedDate;
-    if (foundationSchool !== undefined) member.foundationSchool = foundationSchool;
-    if (foundationSchoolDate !== undefined) member.foundationSchoolDate = foundationSchoolDate;
-    
-    // Professional
-    if (occupation !== undefined) member.occupation = occupation;
-    if (employer !== undefined) member.employer = employer;
-    if (skills !== undefined) member.skills = skills;
-    
-    // Metadata
-    member.updatedAt = new Date();
-    member.updatedBy = userId;
-    
-    await org.save();
-    
-    console.log(`✅ Updated member ${memberId} in org ${org.name}`);
-    
-    res.json({ ok: true, message: 'Member updated successfully', member });
-  } catch (err) {
-    console.error('Update member error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// DELETE /organizations/:id/members/:memberId - Remove member (admin only)
-router.delete('/organizations/:id/members/:memberId', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id || req.user._id || req.user.userId;
-    const { id, memberId } = req.params;
-    
-    // Check authorization
-    const userRole = await getUserRole(userId, id);
-    if (!['owner', 'admin'].includes(userRole)) {
-      return res.status(403).json({ ok: false, error: 'Only owner/admin can remove members' });
-    }
-    
-    // Cannot remove yourself if you're the owner
-    const org = await ChurchOrg.findById(id);
-    if (!org) {
-      return res.status(404).json({ ok: false, error: 'Organization not found' });
-    }
-    
-    if (org.leader?.toString() === memberId) {
-      return res.status(400).json({ ok: false, error: 'Cannot remove the owner' });
-    }
-    
-    // Remove member
-    org.members = org.members.filter(m => m.user?.toString() !== memberId);
-    org.memberCount = org.members.length;
-    
-    // Also remove from admins/assistants if present
-    org.admins = org.admins?.filter(a => a.toString() !== memberId);
-    org.assistantLeaders = org.assistantLeaders?.filter(a => a.toString() !== memberId);
-    
-    await org.save();
-    
-    console.log(`👥 Member ${memberId} removed from ${org.name} by ${userId}`);
-    
-    res.json({ ok: true, message: 'Member removed', memberCount: org.memberCount });
-  } catch (err) {
-    console.error('Remove member error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// GET /organizations/:id/export - Export members (admin only)
-router.get('/organizations/:id/export', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id || req.user._id || req.user.userId;
-    const { id } = req.params;
-    
-    // Check authorization - ONLY admins can export
-    const userRole = await getUserRole(userId, id);
-    if (!['owner', 'admin'].includes(userRole)) {
-      return res.status(403).json({ ok: false, error: 'Only owner/admin can export data' });
-    }
-    
-    const org = await ChurchOrg.findById(id)
-      .populate('members.user', 'name username email phone')
-      .lean();
-    
-    if (!org) {
-      return res.status(404).json({ ok: false, error: 'Organization not found' });
-    }
-    
-    // Format for export
-    const exportData = (org.members || []).map(m => ({
-      name: m.user?.name || '',
-      username: m.user?.username || '',
-      email: m.user?.email || m.email || '',
-      phone: m.user?.phone || m.phone || '',
-      role: m.role || 'member',
-      status: m.status || 'active',
-      joinedAt: m.joinedAt
-    }));
-    
-    res.json({ ok: true, data: exportData, total: exportData.length });
-  } catch (err) {
-    console.error('Export error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// ==========================================
-// LEGACY /org/* ROUTES
-// ==========================================
-
-router.get('/org/my', verifyToken, async (req, res) => {
-  req.url = '/organizations/my';
-  return router.handle(req, res);
-});
-
-router.post('/org', verifyToken, async (req, res) => {
-  req.url = '/organizations';
-  return router.handle(req, res);
-});
-
-router.get('/org', verifyToken, async (req, res) => {
-  const userId = req.user?.id || req.user?._id || req.user?.userId;
-  const isAdmin = req.user?.role === 'admin' || req.user?.isAdmin;
-  const { type, parentId, page = 1, limit = 20, search } = req.query;
-  
-  // Convert userId to ObjectId
-  let userObjectId;
-  try {
-    userObjectId = new ObjectId(userId);
-  } catch (e) {
-    userObjectId = userId;
-  }
-  
-  let query;
-  
-  // Admin users can see all, regular users only see their orgs
-  if (isAdmin) {
-    query = { $or: [{ isActive: true }, { isActive: { $exists: false } }] };
-  } else {
-    query = {
-      $and: [
-        { $or: [{ isActive: true }, { isActive: { $exists: false } }] },
-        { $or: [
-          { leader: userObjectId },
-          { leader: userId },
-          { 'leader._id': userObjectId },
-          { 'leader._id': userId },
-          { createdBy: userObjectId },
-          { createdBy: userId },
-          { admins: userObjectId },
-          { admins: userId },
-          { assistantLeaders: userObjectId },
-          { assistantLeaders: userId },
-          { 'members.user': userObjectId },
-          { 'members.user': userId },
-          { owner: userObjectId },
-          { owner: userId }
-        ]}
-      ]
-    };
-  }
-  
-  if (type) query.type = type;
-  if (parentId) {
-    try { query.parent = new ObjectId(parentId); } catch(e) { query.parent = parentId; }
-  }
-  if (search) query.name = { $regex: search, $options: 'i' };
-  
-  const orgs = await ChurchOrg.find(query).populate('leader', 'name username profilePicture').sort({ name: 1 }).skip((page - 1) * limit).limit(parseInt(limit));
-  const total = await ChurchOrg.countDocuments(query);
-  res.json({ ok: true, orgs, pagination: { page: parseInt(page), limit: parseInt(limit), total } });
-});
-
-router.get('/org/:id', optionalAuth, async (req, res) => {
-  try {
-    const org = await ChurchOrg.findById(req.params.id)
-      .populate('leader', 'name username profilePicture')
-      .populate('parent', 'name type slug');
-    if (!org) return res.status(404).json({ ok: false, error: 'Not found' });
-    
-    const children = await ChurchOrg.find({ parent: org._id, isActive: true }).select('name type slug memberCount');
-    res.json({ ok: true, org, children });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-router.put('/org/:id', verifyToken, async (req, res) => {
-  const userId = req.user.id || req.user._id;
-  if (!await canManageOrg(userId, req.params.id)) {
-    return res.status(403).json({ ok: false, error: 'Not authorized' });
-  }
-  const { name, description, motto, contact, colorTheme, leaderName, leaderTitle, logo, coverImage } = req.body;
-  const updateFields = { updatedAt: new Date() };
-  if (name) updateFields.name = name;
-  if (description !== undefined) updateFields.description = description;
-  if (motto !== undefined) updateFields.motto = motto;
-  if (contact) updateFields.contact = contact;
-  if (colorTheme) updateFields.colorTheme = colorTheme;
-  if (leaderName !== undefined) updateFields.leaderName = leaderName;
-  if (leaderTitle !== undefined) updateFields.leaderTitle = leaderTitle;
-  if (logo) updateFields.logo = logo;
-  if (coverImage) updateFields.coverImage = coverImage;
-  
-  const org = await ChurchOrg.findByIdAndUpdate(req.params.id, { $set: updateFields }, { new: true });
-  res.json({ ok: true, org });
-});
-
-// PUT /org/:id/members/:memberId - Legacy member update
-router.put('/org/:id/members/:memberId', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id || req.user._id || req.user.userId;
-    const { id, memberId } = req.params;
-    
-    const userRole = await getUserRole(userId, id);
-    if (!['owner', 'admin', 'assistant'].includes(userRole)) {
-      return res.status(403).json({ ok: false, error: 'Only admins can edit members' });
-    }
-    
-    const org = await ChurchOrg.findById(id);
-    if (!org) {
-      return res.status(404).json({ ok: false, error: 'Organization not found' });
-    }
-    
-    // Find member by _id or user field
-    let memberIndex = org.members?.findIndex(m => 
-      m._id?.toString() === memberId || 
-      m.user?.toString() === memberId ||
-      (m.user?._id && m.user._id.toString() === memberId)
-    );
-    
-    if (memberIndex === -1 || memberIndex === undefined) {
-      return res.status(404).json({ ok: false, error: 'Member not found' });
-    }
-    
-    // Update all fields from request body
-    const member = org.members[memberIndex];
-    const updates = req.body;
-    
-    Object.keys(updates).forEach(key => {
-      if (updates[key] !== undefined) {
-        member[key] = updates[key];
-      }
-    });
-    
-    member.updatedAt = new Date();
-    member.updatedBy = userId;
-    
-    await org.save();
-    res.json({ ok: true, message: 'Member updated', member });
-  } catch (err) {
-    console.error('Legacy member update error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// ==========================================
-// DIRECT MEMBER ROUTES (Frontend uses /church/members/:orgId/:memberId)
-// ==========================================
-
-// GET /members/:orgId - Get all members of an organization
-router.get('/members/:orgId', verifyToken, async (req, res) => {
-  try {
-    const userId = req.user.id || req.user._id || req.user.userId;
-    const { orgId } = req.params;
-    
-    const userRole = await getUserRole(userId, orgId);
-    if (!userRole) {
-      return res.status(403).json({ ok: false, error: 'Access denied' });
-    }
-    
-    const org = await ChurchOrg.findById(orgId)
-      .populate('members.user', 'name username profilePicture email phone')
-      .lean();
-    
-    if (!org) {
-      return res.status(404).json({ ok: false, error: 'Organization not found' });
-    }
-    
-    res.json({ ok: true, members: org.members || [] });
-  } catch (err) {
-    console.error('Get members error:', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-// GET /members/:orgId/:memberId - Get single member
+// GET /members/:orgId/:memberId - Get single member (frontend path)
 router.get('/members/:orgId/:memberId', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
@@ -1394,32 +1420,50 @@ router.get('/members/:orgId/:memberId', verifyToken, async (req, res) => {
     const member = org.members?.find(m => 
       m._id?.toString() === memberId || 
       m.user?._id?.toString() === memberId ||
-      m.user?.toString() === memberId
+      (m.user?._id && m.user._id.toString() === memberId)
     );
     
     if (!member) {
       return res.status(404).json({ ok: false, error: 'Member not found' });
     }
     
-    res.json({ ok: true, member });
+    const canManage = ['owner', 'admin', 'assistant'].includes(userRole);
+    
+    // If not manager, hide sensitive info
+    let memberData = member;
+    if (!canManage) {
+      memberData = {
+        _id: member._id,
+        user: {
+          _id: member.user?._id,
+          name: member.user?.name,
+          username: member.user?.username,
+          profilePicture: member.user?.profilePicture
+        },
+        role: member.role,
+        joinedAt: member.joinedAt,
+        status: member.status
+      };
+    }
+    
+    res.json({ ok: true, member: memberData, canManage });
   } catch (err) {
     console.error('Get member error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
-// PUT /members/:orgId/:memberId - Update member (THIS IS WHAT FRONTEND CALLS)
+// PUT /members/:orgId/:memberId - Update member (frontend path)
 router.put('/members/:orgId/:memberId', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
     const { orgId, memberId } = req.params;
     
-    console.log(`📝 Updating member ${memberId} in org ${orgId}`);
+    console.log(`📝 PUT /members/${orgId}/${memberId} - Update member request`);
     
-    // Check authorization
     const userRole = await getUserRole(userId, orgId);
     if (!['owner', 'admin', 'assistant'].includes(userRole)) {
-      return res.status(403).json({ ok: false, error: 'Only admins can edit members' });
+      return res.status(403).json({ ok: false, error: 'Not authorized to edit members' });
     }
     
     const org = await ChurchOrg.findById(orgId);
@@ -1427,8 +1471,8 @@ router.put('/members/:orgId/:memberId', verifyToken, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'Organization not found' });
     }
     
-    // Find member by _id or user field (support both formats)
-    let memberIndex = org.members?.findIndex(m => 
+    // Find member by _id or user._id
+    const memberIndex = org.members?.findIndex(m => 
       m._id?.toString() === memberId || 
       m.user?.toString() === memberId ||
       (m.user?._id && m.user._id.toString() === memberId)
@@ -1502,44 +1546,69 @@ router.delete('/members/:orgId/:memberId', verifyToken, async (req, res) => {
 });
 
 // ==========================================
-// SOULS ROUTES
+// SOULS ROUTES (UPDATED in v3.0.0 for ceZone)
 // ==========================================
 
 router.get('/souls', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
-    const { zoneId, churchId, fellowshipId, cellId, status, page = 1, limit = 20, search } = req.query;
+    const { organizationId, zoneId, churchId, fellowshipId, cellId, ceZoneId, status, page = 1, limit = 20, search } = req.query;
     
-    const query = {};
-    if (zoneId) query.zone = new ObjectId(zoneId);
-    if (churchId) query.church = new ObjectId(churchId);
-    if (fellowshipId) query.fellowship = new ObjectId(fellowshipId);
-    if (cellId) query.cell = new ObjectId(cellId);
+    const query = { isActive: { $ne: false } };
+    
+    if (organizationId) {
+      try { query.organization = new ObjectId(organizationId); } catch(e) { query.organization = organizationId; }
+    }
+    if (zoneId) {
+      try { query.zone = new ObjectId(zoneId); } catch(e) { query.zone = zoneId; }
+    }
+    if (churchId) {
+      try { query.church = new ObjectId(churchId); } catch(e) { query.church = churchId; }
+    }
+    if (fellowshipId) {
+      try { query.fellowship = new ObjectId(fellowshipId); } catch(e) { query.fellowship = fellowshipId; }
+    }
+    if (cellId) {
+      try { query.cell = new ObjectId(cellId); } catch(e) { query.cell = cellId; }
+    }
+    // NEW v3.0.0 filter
+    if (ceZoneId) {
+      query['ceZone.id'] = ceZoneId;
+    }
     if (status) query.status = status;
     if (search) {
       query.$or = [
         { firstName: { $regex: search, $options: 'i' } },
         { lastName: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } }
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } }
       ];
     }
     
-    if (!zoneId && !churchId && !fellowshipId && !cellId) {
+    // If no specific filter, show souls from user's orgs
+    if (!organizationId && !zoneId && !churchId && !fellowshipId && !cellId && !ceZoneId) {
       const userOrgs = await ChurchOrg.find({
         $or: [{ leader: userId }, { admins: userId }, { assistantLeaders: userId }, { createdBy: userId }],
-        isActive: true
+        isActive: { $ne: false }
       }).select('_id');
       const orgIds = userOrgs.map(o => o._id);
-      query.$or = [
-        { zone: { $in: orgIds } },
-        { church: { $in: orgIds } },
-        { fellowship: { $in: orgIds } },
-        { cell: { $in: orgIds } },
-        { addedBy: userId }
-      ];
+      
+      if (orgIds.length > 0) {
+        query.$or = [
+          { organization: { $in: orgIds } },
+          { zone: { $in: orgIds } },
+          { church: { $in: orgIds } },
+          { fellowship: { $in: orgIds } },
+          { cell: { $in: orgIds } },
+          { addedBy: userId }
+        ];
+      } else {
+        query.addedBy = userId;
+      }
     }
     
     const souls = await Soul.find(query)
+      .populate('organization', 'name type')
       .populate('zone', 'name type')
       .populate('church', 'name type')
       .populate('fellowship', 'name type')
@@ -1549,35 +1618,203 @@ router.get('/souls', verifyToken, async (req, res) => {
       .limit(parseInt(limit));
     
     const total = await Soul.countDocuments(query);
-    res.json({ ok: true, souls, pagination: { page: parseInt(page), limit: parseInt(limit), total } });
+    
+    res.json({ 
+      ok: true, 
+      souls, 
+      pagination: { 
+        page: parseInt(page), 
+        limit: parseInt(limit), 
+        total,
+        pages: Math.ceil(total / limit)
+      } 
+    });
   } catch (err) {
+    console.error('Get souls error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
+// GET /souls/:id - Get single soul
+router.get('/souls/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid soul ID' });
+    }
+    
+    const soul = await Soul.findById(id)
+      .populate('organization', 'name type')
+      .populate('zone', 'name type')
+      .populate('church', 'name type')
+      .populate('fellowship', 'name type')
+      .populate('cell', 'name type')
+      .populate('addedBy', 'name username')
+      .populate('assignedTo', 'name username');
+    
+    if (!soul) {
+      return res.status(404).json({ ok: false, error: 'Soul not found' });
+    }
+    
+    res.json({ ok: true, soul });
+  } catch (err) {
+    console.error('Get soul error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /souls - Add soul (UPDATED in v3.0.0 for ceZone)
 router.post('/souls', verifyToken, async (req, res) => {
   try {
     const userId = req.user.id || req.user._id || req.user.userId;
-    const { firstName, lastName, email, phone, address, city, country, zoneId, churchId, fellowshipId, cellId, source, notes } = req.body;
+    const { 
+      firstName, lastName, email, phone, whatsapp, address, city, state, country,
+      gender, ageGroup, salvationType, howTheyHeard, howTheyHeardDetails, prayerRequest,
+      organizationId, zoneId, churchId, fellowshipId, cellId, 
+      // NEW v3.0.0 fields
+      ceZone, ceZoneId,
+      source, notes, tags
+    } = req.body;
     
-    if (!firstName || !lastName) {
-      return res.status(400).json({ ok: false, error: 'First name and last name required' });
+    if (!firstName) {
+      return res.status(400).json({ ok: false, error: 'First name is required' });
+    }
+    
+    // Handle CE Zone (NEW in v3.0.0)
+    let ceZoneData = null;
+    if (ceZone) {
+      ceZoneData = ceZone;
+    } else if (ceZoneId) {
+      const foundZone = CE_ZONES.find(z => z.id === ceZoneId);
+      if (foundZone) {
+        ceZoneData = {
+          id: foundZone.id,
+          name: foundZone.name,
+          category: foundZone.category
+        };
+      }
     }
     
     const soul = new Soul({
-      firstName, lastName, email, phone,
-      address: { street: address, city, country },
-      zone: zoneId, church: churchId, fellowship: fellowshipId, cell: cellId,
+      firstName, 
+      lastName: lastName || '', 
+      email, 
+      phone,
+      whatsapp,
+      address,
+      city,
+      state,
+      country,
+      gender,
+      ageGroup,
+      salvationType: salvationType || 'first_time',
+      howTheyHeard,
+      howTheyHeardDetails,
+      prayerRequest,
+      organization: organizationId || null,
+      zone: zoneId || null, 
+      church: churchId || null, 
+      fellowship: fellowshipId || null, 
+      cell: cellId || null,
+      // NEW v3.0.0 field
+      ceZone: ceZoneData,
       source: source || 'manual',
       notes,
+      tags: tags || [],
       addedBy: userId,
-      status: 'new'
+      status: 'new',
+      pipelineStage: 'new_convert'
     });
     
     await soul.save();
-    console.log(`🙏 Soul added: ${firstName} ${lastName}`);
+    console.log(`🙏 Soul added: ${firstName} ${lastName || ''}${ceZoneData ? ` (Zone: ${ceZoneData.name})` : ''}`);
     res.status(201).json({ ok: true, soul });
   } catch (err) {
+    console.error('Add soul error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// PUT /souls/:id - Update soul
+router.put('/souls/:id', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id || req.user._id || req.user.userId;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid soul ID' });
+    }
+    
+    const updates = { ...req.body, lastUpdatedBy: userId, updatedAt: new Date() };
+    
+    // Handle ceZone update
+    if (updates.ceZoneId && !updates.ceZone) {
+      const foundZone = CE_ZONES.find(z => z.id === updates.ceZoneId);
+      if (foundZone) {
+        updates.ceZone = {
+          id: foundZone.id,
+          name: foundZone.name,
+          category: foundZone.category
+        };
+      }
+    }
+    
+    const soul = await Soul.findByIdAndUpdate(id, { $set: updates }, { new: true })
+      .populate('organization', 'name type')
+      .populate('zone', 'name type')
+      .populate('church', 'name type');
+    
+    if (!soul) {
+      return res.status(404).json({ ok: false, error: 'Soul not found' });
+    }
+    
+    res.json({ ok: true, soul });
+  } catch (err) {
+    console.error('Update soul error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /souls/:id/followup - Add follow-up record
+router.post('/souls/:id/followup', verifyToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const { type, notes, outcome, nextFollowUpDate, duration } = req.body;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid soul ID' });
+    }
+    
+    const followUp = {
+      date: new Date(),
+      type: type || 'call',
+      notes,
+      outcome: outcome || 'successful',
+      followedUpBy: userId,
+      nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
+      duration
+    };
+    
+    const soul = await Soul.findByIdAndUpdate(id, {
+      $push: { followUps: followUp },
+      $set: {
+        lastContactDate: new Date(),
+        nextFollowUpDate: nextFollowUpDate ? new Date(nextFollowUpDate) : null,
+        updatedAt: new Date()
+      },
+      $inc: { totalFollowUps: 1 }
+    }, { new: true });
+    
+    if (!soul) {
+      return res.status(404).json({ ok: false, error: 'Soul not found' });
+    }
+    
+    console.log(`📞 Follow-up recorded for ${soul.firstName} ${soul.lastName || ''}`);
+    res.json({ ok: true, soul, followUp });
+  } catch (err) {
+    console.error('Add followup error:', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
@@ -1657,6 +1894,6 @@ router.post('/attendance', verifyToken, async (req, res) => {
   }
 });
 
-console.log('⛪ Church Management routes v2.8.0 loaded - Direct /members routes added');
+console.log('⛪ Church Management routes v3.0.0 loaded - Ministry Selection + CE Zones Support');
 
 module.exports = router;
