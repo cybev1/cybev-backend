@@ -1,13 +1,13 @@
 // ============================================
 // FILE: church.model.js
 // PATH: cybev-backend-main/models/church.model.js
-// VERSION: 2.1.0 - Added leaderName and leaderTitle fields
-// UPDATED: 2026-01-24
+// VERSION: 3.0.0 - Ministry Selection + CE Zones Support
+// UPDATED: 2026-02-17
 // CHANGES:
-//   - Enhanced member schema with titles, profession, social links
-//   - Foundation School enrollment tracking
-//   - Saved status tracking
-//   - Better Soul tracker with follow-up stages
+//   - Added ministry field (christ_embassy / others)
+//   - Added ceZone object for CE zone references
+//   - Added customMinistry for other ministries
+//   - Enhanced Soul tracker with ceZone support
 // ============================================
 
 const mongoose = require('mongoose');
@@ -143,6 +143,24 @@ const ChurchOrgSchema = new Schema({
     enum: ['zone', 'church', 'fellowship', 'cell', 'biblestudy'],
     index: true
   },
+  
+  // ===== NEW: Ministry Selection (v3.0.0) =====
+  ministry: { 
+    type: String, 
+    enum: ['christ_embassy', 'others'], 
+    default: 'christ_embassy',
+    index: true
+  },
+  customMinistry: { type: String, trim: true }, // For 'others' ministry
+  
+  // Christ Embassy Zone Reference (from CE zones data)
+  ceZone: {
+    id: { type: String },        // Zone ID from ce-zones.data.js (e.g., '28-0')
+    name: { type: String },       // Zone name (e.g., 'Accra Ghana Zone')
+    category: { type: String }    // Category: 'zone', 'blw', 'ministry', 'ism', 'department'
+  },
+  // ===== END NEW FIELDS =====
+  
   structureMode: { type: String, enum: ['church', 'organization'], default: 'church', index: true },
   description: { type: String, default: '' },
   motto: { type: String, default: '' },
@@ -253,6 +271,8 @@ ChurchOrgSchema.index({ slug: 1, type: 1 }, { unique: true });
 ChurchOrgSchema.index({ 'members.user': 1 });
 ChurchOrgSchema.index({ 'members.email': 1 });
 ChurchOrgSchema.index({ 'members.phone': 1 });
+ChurchOrgSchema.index({ ministry: 1 });
+ChurchOrgSchema.index({ 'ceZone.id': 1 });
 
 // Pre-save: Update memberCount
 ChurchOrgSchema.pre('save', function(next) {
@@ -271,7 +291,7 @@ const SoulSchema = new Schema({
   // Basic Info
   firstName: { type: String, required: true, trim: true },
   lastName: { type: String, trim: true },
-  phone: { type: String, required: true },
+  phone: { type: String },
   email: String,
   whatsapp: String,
   
@@ -295,11 +315,24 @@ const SoulSchema = new Schema({
     enum: ['first_time', 'rededication', 'transfer', 'water_baptism'],
     default: 'first_time'
   },
-  howTheyHeard: { type: String, enum: ['service', 'crusade', 'online', 'friend', 'outreach', 'social_media', 'tv', 'radio', 'other'] },
+  howTheyHeard: { type: String, enum: ['service', 'crusade', 'online', 'friend', 'outreach', 'social_media', 'tv', 'radio', 'rhapsody', 'healing_school', 'teevo', 'other'] },
   howTheyHeardDetails: String,
   referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
   witnessedBy: { type: Schema.Types.ObjectId, ref: 'User' },
   prayerRequest: String,
+  prayerRequests: [{
+    request: String,
+    date: { type: Date, default: Date.now },
+    answered: { type: Boolean, default: false }
+  }],
+  
+  // ===== NEW: CE Zone Reference (v3.0.0) =====
+  ceZone: {
+    id: { type: String },
+    name: { type: String },
+    category: { type: String }
+  },
+  // ===== END NEW FIELD =====
   
   // Organization Assignment
   organization: { type: Schema.Types.ObjectId, ref: 'ChurchOrg', index: true },
@@ -396,6 +429,7 @@ SoulSchema.index({ assignedTo: 1, status: 1 });
 SoulSchema.index({ phone: 1 });
 SoulSchema.index({ createdAt: -1 });
 SoulSchema.index({ nextFollowUpDate: 1 });
+SoulSchema.index({ 'ceZone.id': 1 });
 
 // Pre-save: Update counters
 SoulSchema.pre('save', function(next) {
