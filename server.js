@@ -2,17 +2,18 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.13.0 - Added DNS Providers for One-Click Domain Setup
-// PREVIOUS: 7.12.0 - Fixed WebRTC WebSocket namespace init
+// VERSION: 7.14.0 - Church Management v3 (Ministry + CE Zones)
+// PREVIOUS: 7.13.0 - DNS Providers for One-Click Domain Setup
 // 
-// FIXES IN 7.13.0:
-//   - Added dns-providers routes for one-click DNS setup
-//   - Users can connect Cloudflare, GoDaddy, Namecheap, Porkbun
-//   - Auto-add DNS records with connected providers
+// FIXES IN 7.14.0:
+//   - Added Church v3 routes with ministry selection
+//   - Christ Embassy zones (200+) as preset data
+//   - Enhanced Soul Tracker with zone assignment
+//   - Organization hierarchy under CE zones
 //
-// ROLLBACK: If issues, revert to VERSION 7.12.0
+// ROLLBACK: If issues, revert to VERSION 7.13.0
 // GITHUB: https://github.com/cybev1/cybev-backend
-// UPDATED: 2026-02-09
+// UPDATED: 2026-02-17
 // ============================================
 
 const express = require('express');
@@ -1235,7 +1236,7 @@ app.get('/api/posts/user/:userId', async (req, res) => {
 });
 
 // ==========================================
-// ALL ROUTES - v7.4.0 Fixed Analytics
+// ALL ROUTES - v7.14.0 Church Management v3
 // ==========================================
 
 const routes = [
@@ -1288,7 +1289,8 @@ const routes = [
   ['admin', '/api/admin', './routes/admin.routes'],
   ['moderation', '/api/moderation', './routes/moderation.routes'],
   
-  // Church
+  // Church - v3.0 with Ministry & CE Zones
+  ['church-v3', '/api/church', './routes/church-v3.routes'],  // NEW: Ministry + CE Zones
   ['foundation-school', '/api/church/foundation', './routes/foundation-school.routes'],
   ['bible', '/api/church/bible', './routes/bible.routes'],
   ['church', '/api/church', './routes/church.routes'],
@@ -1441,7 +1443,7 @@ app.get('/api/health', async (req, res) => {
   
   res.json({
     ok: true,
-    version: '7.8.0',
+    version: '7.14.0',
     timestamp: new Date().toISOString(),
     features: {
       meet: 'enabled',
@@ -1450,6 +1452,9 @@ app.get('/api/health', async (req, res) => {
       aiGeneration: 'enabled',
       aiImageGeneration: 'enabled',
       church: 'enabled',
+      churchV3: 'enabled',  // NEW
+      churchMinistrySelection: 'enabled',  // NEW
+      churchCEZones: 'enabled',  // NEW
       churchRegistration: 'enabled',
       forms: 'enabled',
       emailPlatform: sesStatus.enabled ? 'enabled' : 'not_configured',
@@ -1459,7 +1464,6 @@ app.get('/api/health', async (req, res) => {
       advancedSegmentation: 'enabled',
       sendTimeOptimization: 'enabled',
       automationWorkflows: 'enabled',
-      // v7.4.0
       analyticsFixed: 'enabled'
     },
     database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
@@ -1473,14 +1477,15 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v7.8.0 - Creator Studio Followers Fix',
+    message: 'CYBEV API v7.14.0 - Church Management v3 (Ministry + CE Zones)',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
     features: [
       'creator-studio-followers', 'feed-pagination', 'posts-excerpts',
       'feed', 'posts', 'followers', 'vlogs',
       'meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 
-      'church', 'church-registration', 'forms', 'email-platform', 'automation'
+      'church', 'church-v3', 'church-ministry-selection', 'church-ce-zones',
+      'church-registration', 'forms', 'email-platform', 'automation'
     ]
   });
 });
@@ -1543,22 +1548,23 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`
 ============================================
-  CYBEV API Server v7.13.0
-  DNS Providers One-Click Setup
+  CYBEV API Server v7.14.0
+  Church Management v3 (Ministry + CE Zones)
 ============================================
   Port: ${PORT}
   Database: ${MONGODB_URI ? 'Configured' : 'Not configured'}
   Socket.IO: Enabled
   
-  v7.13.0 Features:
+  v7.14.0 Features:
+  ✅ Church Ministry Selection (Christ Embassy / Others)
+  ✅ Christ Embassy Zones (200+ preset zones)
+  ✅ Enhanced Soul Tracker with zone assignment
+  ✅ Organization hierarchy under CE zones
+  
+  Previous Features:
   ✅ DNS Providers (Cloudflare, GoDaddy, Namecheap, Porkbun)
   ✅ One-click DNS record setup
-  ✅ Encrypted credential storage
-  
-  Previous Fixes:
-  ✅ WebRTC WebSocket namespace initialized
-  ✅ AI Website Generator with images
-  ✅ Image uploads (FormData + base64)
+  ✅ WebRTC WebSocket namespace
   
   Routes: ${loadedCount} loaded, ${failedCount} skipped
   Time: ${new Date().toISOString()}
