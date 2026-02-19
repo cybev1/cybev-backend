@@ -464,6 +464,95 @@ router.put('/preferences', verifyToken, async (req, res) => {
 // PROFILE UPDATE ENDPOINTS
 // ==========================================
 
+// PUT /api/users/update-profile - Update profile during onboarding
+// NOTE: No email verification required - used during onboarding flow
+router.put('/update-profile', verifyToken, async (req, res) => {
+  try {
+    const User = getUser();
+    const userId = req.user.id || req.user.userId;
+    const { 
+      username, bio, interests, profilePicture, 
+      hasCompletedOnboarding, name, avatar 
+    } = req.body;
+
+    console.log('📝 Update profile request for user:', userId);
+    console.log('📝 Data:', { username, hasCompletedOnboarding, hasAvatar: !!(profilePicture || avatar) });
+
+    const updateData = {};
+
+    // Handle username - check if available
+    if (username) {
+      const cleanUsername = username.toLowerCase().replace(/[^a-z0-9_]/g, '');
+      const existingUser = await User.findOne({ 
+        username: cleanUsername,
+        _id: { $ne: userId }
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: 'Username is already taken',
+          message: 'Username is already taken'
+        });
+      }
+      updateData.username = cleanUsername;
+    }
+
+    // Handle other fields
+    if (bio !== undefined) updateData.bio = bio;
+    if (name) updateData.name = name;
+    if (interests && Array.isArray(interests)) updateData.interests = interests;
+    
+    // Handle avatar/profilePicture (base64 or URL)
+    if (profilePicture) {
+      updateData.avatar = profilePicture;
+    } else if (avatar) {
+      updateData.avatar = avatar;
+    }
+
+    // Handle onboarding completion
+    if (hasCompletedOnboarding === true) {
+      updateData.hasCompletedOnboarding = true;
+      updateData.onboardingCompletedAt = new Date();
+    }
+
+    // Update user
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $set: updateData },
+      { new: true, select: '-password' }
+    );
+
+    if (!user) {
+      return res.status(404).json({ ok: false, error: 'User not found' });
+    }
+
+    console.log('✅ Profile updated successfully for:', user.email);
+
+    res.json({
+      ok: true,
+      success: true,
+      message: 'Profile updated successfully',
+      user: {
+        id: user._id,
+        username: user.username,
+        name: user.name,
+        bio: user.bio,
+        avatar: user.avatar,
+        interests: user.interests,
+        hasCompletedOnboarding: user.hasCompletedOnboarding
+      }
+    });
+  } catch (error) {
+    console.error('❌ Update profile error:', error);
+    res.status(500).json({ 
+      ok: false, 
+      error: 'Failed to update profile',
+      message: error.message 
+    });
+  }
+});
+
 // PUT /api/users/profile - Update profile (Enhanced for full profile)
 router.put('/profile', verifyToken, async (req, res) => {
   try {
