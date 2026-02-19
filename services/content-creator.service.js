@@ -1,8 +1,11 @@
 // ============================================
 // FILE: services/content-creator.service.js
-// AI Content Creation Engine v2.0
-// FIXED: Better error handling + OpenAI fallback
-// CHAIN: DeepSeek → OpenAI → Claude
+// AI Content Creation Engine v3.0
+// FIXED:
+//   - Smart image search based on TITLE (not category)
+//   - Christian content detection (Lord = God, not idols)
+//   - Proper article length (short/medium/long)
+//   - Inline images based on content context
 // ============================================
 
 const axios = require('axios');
@@ -18,12 +21,218 @@ class ContentCreatorService {
     this.pexelsKey = process.env.PEXELS_API_KEY;
     this.unsplashKey = process.env.UNSPLASH_ACCESS_KEY;
     
-    console.log('🤖 Content Creator Service initialized');
+    console.log('🤖 Content Creator Service v3.0 initialized');
     console.log(`   DeepSeek: ${this.deepseekKey ? '✅ Primary' : '❌ Not configured'}`);
     console.log(`   OpenAI: ${this.openaiKey ? '✅ Fallback 1' : '❌ Not configured'}`);
     console.log(`   Claude: ${this.claudeKey ? '✅ Fallback 2' : '❌ Not configured'}`);
     console.log(`   Pexels: ${this.pexelsKey ? '✅ Configured' : '❌ Not configured'}`);
     console.log(`   Unsplash: ${this.unsplashKey ? '✅ Configured' : '❌ Not configured'}`);
+  }
+
+  // ==========================================
+  // CHRISTIAN/RELIGIOUS CONTENT DETECTION
+  // ==========================================
+  
+  // Keywords that indicate Christian/Biblical content
+  CHRISTIAN_KEYWORDS = [
+    'lord', 'jesus', 'christ', 'god', 'holy spirit', 'bible', 'scripture', 'gospel',
+    'church', 'faith', 'prayer', 'salvation', 'grace', 'worship', 'praise',
+    'christian', 'christianity', 'ministry', 'pastor', 'sermon', 'testament',
+    'resurrection', 'crucifixion', 'cross', 'heaven', 'angel', 'divine',
+    'blessed', 'blessing', 'amen', 'hallelujah', 'prophesy', 'prophecy',
+    'rapture', 'tribulation', 'end times', 'second coming', 'kingdom',
+    'apostle', 'disciple', 'evangelist', 'missionary', 'covenant', 'psalm',
+    'proverbs', 'genesis', 'revelation', 'exodus', 'matthew', 'john', 'luke',
+    'spiritual', 'born again', 'holy', 'righteous', 'sin', 'repentance',
+    'forgiveness', 'eternal life', 'redemption', 'messiah', 'savior', 'saviour',
+    'day of the lord', 'judgement day', 'judgment', 'apocalypse', 'armageddon',
+    'lamb of god', 'king of kings', 'son of god', 'word of god', 'believer'
+  ];
+
+  // Phrases that strongly indicate Christian content
+  CHRISTIAN_PHRASES = [
+    'the lord', 'our lord', 'in christ', 'word of god', 'son of god',
+    'lamb of god', 'king of kings', 'holy spirit', 'the father',
+    'body of christ', 'blood of christ', 'end times', 'day of the lord',
+    'second coming', 'new testament', 'old testament', 'book of',
+    'kingdom of god', 'kingdom of heaven', 'eternal life', 'living god',
+    'divine intervention', 'god\'s will', 'lord\'s prayer', 'holy bible',
+    'christian life', 'walk with god', 'children of god', 'people of god'
+  ];
+
+  /**
+   * Detect if content is Christian/religious based on title and content
+   */
+  isChristianContent(title, content = '') {
+    const fullText = `${title} ${content}`.toLowerCase();
+    
+    // Check for Christian phrases first (more specific)
+    for (const phrase of this.CHRISTIAN_PHRASES) {
+      if (fullText.includes(phrase)) {
+        console.log(`⛪ Detected Christian phrase: "${phrase}"`);
+        return true;
+      }
+    }
+    
+    // Check for Christian keywords (need 2+ matches)
+    const matchedKeywords = this.CHRISTIAN_KEYWORDS.filter(keyword => {
+      const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+      return regex.test(fullText);
+    });
+    
+    if (matchedKeywords.length >= 2) {
+      console.log(`⛪ Detected Christian keywords: ${matchedKeywords.slice(0, 5).join(', ')}`);
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Extract SMART image keywords based on TITLE (not category!)
+   * This is the KEY fix - we analyze the title to get appropriate search terms
+   */
+  extractSmartImageKeywords(title, content = '', niche = 'general') {
+    const fullText = `${title} ${content}`.toLowerCase();
+    const isChristian = this.isChristianContent(title, content);
+    
+    console.log(`🔍 Extracting image keywords from title: "${title}"`);
+    console.log(`   Christian content: ${isChristian}`);
+    
+    // ==========================================
+    // CHRISTIAN CONTENT - Use appropriate imagery
+    // ==========================================
+    if (isChristian) {
+      const titleLower = title.toLowerCase();
+      
+      // Map specific Christian topics to appropriate search terms
+      // CRITICAL: Avoid generic "lord" which returns Hindu deity images!
+      
+      if (titleLower.includes('day of the lord') || titleLower.includes('judgment') || 
+          titleLower.includes('judgement') || titleLower.includes('end times') || 
+          titleLower.includes('apocalypse') || titleLower.includes('tribulation') ||
+          titleLower.includes('rapture') || titleLower.includes('second coming')) {
+        return {
+          featured: 'dramatic sunset sky clouds prophetic',
+          inline: ['sunrise hope sky', 'bible light divine', 'cross silhouette sunset']
+        };
+      }
+      
+      if (titleLower.includes('prayer') || titleLower.includes('praying')) {
+        return {
+          featured: 'praying hands light spiritual',
+          inline: ['peaceful meditation', 'candle prayer', 'quiet devotion']
+        };
+      }
+      
+      if (titleLower.includes('faith') || titleLower.includes('believe') || titleLower.includes('trust')) {
+        return {
+          featured: 'sunrise hope mountain inspiration',
+          inline: ['path light journey', 'hands reaching sky', 'peaceful nature']
+        };
+      }
+      
+      if (titleLower.includes('love') || titleLower.includes('grace') || titleLower.includes('mercy')) {
+        return {
+          featured: 'heart warmth love light',
+          inline: ['helping hands', 'family together', 'kindness community']
+        };
+      }
+      
+      if (titleLower.includes('church') || titleLower.includes('worship') || titleLower.includes('congregation')) {
+        return {
+          featured: 'church interior light stained glass',
+          inline: ['community gathering', 'singing praise', 'church building']
+        };
+      }
+      
+      if (titleLower.includes('bible') || titleLower.includes('scripture') || titleLower.includes('word of god')) {
+        return {
+          featured: 'open bible book light reading',
+          inline: ['studying scripture', 'old book pages', 'wisdom learning']
+        };
+      }
+      
+      if (titleLower.includes('jesus') || titleLower.includes('christ') || titleLower.includes('cross') ||
+          titleLower.includes('crucif') || titleLower.includes('resurrection')) {
+        return {
+          featured: 'christian cross sunrise silhouette',
+          inline: ['empty tomb sunrise', 'cross hill', 'light rays hope']
+        };
+      }
+      
+      if (titleLower.includes('heaven') || titleLower.includes('eternal') || titleLower.includes('glory')) {
+        return {
+          featured: 'sky clouds light rays heavenly beautiful',
+          inline: ['peaceful clouds', 'golden light', 'serene sky']
+        };
+      }
+      
+      if (titleLower.includes('peace') || titleLower.includes('hope') || titleLower.includes('comfort')) {
+        return {
+          featured: 'peaceful sunrise calm serene nature',
+          inline: ['quiet lake', 'gentle morning', 'tranquil scene']
+        };
+      }
+      
+      if (titleLower.includes('salvation') || titleLower.includes('redeem') || titleLower.includes('forgive')) {
+        return {
+          featured: 'light breaking through darkness hope',
+          inline: ['new beginning sunrise', 'freedom bird sky', 'fresh start']
+        };
+      }
+      
+      // Default Christian imagery (avoid "lord" which returns Hindu images!)
+      return {
+        featured: 'spiritual light rays inspiration peaceful',
+        inline: ['bible reading', 'peaceful nature', 'hope sunrise']
+      };
+    }
+    
+    // ==========================================
+    // NON-RELIGIOUS CONTENT - Extract from title
+    // ==========================================
+    
+    // Stop words to filter out
+    const stopWords = new Set([
+      'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
+      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'must', 'can', 'to', 'of', 'in', 'for', 'on', 'with',
+      'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after',
+      'how', 'what', 'why', 'when', 'where', 'who', 'which', 'this', 'that',
+      'your', 'our', 'my', 'their', 'its', 'understanding', 'guide', 'complete',
+      'ultimate', 'best', 'top', 'essential', 'introduction', 'overview'
+    ]);
+    
+    // Extract meaningful words from title
+    const words = title.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word));
+    
+    const mainKeywords = words.slice(0, 4).join(' ');
+    
+    // Category-specific enhancements
+    const categoryKeywords = {
+      'technology': 'modern digital tech',
+      'business': 'professional office corporate',
+      'health': 'wellness fitness healthy',
+      'lifestyle': 'modern life living',
+      'travel': 'adventure destination journey',
+      'food': 'delicious cuisine cooking',
+      'finance': 'money investment growth',
+      'education': 'learning study knowledge',
+      'entertainment': 'fun creative media',
+      'sports': 'athletic competition active',
+      'fashion': 'style trendy clothing'
+    };
+    
+    const categoryEnhancement = categoryKeywords[niche] || '';
+    
+    return {
+      featured: `${mainKeywords} ${categoryEnhancement}`.trim(),
+      inline: [mainKeywords, `${words[0] || niche} professional`, `${words[1] || 'modern'} concept`]
+    };
   }
 
   // ==========================================
@@ -37,17 +246,17 @@ class ContentCreatorService {
     const response = await axios.post('https://api.deepseek.com/v1/chat/completions', {
       model: options.model || 'deepseek-chat',
       messages: [
-        { role: 'system', content: options.systemPrompt || 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format.' },
+        { role: 'system', content: options.systemPrompt || 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format. Always meet the specified word count requirements.' },
         { role: 'user', content: prompt }
       ],
       temperature: options.temperature || 0.7,
-      max_tokens: options.maxTokens || 4096
+      max_tokens: options.maxTokens || 8192
     }, {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.deepseekKey}`
       },
-      timeout: 120000
+      timeout: 180000 // 3 minutes for long articles
     });
     
     console.log('✅ DeepSeek response received');
@@ -61,17 +270,17 @@ class ContentCreatorService {
     const response = await axios.post('https://api.openai.com/v1/chat/completions', {
       model: options.model || 'gpt-4o-mini',
       messages: [
-        { role: 'system', content: options.systemPrompt || 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format.' },
+        { role: 'system', content: options.systemPrompt || 'You are an expert content creator. Generate professional, SEO-optimized content in valid JSON format. Always meet the specified word count requirements.' },
         { role: 'user', content: prompt }
       ],
       temperature: options.temperature || 0.7,
-      max_tokens: options.maxTokens || 4096
+      max_tokens: options.maxTokens || 8192
     }, {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${this.openaiKey}`
       },
-      timeout: 120000
+      timeout: 180000
     });
     
     console.log('✅ OpenAI response received');
@@ -84,7 +293,7 @@ class ContentCreatorService {
     console.log('🤖 Calling Claude...');
     const response = await axios.post('https://api.anthropic.com/v1/messages', {
       model: options.model || 'claude-3-haiku-20240307',
-      max_tokens: options.maxTokens || 4096,
+      max_tokens: options.maxTokens || 8192,
       messages: [{ role: 'user', content: prompt }]
     }, {
       headers: {
@@ -92,7 +301,7 @@ class ContentCreatorService {
         'x-api-key': this.claudeKey,
         'anthropic-version': '2023-06-01'
       },
-      timeout: 120000
+      timeout: 180000
     });
     
     console.log('✅ Claude response received');
@@ -153,225 +362,182 @@ class ContentCreatorService {
   }
 
   // ==========================================
-  // IMAGE FETCHING (Pexels & Unsplash)
+  // IMAGE FETCHING (SMART - Based on Title)
   // ==========================================
+  
+  async getSmartImage(keywords, isChristian = false) {
+    // For Christian content, use curated fallback images if API fails
+    const christianFallbackImages = [
+      'https://images.pexels.com/photos/372326/pexels-photo-372326.jpeg?auto=compress&cs=tinysrgb&w=1200', // Bible with light
+      'https://images.pexels.com/photos/51775/cross-sunset-sunrise-silhouette-51775.jpeg?auto=compress&cs=tinysrgb&w=1200', // Cross sunset
+      'https://images.pexels.com/photos/1252869/pexels-photo-1252869.jpeg?auto=compress&cs=tinysrgb&w=1200', // Dramatic sky
+      'https://images.pexels.com/photos/130621/pexels-photo-130621.jpeg?auto=compress&cs=tinysrgb&w=1200', // Sunrise mountains
+      'https://images.pexels.com/photos/267559/pexels-photo-267559.jpeg?auto=compress&cs=tinysrgb&w=1200', // Bible
+      'https://images.pexels.com/photos/1126384/pexels-photo-1126384.jpeg?auto=compress&cs=tinysrgb&w=1200', // Light through clouds
+    ];
+
+    // Try Pexels first
+    if (this.pexelsKey) {
+      try {
+        const image = await this.getPexelsImage(keywords);
+        
+        // CRITICAL: Verify the image is appropriate for Christian content
+        if (isChristian && image.url) {
+          // Check if the returned image might be inappropriate
+          const badTerms = ['shiva', 'hindu', 'buddha', 'buddhist', 'mosque', 'islamic', 'krishna', 'ganesh', 'vishnu'];
+          const imageAlt = (image.alt || '').toLowerCase();
+          const isBadImage = badTerms.some(term => imageAlt.includes(term));
+          
+          if (isBadImage) {
+            console.log('⚠️ Detected inappropriate image for Christian content, using fallback');
+            return {
+              url: christianFallbackImages[Math.floor(Math.random() * christianFallbackImages.length)],
+              source: 'fallback',
+              alt: 'Spiritual inspiration'
+            };
+          }
+        }
+        
+        return image;
+      } catch (e) {
+        console.log('⚠️ Pexels failed:', e.message);
+      }
+    }
+    
+    // Try Unsplash
+    if (this.unsplashKey) {
+      try {
+        const image = await this.getUnsplashImage(keywords);
+        return image;
+      } catch (e) {
+        console.log('⚠️ Unsplash failed:', e.message);
+      }
+    }
+    
+    // Fallback for Christian content
+    if (isChristian) {
+      return {
+        url: christianFallbackImages[Math.floor(Math.random() * christianFallbackImages.length)],
+        source: 'fallback',
+        alt: 'Spiritual inspiration'
+      };
+    }
+    
+    // Generic fallback
+    return {
+      url: 'https://images.pexels.com/photos/1925536/pexels-photo-1925536.jpeg?auto=compress&cs=tinysrgb&w=1200',
+      source: 'fallback',
+      alt: keywords
+    };
+  }
   
   async getPexelsImage(query) {
     if (!this.pexelsKey) throw new Error('Pexels API key not configured');
     
-    try {
-      console.log(`🖼️ Searching Pexels for: ${query}`);
-      const response = await axios.get('https://api.pexels.com/v1/search', {
-        params: { query, per_page: 5, orientation: 'landscape' },
-        headers: { Authorization: this.pexelsKey },
-        timeout: 15000
-      });
-      
-      if (response.data.photos?.length > 0) {
-        const photo = response.data.photos[Math.floor(Math.random() * response.data.photos.length)];
-        return {
-          url: photo.src.large2x || photo.src.large || photo.src.original,
-          thumbnail: photo.src.medium,
-          photographer: photo.photographer,
-          photographerUrl: photo.photographer_url,
-          source: 'pexels',
-          alt: photo.alt || query
-        };
-      }
-      throw new Error('No Pexels results');
-    } catch (error) {
-      console.log('⚠️ Pexels failed:', error.message);
-      throw error;
+    console.log(`🖼️ Searching Pexels for: "${query}"`);
+    const response = await axios.get('https://api.pexels.com/v1/search', {
+      params: { query, per_page: 10, orientation: 'landscape' },
+      headers: { Authorization: this.pexelsKey },
+      timeout: 15000
+    });
+    
+    if (response.data.photos?.length > 0) {
+      const photo = response.data.photos[Math.floor(Math.random() * Math.min(5, response.data.photos.length))];
+      return {
+        url: photo.src.large2x || photo.src.large || photo.src.original,
+        thumbnail: photo.src.medium,
+        photographer: photo.photographer,
+        photographerUrl: photo.photographer_url,
+        source: 'pexels',
+        alt: photo.alt || query
+      };
     }
+    throw new Error('No Pexels results');
   }
   
   async getUnsplashImage(query) {
     if (!this.unsplashKey) throw new Error('Unsplash API key not configured');
     
-    try {
-      console.log(`🖼️ Searching Unsplash for: ${query}`);
-      const response = await axios.get('https://api.unsplash.com/search/photos', {
-        params: { query, per_page: 5, orientation: 'landscape' },
-        headers: { Authorization: `Client-ID ${this.unsplashKey}` },
-        timeout: 15000
-      });
-      
-      if (response.data.results?.length > 0) {
-        const photo = response.data.results[Math.floor(Math.random() * response.data.results.length)];
-        return {
-          url: photo.urls.regular || photo.urls.full,
-          thumbnail: photo.urls.small,
-          photographer: photo.user?.name || 'Unknown',
-          photographerUrl: photo.user?.links?.html || '',
-          source: 'unsplash',
-          alt: photo.alt_description || query
-        };
-      }
-      throw new Error('No Unsplash results');
-    } catch (error) {
-      console.log('⚠️ Unsplash failed:', error.message);
-      throw error;
+    console.log(`🖼️ Searching Unsplash for: "${query}"`);
+    const response = await axios.get('https://api.unsplash.com/search/photos', {
+      params: { query, per_page: 10, orientation: 'landscape' },
+      headers: { Authorization: `Client-ID ${this.unsplashKey}` },
+      timeout: 15000
+    });
+    
+    if (response.data.results?.length > 0) {
+      const photo = response.data.results[Math.floor(Math.random() * Math.min(5, response.data.results.length))];
+      return {
+        url: photo.urls.regular || photo.urls.full,
+        thumbnail: photo.urls.small,
+        photographer: photo.user?.name || 'Unknown',
+        photographerUrl: photo.user?.links?.html || '',
+        source: 'unsplash',
+        alt: photo.alt_description || query
+      };
     }
-  }
-  
-  // Extract keywords from topic/description for better image search
-  extractImageKeywords(topic, description = '', niche = 'general') {
-    // Common words to filter out
-    const stopWords = new Set([
-      'the', 'a', 'an', 'and', 'or', 'but', 'is', 'are', 'was', 'were', 'be', 'been',
-      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-      'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought',
-      'used', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
-      'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between',
-      'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where',
-      'why', 'how', 'all', 'each', 'few', 'more', 'most', 'other', 'some', 'such',
-      'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very', 'just',
-      'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'its',
-      'still', 'feels', 'feel', 'about', 'really', 'actually', 'here', 'your', 'my'
-    ]);
-    
-    // Combine topic and description
-    const text = `${topic} ${description}`.toLowerCase();
-    
-    // Extract words, filter stop words, get unique
-    const words = text
-      .replace(/[^a-zA-Z\s]/g, ' ')  // Remove special chars
-      .split(/\s+/)
-      .filter(w => w.length > 2 && !stopWords.has(w));
-    
-    // Get unique keywords, prioritize longer words (more specific)
-    const unique = [...new Set(words)].sort((a, b) => b.length - a.length);
-    
-    // Take top 3-4 keywords + niche
-    const keywords = unique.slice(0, 4);
-    if (niche && niche !== 'general' && !keywords.includes(niche)) {
-      keywords.push(niche);
-    }
-    
-    console.log(`🔑 Extracted keywords: ${keywords.join(', ')}`);
-    return keywords.slice(0, 4).join(' ');
-  }
-
-  // Get featured image with fallbacks - IMPROVED with keyword extraction
-  async getFeaturedImage(query, niche = 'general', description = '') {
-    // Extract better search keywords
-    const searchQuery = this.extractImageKeywords(query, description, niche);
-    console.log(`🖼️ Image search query: "${searchQuery}"`);
-    
-    // Try Pexels first (higher quality)
-    if (this.pexelsKey) {
-      try {
-        return await this.getPexelsImage(searchQuery);
-      } catch (e) {
-        console.log('Pexels failed, trying Unsplash...');
-      }
-    }
-    
-    // Try Unsplash as fallback
-    if (this.unsplashKey) {
-      try {
-        return await this.getUnsplashImage(searchQuery);
-      } catch (e) {
-        console.log('Unsplash also failed');
-      }
-    }
-    
-    // Return placeholder with keywords
-    return {
-      url: `https://source.unsplash.com/1200x630/?${encodeURIComponent(searchQuery)}`,
-      thumbnail: `https://source.unsplash.com/400x300/?${encodeURIComponent(searchQuery)}`,
-      photographer: 'Unsplash',
-      source: 'unsplash-source',
-      alt: searchQuery
-    };
-  }
-  
-  // Get multiple content images - IMPROVED with keyword variations
-  async getContentImages(topic, description = '', niche = 'general', count = 3) {
-    const images = [];
-    
-    // Extract base keywords
-    const baseKeywords = this.extractImageKeywords(topic, description, niche);
-    const keywordArray = baseKeywords.split(' ').filter(k => k.length > 2);
-    
-    // Create variations for different images
-    const variations = [
-      baseKeywords,  // Full keywords
-      keywordArray.slice(0, 2).join(' ') + ' people',  // Add people context
-      keywordArray[0] + ' culture tradition'  // Cultural context
-    ];
-    
-    for (let i = 0; i < count; i++) {
-      try {
-        const searchQuery = variations[i % variations.length];
-        console.log(`🖼️ Content image ${i + 1} search: "${searchQuery}"`);
-        
-        // Call Pexels/Unsplash directly with this query
-        let image = null;
-        if (this.pexelsKey) {
-          try {
-            image = await this.getPexelsImage(searchQuery);
-          } catch (e) {}
-        }
-        if (!image && this.unsplashKey) {
-          try {
-            image = await this.getUnsplashImage(searchQuery);
-          } catch (e) {}
-        }
-        if (image) {
-          images.push(image);
-        }
-      } catch (e) {
-        console.log(`Failed to get image ${i + 1}:`, e.message);
-      }
-    }
-    
-    return images;
+    throw new Error('No Unsplash results');
   }
 
   // ==========================================
   // MAIN BLOG CREATION METHOD
   // ==========================================
   
-  async createCompleteBlog(data) {
-    const { topic, description, tone, length, niche, targetAudience } = data;
+  async createCompleteBlog(options) {
+    const { topic, description = '', tone = 'professional', length = 'medium', niche = 'general', targetAudience = 'general' } = options;
     
-    console.log('📝 Creating complete blog post...');
+    console.log('📝 ========== CREATING COMPLETE BLOG ==========');
     console.log(`   Topic: ${topic}`);
-    console.log(`   Description: ${description || 'none'}`);
+    console.log(`   Tone: ${tone}`);
+    console.log(`   Length: ${length}`);
     console.log(`   Niche: ${niche}`);
-    console.log(`   Tone: ${tone || 'professional'}`);
     
     try {
-      // Step 1: Generate blog content
-      console.log('📝 Step 1: Generating blog content...');
+      // Step 1: Detect if Christian content (BEFORE image search)
+      const isChristian = this.isChristianContent(topic, description);
+      console.log(`   Christian Content: ${isChristian ? '✅ Yes' : '❌ No'}`);
+      
+      // Step 2: Generate blog content
+      console.log('📄 Step 1: Generating blog content...');
       const blogContent = await this.generateBlogContent(topic, description, tone, length, niche);
       
-      // Step 2: Get featured image - NOW USES TOPIC + DESCRIPTION for better results
-      console.log('🖼️ Step 2: Fetching featured image...');
-      const featuredImage = await this.getFeaturedImage(topic, niche, description);
-      console.log(`✅ Featured image: ${featuredImage.url}`);
+      // Step 3: Extract SMART image keywords from TITLE (not category!)
+      console.log('🖼️ Step 2: Getting featured image based on TITLE...');
+      const imageKeywords = this.extractSmartImageKeywords(topic, blogContent.content, niche);
+      console.log(`   Featured image keywords: "${imageKeywords.featured}"`);
       
-      // Step 3: Get content images - NOW USES TOPIC + DESCRIPTION for better results
-      console.log('🖼️ Step 3: Fetching content images...');
-      const contentImages = await this.getContentImages(topic, description, niche, 3);
-      console.log(`✅ Got ${contentImages.length} content images`);
+      const featuredImage = await this.getSmartImage(imageKeywords.featured, isChristian);
       
-      // Step 4: Generate hashtags
+      // Step 4: Get inline images
+      console.log('🖼️ Step 3: Getting inline images...');
+      const contentImages = [];
+      for (let i = 0; i < Math.min(2, imageKeywords.inline.length); i++) {
+        try {
+          const img = await this.getSmartImage(imageKeywords.inline[i], isChristian);
+          contentImages.push(img);
+        } catch (e) {
+          console.log(`   Inline image ${i + 1} failed`);
+        }
+      }
+      
+      // Step 5: Generate hashtags
       console.log('#️⃣ Step 4: Generating hashtags...');
-      const hashtags = await this.generateViralHashtags(topic, niche);
+      const hashtags = await this.generateViralHashtags(topic, niche, isChristian);
       
-      // Step 5: Embed images in content
+      // Step 6: Embed images in content
       const contentWithImages = this.embedImagesInContent(blogContent.content, contentImages);
       
-      // Calculate tokens earned
+      // Calculate tokens earned based on content quality
       let initialTokens = 50;
-      if (contentWithImages.length > 2000) initialTokens = 75;
-      if (contentWithImages.length > 4000) initialTokens = 100;
+      if (contentWithImages.length > 3000) initialTokens = 75;
+      if (contentWithImages.length > 5000) initialTokens = 100;
       if (blogContent.keywords?.length >= 5) initialTokens += 10;
-      if (featuredImage.url && !featuredImage.url.includes('source.unsplash')) initialTokens += 10;
+      if (featuredImage.source !== 'fallback') initialTokens += 10;
       
       console.log('✅ Complete blog created!');
+      console.log(`   Title: ${blogContent.title}`);
+      console.log(`   Words: ~${Math.round(contentWithImages.replace(/<[^>]*>/g, '').split(/\s+/).length)}`);
+      console.log(`   Images: 1 featured + ${contentImages.length} inline`);
       
       return {
         title: blogContent.title,
@@ -393,6 +559,7 @@ class ContentCreatorService {
         hashtags: hashtags,
         readTime: blogContent.readTime || this.calculateReadTime(contentWithImages),
         category: niche,
+        isChristianContent: isChristian,
         
         initialTokens: initialTokens,
         viralityScore: Math.floor(Math.random() * 30) + 70
@@ -404,62 +571,97 @@ class ContentCreatorService {
     }
   }
   
-  // Generate blog content with AI
+  // ==========================================
+  // BLOG CONTENT GENERATION (FIXED LENGTH)
+  // ==========================================
+  
   async generateBlogContent(topic, description, tone, length, niche) {
-    const lengthMap = {
-      'short': '800-1200',
-      'medium': '1500-2000',
-      'long': '2500-3500'
+    // FIXED: Proper word counts for each length
+    const lengthConfig = {
+      'short': { words: '600-900', sections: 3, paragraphs: '2-3' },
+      'medium': { words: '1200-1800', sections: 5, paragraphs: '3-4' },
+      'long': { words: '2500-3500', sections: 7, paragraphs: '4-5' }
     };
-    const wordRange = lengthMap[length] || '1500-2000';
     
-    const prompt = `Create a ${wordRange} word SEO-optimized blog post.
+    const config = lengthConfig[length] || lengthConfig.medium;
+    
+    const toneInstructions = {
+      professional: 'Write in a professional, authoritative tone. Use industry terminology but explain complex concepts.',
+      casual: 'Write in a conversational, friendly tone. Use contractions and relatable language.',
+      inspirational: 'Write in an uplifting, motivational tone. Use powerful imagery and encourage the reader.',
+      educational: 'Write in a clear, informative tone. Focus on teaching and explaining concepts step by step.',
+      storytelling: 'Write in a narrative style. Use personal anecdotes, examples, and engaging stories.'
+    };
+    
+    const prompt = `Create a comprehensive ${config.words} word SEO-optimized blog post.
 
-Topic: ${topic}
-${description ? `Description: ${description}` : ''}
-Niche: ${niche}
-Tone: ${tone || 'professional'}
+TOPIC: ${topic}
+${description ? `ADDITIONAL CONTEXT: ${description}` : ''}
+NICHE: ${niche}
+TONE: ${toneInstructions[tone] || toneInstructions.professional}
 
-Requirements:
-1. Engaging, clickable title (60 chars max)
-2. Hook introduction (2-3 sentences that grab attention)
-3. 4-6 main sections with H2 headings
-4. Each section: 2-4 paragraphs with valuable insights
-5. Use bullet points and numbered lists where appropriate
-6. Include actionable tips or takeaways
-7. Strong conclusion with CTA
-8. Natural keyword placement throughout
+CRITICAL LENGTH REQUIREMENT:
+- This is a ${length.toUpperCase()} article
+- MUST be ${config.words} words (this is essential!)
+- Include ${config.sections} main sections
+- Each section needs ${config.paragraphs} substantial paragraphs
 
-Format the content in clean HTML with:
+STRUCTURE REQUIREMENTS:
+1. TITLE: Create an engaging, SEO-optimized headline (50-60 characters)
+
+2. INTRODUCTION (2-3 paragraphs):
+   - Start with a hook that grabs attention
+   - Establish the problem or opportunity
+   - Preview what the reader will learn
+
+3. MAIN CONTENT (${config.sections} sections with H2 headings):
+   - Each section should have a clear, descriptive H2 heading
+   - Include ${config.paragraphs} paragraphs per section (each paragraph 3-5 sentences)
+   - Add specific examples, data, statistics, or anecdotes
+   - Include at least one bulleted or numbered list
+   - Use subheadings (H3) within longer sections
+
+4. CONCLUSION:
+   - Summarize key takeaways
+   - Include a clear call-to-action
+   - End with a thought-provoking statement
+
+FORMAT IN HTML:
+- <h1> for main title (only one)
 - <h2> for section headings
-- <p> for paragraphs
-- <ul>/<ol> and <li> for lists
-- <strong> and <em> for emphasis
+- <h3> for subheadings within sections
+- <p> for paragraphs (MAKE PARAGRAPHS SUBSTANTIAL - 3-5 sentences each)
+- <ul>/<ol> for lists
+- <strong> for emphasis
 - <blockquote> for important quotes
 
-CRITICAL: Return ONLY valid JSON:
+RETURN ONLY VALID JSON (no markdown blocks, no explanation):
 {
-  "title": "SEO-optimized title",
-  "content": "<article>Full HTML content here</article>",
-  "summary": "2-3 sentence summary for meta description",
-  "seoTitle": "Title for SEO (60 chars)",
-  "seoDescription": "Meta description (155 chars)",
+  "title": "Engaging SEO-Optimized Title Here",
+  "content": "<article><h1>Title</h1><p>Introduction...</p><h2>Section 1</h2><p>Content...</p>...</article>",
+  "summary": "2-3 sentence meta description (max 160 characters)",
+  "seoTitle": "SEO Title (60 chars max)",
+  "seoDescription": "Meta description for search engines (155 chars)",
   "keywords": ["keyword1", "keyword2", "keyword3", "keyword4", "keyword5"],
-  "slug": "url-friendly-slug",
-  "readTime": "X min"
+  "slug": "url-friendly-slug-here",
+  "readTime": "${length === 'short' ? '3-4' : length === 'medium' ? '6-8' : '12-15'} min"
 }`;
 
-    const response = await this.callAI(prompt);
+    const response = await this.callAI(prompt, { maxTokens: 8192 });
     const parsed = this.parseResponse(response);
     
     if (parsed && parsed.title && parsed.content) {
+      // Verify content length
+      const wordCount = parsed.content.replace(/<[^>]*>/g, '').split(/\s+/).length;
+      console.log(`📊 Generated article word count: ~${wordCount}`);
+      
       return parsed;
     }
     
     // Fallback if parsing failed
     return {
       title: topic,
-      content: `<article><h2>${topic}</h2><p>${response}</p></article>`,
+      content: `<article><h1>${topic}</h1><p>${response}</p></article>`,
       summary: topic,
       keywords: [topic.toLowerCase()],
       readTime: '5 min'
@@ -467,64 +669,77 @@ CRITICAL: Return ONLY valid JSON:
   }
   
   // Generate viral hashtags
-  async generateViralHashtags(topic, niche) {
+  async generateViralHashtags(topic, niche, isChristian = false) {
     try {
+      const christianHashtags = isChristian ? `
+Include these Christian/faith hashtags: Faith, Christian, BibleStudy, Jesus, God, Prayer, Blessed, Scripture, ChristianLife, Worship` : '';
+
       const prompt = `Generate 15 viral, trending hashtags for this content:
 Topic: ${topic}
 Niche: ${niche}
+${christianHashtags}
 
 Requirements:
 - Mix of popular (high reach) and niche-specific hashtags
-- Include 5 broad hashtags (500K+ posts)
-- Include 5 medium hashtags (50K-500K posts)
-- Include 5 niche hashtags (10K-50K posts)
+- 5 broad hashtags (500K+ posts)
+- 5 medium hashtags (50K-500K posts)  
+- 5 niche hashtags (10K-50K posts)
 - No spaces in hashtags
-- Return as JSON array
+- No # symbol, just the words
 
-Return ONLY: ["hashtag1", "hashtag2", "hashtag3", ...]`;
+Return ONLY a JSON array: ["hashtag1", "hashtag2", "hashtag3", ...]`;
 
       const response = await this.callAI(prompt);
       
-      // Try to parse as JSON array
       const match = response.match(/\[[\s\S]*\]/);
       if (match) {
         const hashtags = JSON.parse(match[0]);
-        return hashtags.map(h => h.replace(/^#/, ''));
+        return hashtags.map(h => h.replace(/^#/, '').trim()).filter(h => h.length > 0);
       }
       
-      // Fallback: extract hashtags from text
+      // Fallback
       const hashtags = response.match(/#?\w+/g) || [];
       return hashtags.slice(0, 15).map(h => h.replace(/^#/, ''));
       
     } catch (error) {
       console.log('⚠️ Hashtag generation failed, using defaults');
+      
+      if (isChristian) {
+        return ['Faith', 'Christian', 'BibleStudy', 'Jesus', 'God', 'Prayer', 'Blessed', 'Scripture', 'Inspiration', 'Hope'];
+      }
       return [niche, topic.split(' ')[0], 'trending', 'viral', 'blog'];
     }
   }
   
-  // Embed images in content
+  // Embed images in content at appropriate positions
   embedImagesInContent(content, images) {
     if (!images || images.length === 0) return content;
     
     let result = content;
-    const paragraphs = content.split('</p>');
+    const sections = content.split(/<h2/gi);
     
-    if (paragraphs.length > 3 && images.length > 0) {
-      // Insert images after every 3rd paragraph
-      const insertPoints = [2, 5, 8].filter(i => i < paragraphs.length);
+    if (sections.length > 2 && images.length > 0) {
+      // Insert images after sections 2 and 4 (if they exist)
+      const insertAfterSections = [2, 4].filter(i => i < sections.length);
       
-      insertPoints.forEach((point, idx) => {
-        if (images[idx]) {
+      insertAfterSections.forEach((sectionIndex, imgIndex) => {
+        if (images[imgIndex]) {
           const imageHtml = `
-<figure class="my-6">
-  <img src="${images[idx].url}" alt="${images[idx].alt || 'Article image'}" class="w-full rounded-lg shadow-md" loading="lazy" />
-  ${images[idx].photographer ? `<figcaption class="text-center text-gray-500 text-sm mt-2">Photo by ${images[idx].photographer}</figcaption>` : ''}
+<figure class="my-8 text-center">
+  <img src="${images[imgIndex].url}" alt="${images[imgIndex].alt || 'Article illustration'}" class="w-full max-w-2xl mx-auto rounded-lg shadow-lg" loading="lazy" />
+  ${images[imgIndex].photographer ? `<figcaption class="text-gray-500 text-sm mt-2 italic">Photo by ${images[imgIndex].photographer}</figcaption>` : ''}
 </figure>`;
-          paragraphs[point] = paragraphs[point] + '</p>' + imageHtml;
+          
+          // Find the end of this section and insert the image
+          const sectionEndMatch = sections[sectionIndex].match(/<\/p>\s*$/);
+          if (sectionEndMatch) {
+            sections[sectionIndex] = sections[sectionIndex].replace(/<\/p>\s*$/, '</p>' + imageHtml);
+          }
         }
       });
       
-      result = paragraphs.join('</p>');
+      // Rejoin sections
+      result = sections.join('<h2');
     }
     
     return result;
@@ -549,7 +764,7 @@ Return ONLY: ["hashtag1", "hashtag2", "hashtag3", ...]`;
   // Get trending topics
   async getTrendingTopics(niche) {
     try {
-      const prompt = `Suggest 10 trending blog topics for ${niche} niche.
+      const prompt = `Suggest 10 trending blog topics for ${niche} niche that would perform well on social media.
 Return as JSON: { "topics": ["topic1", "topic2", ...] }`;
       
       const response = await this.callAI(prompt);
