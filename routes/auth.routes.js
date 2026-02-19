@@ -1,9 +1,38 @@
+// ============================================
+// FILE: routes/auth.routes.js
+// Authentication Routes - COMPLETE WITH GOOGLE OAUTH
+// VERSION: 8.0 - Added Google OAuth + Facebook OAuth
+// FIXES: Google OAuth 404, Profile update during onboarding
+// ============================================
+
 const express = require('express');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const axios = require('axios');
 const authController = require('../controllers/auth.controller');
 const verifyToken = require('../middleware/verifyToken');
 const requireEmailVerification = require('../middleware/requireEmailVerification');
 const User = require('../models/user.model');
+
+// ==========================================
+// CONFIGURATION
+// ==========================================
+
+const JWT_SECRET = process.env.JWT_SECRET || 'cybev-secret-key';
+const JWT_EXPIRES = '30d';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://cybev.io';
+const API_URL = process.env.API_URL || 'https://api.cybev.io';
+
+// Google OAuth Config
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const GOOGLE_REDIRECT_URI = `${API_URL}/api/auth/google/callback`;
+
+// Facebook OAuth Config
+const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID;
+const FACEBOOK_APP_SECRET = process.env.FACEBOOK_APP_SECRET;
+const FACEBOOK_REDIRECT_URI = `${API_URL}/api/auth/facebook/callback`;
 
 // Handle OPTIONS preflight for all routes
 router.options('*', (req, res) => {
@@ -14,9 +43,358 @@ router.options('*', (req, res) => {
   res.sendStatus(200);
 });
 
-// ========================================
+// ==========================================
+// HELPER FUNCTIONS
+// ==========================================
+
+// Generate JWT token
+const generateToken = (user) => {
+  return jwt.sign(
+    { 
+      id: user._id, 
+      email: user.email,
+      role: user.role || 'user'
+    },
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES }
+  );
+};
+
+// Generate unique username from name/email
+const generateUsername = async (name, email) => {
+  let baseUsername = name 
+    ? name.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 15)
+    : email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+  
+  if (!baseUsername) baseUsername = 'user';
+  
+  let username = baseUsername;
+  let counter = 1;
+  
+  while (await User.findOne({ username })) {
+    username = `${baseUsername}${counter}`;
+    counter++;
+  }
+  
+  return username;
+};
+
+// Redirect with token (for OAuth callback)
+const redirectWithAuth = (res, user, isNewUser = false) => {
+  const token = generateToken(user);
+  const redirectUrl = new URL(`${FRONTEND_URL}/auth/oauth-callback`);
+  redirectUrl.searchParams.set('token', token);
+  redirectUrl.searchParams.set('new', isNewUser ? '1' : '0');
+  console.log('✅ OAuth redirect to:', redirectUrl.toString());
+  res.redirect(redirectUrl.toString());
+};
+
+// Redirect with error
+const redirectWithError = (res, error, message) => {
+  const redirectUrl = new URL(`${FRONTEND_URL}/auth/login`);
+  redirectUrl.searchParams.set('error', error);
+  redirectUrl.searchParams.set('message', encodeURIComponent(message));
+  console.log('❌ OAuth error redirect:', message);
+  res.redirect(redirectUrl.toString());
+};
+
+// ==========================================
+// GOOGLE OAUTH ROUTES
+// ==========================================
+
+// Step 1: Redirect to Google
+router.get('/google', (req, res) => {
+  console.log('🔵 Google OAuth initiated');
+  
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    console.error('❌ Google OAuth not configured');
+    return res.status(503).json({
+      ok: false,
+      error: 'Google authentication not configured',
+      message: 'Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables'
+    });
+  }
+
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authUrl.searchParams.set('client_id', GOOGLE_CLIENT_ID);
+  authUrl.searchParams.set('redirect_uri', GOOGLE_REDIRECT_URI);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('scope', 'openid email profile');
+  authUrl.searchParams.set('access_type', 'offline');
+  authUrl.searchParams.set('prompt', 'consent');
+
+  console.log('🔵 Redirecting to Google:', authUrl.toString());
+  res.redirect(authUrl.toString());
+});
+
+// Step 2: Google Callback
+router.get('/google/callback', async (req, res) => {
+  try {
+    const { code, error } = req.query;
+    console.log('🔵 Google callback received');
+
+    if (error) {
+      console.error('Google OAuth error:', error);
+      return redirectWithError(res, 'google_error', 'Google authentication was cancelled');
+    }
+
+    if (!code) {
+      return redirectWithError(res, 'no_code', 'No authorization code received');
+    }
+
+    // Exchange code for tokens
+    console.log('🔵 Exchanging code for tokens...');
+    const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
+      code,
+      client_id: GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      redirect_uri: GOOGLE_REDIRECT_URI,
+      grant_type: 'authorization_code'
+    });
+
+    const { access_token, id_token } = tokenResponse.data;
+
+    // Get user info
+    console.log('🔵 Fetching user info from Google...');
+    const userInfoResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${access_token}` }
+    });
+
+    const googleProfile = userInfoResponse.data;
+    console.log('📧 Google profile:', googleProfile.email);
+
+    // Check if user exists
+    let user = await User.findOne({
+      $or: [
+        { 'oauthProfile.google.id': googleProfile.id },
+        { email: googleProfile.email }
+      ]
+    });
+
+    let isNewUser = false;
+
+    if (user) {
+      // Link Google to existing account if not already linked
+      if (!user.oauthProfile) user.oauthProfile = {};
+      if (!user.oauthProfile.google?.id) {
+        user.oauthProfile.google = {
+          id: googleProfile.id,
+          email: googleProfile.email,
+          name: googleProfile.name,
+          picture: googleProfile.picture
+        };
+      }
+      
+      // Update avatar if not set
+      if (!user.avatar && googleProfile.picture) {
+        user.avatar = googleProfile.picture;
+      }
+      
+      user.lastLogin = new Date();
+      user.isEmailVerified = true; // Google verified the email
+      
+      // Add google to linked providers if not present
+      if (!user.linkedProviders) user.linkedProviders = [];
+      if (!user.linkedProviders.includes('google')) {
+        user.linkedProviders.push('google');
+      }
+      
+      await user.save();
+      console.log('✅ Existing user logged in via Google:', user.email);
+    } else {
+      // Create new user
+      const username = await generateUsername(googleProfile.name, googleProfile.email);
+      
+      user = new User({
+        name: googleProfile.name,
+        email: googleProfile.email,
+        username,
+        avatar: googleProfile.picture,
+        oauthProvider: 'google',
+        oauthId: googleProfile.id,
+        oauthProfile: {
+          google: {
+            id: googleProfile.id,
+            email: googleProfile.email,
+            name: googleProfile.name,
+            picture: googleProfile.picture
+          }
+        },
+        linkedProviders: ['google'],
+        isEmailVerified: true,
+        lastLogin: new Date()
+      });
+      
+      await user.save();
+      isNewUser = true;
+      console.log('✅ New user created via Google:', user.email);
+    }
+
+    redirectWithAuth(res, user, isNewUser);
+  } catch (error) {
+    console.error('❌ Google OAuth callback error:', error.response?.data || error.message);
+    redirectWithError(res, 'callback_error', 'Authentication failed. Please try again.');
+  }
+});
+
+// ==========================================
+// FACEBOOK OAUTH ROUTES
+// ==========================================
+
+// Step 1: Redirect to Facebook
+router.get('/facebook', (req, res) => {
+  console.log('🔵 Facebook OAuth initiated');
+  
+  if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET) {
+    console.error('❌ Facebook OAuth not configured');
+    return res.status(503).json({
+      ok: false,
+      error: 'Facebook authentication not configured',
+      message: 'Please set FACEBOOK_APP_ID and FACEBOOK_APP_SECRET environment variables'
+    });
+  }
+
+  const authUrl = new URL('https://www.facebook.com/v18.0/dialog/oauth');
+  authUrl.searchParams.set('client_id', FACEBOOK_APP_ID);
+  authUrl.searchParams.set('redirect_uri', FACEBOOK_REDIRECT_URI);
+  authUrl.searchParams.set('scope', 'email,public_profile');
+  authUrl.searchParams.set('response_type', 'code');
+
+  res.redirect(authUrl.toString());
+});
+
+// Step 2: Facebook Callback
+router.get('/facebook/callback', async (req, res) => {
+  try {
+    const { code, error, error_description } = req.query;
+
+    if (error) {
+      console.error('Facebook OAuth error:', error, error_description);
+      return redirectWithError(res, 'facebook_error', error_description || 'Facebook authentication was cancelled');
+    }
+
+    if (!code) {
+      return redirectWithError(res, 'no_code', 'No authorization code received');
+    }
+
+    // Exchange code for access token
+    const tokenResponse = await axios.get('https://graph.facebook.com/v18.0/oauth/access_token', {
+      params: {
+        client_id: FACEBOOK_APP_ID,
+        client_secret: FACEBOOK_APP_SECRET,
+        redirect_uri: FACEBOOK_REDIRECT_URI,
+        code
+      }
+    });
+
+    const accessToken = tokenResponse.data.access_token;
+
+    // Get user info
+    const profileResponse = await axios.get('https://graph.facebook.com/v18.0/me', {
+      params: {
+        access_token: accessToken,
+        fields: 'id,name,email,picture.width(200).height(200)'
+      }
+    });
+
+    const fbProfile = profileResponse.data;
+    console.log('📘 Facebook profile:', fbProfile.email || fbProfile.id);
+
+    // Check if user exists
+    let user = await User.findOne({
+      $or: [
+        { 'oauthProfile.facebook.id': fbProfile.id },
+        ...(fbProfile.email ? [{ email: fbProfile.email }] : [])
+      ]
+    });
+
+    let isNewUser = false;
+
+    if (user) {
+      // Link Facebook to existing account
+      if (!user.oauthProfile) user.oauthProfile = {};
+      if (!user.oauthProfile.facebook?.id) {
+        user.oauthProfile.facebook = {
+          id: fbProfile.id,
+          email: fbProfile.email,
+          name: fbProfile.name,
+          picture: fbProfile.picture?.data?.url
+        };
+      }
+      
+      if (!user.avatar && fbProfile.picture?.data?.url) {
+        user.avatar = fbProfile.picture.data.url;
+      }
+      
+      user.lastLogin = new Date();
+      if (fbProfile.email) user.isEmailVerified = true;
+      
+      if (!user.linkedProviders) user.linkedProviders = [];
+      if (!user.linkedProviders.includes('facebook')) {
+        user.linkedProviders.push('facebook');
+      }
+      
+      await user.save();
+      console.log('✅ Existing user logged in via Facebook:', user.email || fbProfile.id);
+    } else {
+      // Create new user
+      const username = await generateUsername(fbProfile.name, fbProfile.email || `fb${fbProfile.id}`);
+      
+      user = new User({
+        name: fbProfile.name,
+        email: fbProfile.email || `${fbProfile.id}@facebook.placeholder`,
+        username,
+        avatar: fbProfile.picture?.data?.url,
+        oauthProvider: 'facebook',
+        oauthId: fbProfile.id,
+        oauthProfile: {
+          facebook: {
+            id: fbProfile.id,
+            email: fbProfile.email,
+            name: fbProfile.name,
+            picture: fbProfile.picture?.data?.url
+          }
+        },
+        linkedProviders: ['facebook'],
+        isEmailVerified: !!fbProfile.email,
+        lastLogin: new Date()
+      });
+      
+      await user.save();
+      isNewUser = true;
+      console.log('✅ New user created via Facebook:', user.email || fbProfile.id);
+    }
+
+    redirectWithAuth(res, user, isNewUser);
+  } catch (error) {
+    console.error('❌ Facebook OAuth callback error:', error.response?.data || error.message);
+    redirectWithError(res, 'callback_error', 'Authentication failed. Please try again.');
+  }
+});
+
+// ==========================================
+// OAUTH PROVIDERS STATUS
+// ==========================================
+
+router.get('/providers/status', (req, res) => {
+  res.json({
+    ok: true,
+    providers: {
+      google: {
+        enabled: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
+        configured: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET)
+      },
+      facebook: {
+        enabled: !!(FACEBOOK_APP_ID && FACEBOOK_APP_SECRET),
+        configured: !!(FACEBOOK_APP_ID && FACEBOOK_APP_SECRET)
+      }
+    }
+  });
+});
+
+// ==========================================
 // EMAIL DIAGNOSTIC ENDPOINTS
-// ========================================
+// ==========================================
 
 // Check email service status (public - for debugging)
 router.get('/email-status', async (req, res) => {
@@ -143,7 +521,6 @@ router.post('/admin-resend-verification', verifyToken, async (req, res) => {
     }
 
     // Generate new token
-    const crypto = require('crypto');
     const verificationToken = crypto.randomBytes(32).toString('hex');
     const verificationTokenHash = crypto.createHash('sha256').update(verificationToken).digest('hex');
 
@@ -185,9 +562,9 @@ router.post('/admin-resend-verification', verifyToken, async (req, res) => {
   }
 });
 
-// ========================================
+// ==========================================
 // AUTHENTICATION ROUTES
-// ========================================
+// ==========================================
 
 router.post('/register', authController.register);
 router.post('/login', authController.login);
@@ -219,10 +596,11 @@ router.get('/me', verifyToken, async (req, res) => {
         isEmailVerified: user.isEmailVerified || false,
         hasCompletedOnboarding: user.hasCompletedOnboarding || false,
         onboardingData: user.onboardingData,
-        role: user.role || 'user',           // IMPORTANT: Include role
-        isAdmin: user.isAdmin || false,       // IMPORTANT: Include isAdmin
+        role: user.role || 'user',
+        isAdmin: user.isAdmin || false,
         followerCount: user.followerCount || 0,
         followingCount: user.followingCount || 0,
+        linkedProviders: user.linkedProviders || [],
         createdAt: user.createdAt
       }
     });
@@ -254,8 +632,8 @@ router.get('/profile', verifyToken, async (req, res) => {
       avatar: user.avatar || '',
       bio: user.bio || '',
       isEmailVerified: user.isEmailVerified || false,
-      role: user.role || 'user',           // IMPORTANT: Include role
-      isAdmin: user.isAdmin || false       // IMPORTANT: Include isAdmin
+      role: user.role || 'user',
+      isAdmin: user.isAdmin || false
     };
 
     console.log('✅ Profile data:', {
@@ -435,5 +813,7 @@ router.get('/user/:username', async (req, res) => {
     res.status(500).json({ ok: false, error: 'Failed to fetch user' });
   }
 });
+
+console.log('✅ Auth routes v8.0 loaded - Google OAuth + Facebook OAuth included');
 
 module.exports = router;
