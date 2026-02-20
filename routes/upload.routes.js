@@ -1,8 +1,11 @@
 // ============================================
 // FILE: routes/upload.routes.js
 // PURPOSE: File upload endpoints
-// VERSION: 1.3.1 - Added explicit Cloudinary config
-// PREVIOUS: 1.3.0 - Fixed /image to accept FormData + base64
+// VERSION: 1.4.0 - FIXED: Video thumbnails now work
+// FIXES:
+//   - Returns thumbnailUrl (not thumbnail) for frontend compatibility
+//   - Synchronous thumbnail generation (removed eager_async)
+//   - Auto-generate thumbnail URL from Cloudinary video URL
 // ============================================
 
 const express = require('express');
@@ -14,9 +17,7 @@ const jwt = require('jsonwebtoken');
 // ==========================================
 // CLOUDINARY CONFIGURATION
 // ==========================================
-// Support both individual env vars AND CLOUDINARY_URL format
 if (process.env.CLOUDINARY_URL) {
-  // CLOUDINARY_URL format: cloudinary://api_key:api_secret@cloud_name
   console.log('☁️ Cloudinary configured via CLOUDINARY_URL');
 } else if (process.env.CLOUDINARY_API_KEY) {
   cloudinary.config({
@@ -26,15 +27,11 @@ if (process.env.CLOUDINARY_URL) {
   });
   console.log('☁️ Cloudinary configured:', process.env.CLOUDINARY_CLOUD_NAME);
 } else {
-  console.log('⚠️ Cloudinary NOT configured - check env vars:');
-  console.log('   - CLOUDINARY_URL or');
-  console.log('   - CLOUDINARY_CLOUD_NAME + CLOUDINARY_API_KEY + CLOUDINARY_API_SECRET');
+  console.log('⚠️ Cloudinary NOT configured - check env vars');
 }
 
 // Import auth middleware with robust fallback
 let verifyToken;
-
-// Try different import paths
 try {
   const authModule = require('../middleware/auth');
   verifyToken = authModule.verifyToken || authModule.default || authModule;
@@ -45,13 +42,10 @@ try {
   } catch (e2) {
     try {
       verifyToken = require('../middleware/verifyToken');
-    } catch (e3) {
-      // All imports failed
-    }
+    } catch (e3) {}
   }
 }
 
-// If still not a function, use inline middleware
 if (typeof verifyToken !== 'function') {
   console.log('📤 Upload routes: Using inline auth middleware');
   verifyToken = (req, res, next) => {
@@ -73,7 +67,7 @@ if (typeof verifyToken !== 'function') {
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/') || file.mimetype.startsWith('video/') || file.mimetype === 'application/pdf') {
       cb(null, true);
@@ -95,6 +89,49 @@ const uploadToCloudinary = (buffer, options = {}) => {
 };
 
 // ==========================================
+// Helper: Generate thumbnail URL from Cloudinary video URL
+// ==========================================
+const generateThumbnailUrl = (videoUrl, publicId) => {
+  if (!videoUrl) return null;
+  
+  // If we have publicId, generate thumbnail URL directly
+  if (publicId) {
+    const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 
+                      (process.env.CLOUDINARY_URL?.match(/@([^/]+)$/)?.[1]);
+    if (cloudName) {
+      // Generate thumbnail at 1 second mark
+      return `https://res.cloudinary.com/${cloudName}/video/upload/so_1,w_400,h_400,c_fill/${publicId}.jpg`;
+    }
+  }
+  
+  // Fallback: Transform video URL to thumbnail URL
+  // Cloudinary video URL format: https://res.cloudinary.com/{cloud}/video/upload/{version}/{path}.{ext}
+  // Thumbnail URL format: https://res.cloudinary.com/{cloud}/video/upload/so_1,w_400,h_400,c_fill/{version}/{path}.jpg
+  
+  try {
+    const url = new URL(videoUrl);
+    const pathParts = url.pathname.split('/');
+    
+    // Find 'upload' index
+    const uploadIndex = pathParts.indexOf('upload');
+    if (uploadIndex === -1) return null;
+    
+    // Insert transformation after 'upload'
+    pathParts.splice(uploadIndex + 1, 0, 'so_1,w_400,h_400,c_fill');
+    
+    // Change extension to jpg
+    const lastPart = pathParts[pathParts.length - 1];
+    pathParts[pathParts.length - 1] = lastPart.replace(/\.[^.]+$/, '.jpg');
+    
+    url.pathname = pathParts.join('/');
+    return url.toString();
+  } catch (e) {
+    console.log('Could not generate thumbnail URL:', e.message);
+    return null;
+  }
+};
+
+// ==========================================
 // MAIN UPLOAD ENDPOINT - POST /api/upload
 // ==========================================
 router.post('/', verifyToken, upload.single('file'), async (req, res) => {
@@ -110,7 +147,6 @@ router.post('/', verifyToken, upload.single('file'), async (req, res) => {
 
     console.log(`📤 Uploading file: ${req.file.originalname} (${req.file.size} bytes) for user ${userId}`);
 
-    // Determine resource type
     let resourceType = 'image';
     if (req.file.mimetype.startsWith('video/')) {
       resourceType = 'video';
@@ -118,14 +154,12 @@ router.post('/', verifyToken, upload.single('file'), async (req, res) => {
       resourceType = 'raw';
     }
 
-    // Upload options
     const options = {
       folder: `cybev/${folder}`,
       resource_type: resourceType,
       public_id: `${userId}-${Date.now()}`,
     };
 
-    // Add transformations for images
     if (resourceType === 'image') {
       if (type === 'avatar' || type === 'profile') {
         options.transformation = [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }];
@@ -140,14 +174,24 @@ router.post('/', verifyToken, upload.single('file'), async (req, res) => {
 
     console.log(`✅ Upload successful: ${result.secure_url}`);
 
+    // Generate thumbnail URL for videos
+    let thumbnailUrl = null;
+    if (resourceType === 'video') {
+      thumbnailUrl = generateThumbnailUrl(result.secure_url, result.public_id);
+    }
+
     res.json({
       ok: true,
+      success: true,
       url: result.secure_url,
+      videoUrl: result.secure_url,
+      thumbnailUrl: thumbnailUrl,
       publicId: result.public_id,
       format: result.format,
       width: result.width,
       height: result.height,
       size: result.bytes,
+      duration: result.duration,
       resourceType: result.resource_type
     });
   } catch (err) {
@@ -158,7 +202,6 @@ router.post('/', verifyToken, upload.single('file'), async (req, res) => {
 
 // ============================================
 // UPLOAD IMAGE - POST /api/upload/image
-// VERSION: 1.3.0 - Now accepts BOTH FormData and base64
 // ============================================
 router.post('/image', verifyToken, upload.single('file'), async (req, res) => {
   try {
@@ -166,9 +209,8 @@ router.post('/image', verifyToken, upload.single('file'), async (req, res) => {
     const { folder = 'images', type = 'image' } = req.body;
 
     console.log(`📤 Image upload request from user ${userId}`);
-    console.log(`   Has file: ${!!req.file}, Has base64: ${!!req.body.image}`);
 
-    // Option 1: FormData with file (from blog create, etc.)
+    // Option 1: FormData with file
     if (req.file) {
       console.log(`📤 Processing FormData file: ${req.file.originalname}`);
       
@@ -224,8 +266,7 @@ router.post('/image', verifyToken, upload.single('file'), async (req, res) => {
       });
     }
 
-    // No image provided
-    return res.status(400).json({ ok: false, success: false, error: 'No image provided (send file in FormData or image as base64)' });
+    return res.status(400).json({ ok: false, success: false, error: 'No image provided' });
 
   } catch (err) {
     console.error('❌ Image upload error:', err);
@@ -242,7 +283,6 @@ router.post('/avatar', verifyToken, upload.single('file'), async (req, res) => {
     
     let imageData;
     
-    // Check if it's a file upload or base64
     if (req.file) {
       imageData = req.file.buffer;
     } else if (req.body.image) {
@@ -269,7 +309,6 @@ router.post('/avatar', verifyToken, upload.single('file'), async (req, res) => {
 
     console.log(`✅ Avatar upload successful: ${result.secure_url}`);
 
-    // Update user's profile picture in database
     try {
       const User = require('../models/user.model');
       await User.findByIdAndUpdate(userId, { 
@@ -327,7 +366,6 @@ router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
 
     console.log(`✅ Cover upload successful: ${result.secure_url}`);
 
-    // Update user's cover image in database
     try {
       const User = require('../models/user.model');
       await User.findByIdAndUpdate(userId, { coverImage: result.secure_url });
@@ -349,10 +387,11 @@ router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
 
 // ==========================================
 // UPLOAD VIDEO - POST /api/upload/video
+// FIXED: Now returns thumbnailUrl properly
 // ==========================================
 const videoUpload = multer({ 
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit for videos
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('video/')) {
       cb(null, true);
@@ -366,57 +405,73 @@ router.post('/video', verifyToken, videoUpload.single('file'), async (req, res) 
   try {
     const userId = req.user?.id || req.user?._id || req.user?.userId;
     
-    let videoData;
-    
     // Check if it's a file upload or URL
     if (req.file) {
-      videoData = req.file.buffer;
-    } else if (req.body.videoUrl) {
-      // Video URL provided
+      console.log(`📤 Uploading video for user ${userId} (${req.file.size} bytes)`);
+
+      const options = {
+        folder: 'cybev/videos',
+        resource_type: 'video',
+        public_id: `video-${userId}-${Date.now()}`,
+        chunk_size: 6000000,
+        // FIXED: Synchronous eager transforms for immediate thumbnail
+        eager: [
+          { width: 400, height: 400, crop: 'fill', format: 'jpg', start_offset: '1' }
+        ],
+        eager_async: false // IMPORTANT: Wait for thumbnail to be ready
+      };
+
+      const result = await uploadToCloudinary(req.file.buffer, options);
+
+      console.log(`✅ Video upload successful: ${result.secure_url}`);
+      
+      // Get thumbnail from eager transform OR generate from URL
+      let thumbnailUrl = result.eager?.[0]?.secure_url;
+      
+      if (!thumbnailUrl) {
+        thumbnailUrl = generateThumbnailUrl(result.secure_url, result.public_id);
+      }
+      
+      console.log(`📸 Thumbnail URL: ${thumbnailUrl}`);
+
+      return res.json({
+        ok: true,
+        success: true,
+        url: result.secure_url,
+        videoUrl: result.secure_url,
+        thumbnailUrl: thumbnailUrl, // FIXED: Frontend expects thumbnailUrl
+        thumbnail: thumbnailUrl,     // Also include for backwards compatibility
+        publicId: result.public_id,
+        duration: result.duration || 0,
+        format: result.format,
+        width: result.width,
+        height: result.height,
+        size: result.bytes
+      });
+    }
+    
+    // Video URL provided (external video)
+    if (req.body.videoUrl) {
       console.log(`📤 Video URL provided: ${req.body.videoUrl}`);
       return res.json({
         ok: true,
+        success: true,
         url: req.body.videoUrl,
+        videoUrl: req.body.videoUrl,
+        thumbnailUrl: req.body.thumbnailUrl || null,
         message: 'Video URL accepted'
       });
-    } else {
-      return res.status(400).json({ ok: false, error: 'No video provided' });
     }
-
-    console.log(`📤 Uploading video for user ${userId} (${req.file?.size} bytes)`);
-
-    const options = {
-      folder: 'cybev/videos',
-      resource_type: 'video',
-      public_id: `video-${userId}-${Date.now()}`,
-      chunk_size: 6000000, // 6MB chunks
-    };
-
-    // Add thumbnail generation
-    options.eager = [
-      { width: 300, height: 300, crop: 'fill', format: 'jpg' },
-      { width: 640, height: 360, crop: 'fill', format: 'jpg' }
-    ];
-    options.eager_async = true;
-
-    const result = await uploadToCloudinary(videoData, options);
-
-    console.log(`✅ Video upload successful: ${result.secure_url}`);
-
-    res.json({
-      ok: true,
-      url: result.secure_url,
-      publicId: result.public_id,
-      duration: result.duration,
-      format: result.format,
-      width: result.width,
-      height: result.height,
-      size: result.bytes,
-      thumbnail: result.eager?.[0]?.secure_url || null
-    });
+    
+    return res.status(400).json({ ok: false, error: 'No video provided' });
+    
   } catch (err) {
     console.error('❌ Video upload error:', err);
-    res.status(500).json({ ok: false, error: err.message || 'Video upload failed' });
+    res.status(500).json({ 
+      ok: false, 
+      success: false,
+      error: err.message || 'Video upload failed' 
+    });
   }
 });
 
@@ -443,6 +498,6 @@ router.delete('/:publicId', verifyToken, async (req, res) => {
   }
 });
 
-console.log('📤 Upload routes v1.3.1 loaded - Cloudinary explicitly configured');
+console.log('📤 Upload routes v1.4.0 loaded - FIXED video thumbnails');
 
 module.exports = router;
