@@ -387,7 +387,7 @@ router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
 
 // ==========================================
 // UPLOAD VIDEO - POST /api/upload/video
-// FIXED: Now returns thumbnailUrl properly
+// FIXED: Fast upload - generates thumbnail URL without waiting
 // ==========================================
 const videoUpload = multer({ 
   storage,
@@ -414,33 +414,27 @@ router.post('/video', verifyToken, videoUpload.single('file'), async (req, res) 
         resource_type: 'video',
         public_id: `video-${userId}-${Date.now()}`,
         chunk_size: 6000000,
-        // FIXED: Synchronous eager transforms for immediate thumbnail
-        eager: [
-          { width: 400, height: 400, crop: 'fill', format: 'jpg', start_offset: '1' }
-        ],
-        eager_async: false // IMPORTANT: Wait for thumbnail to be ready
+        // FIXED: Don't wait for eager transforms - generate thumbnail URL ourselves
+        // This prevents timeout on large videos
       };
 
       const result = await uploadToCloudinary(req.file.buffer, options);
 
       console.log(`✅ Video upload successful: ${result.secure_url}`);
       
-      // Get thumbnail from eager transform OR generate from URL
-      let thumbnailUrl = result.eager?.[0]?.secure_url;
+      // FIXED: Generate thumbnail URL directly from the video URL
+      // This is instant - no waiting for Cloudinary to process
+      const thumbnailUrl = generateThumbnailUrl(result.secure_url, result.public_id);
       
-      if (!thumbnailUrl) {
-        thumbnailUrl = generateThumbnailUrl(result.secure_url, result.public_id);
-      }
-      
-      console.log(`📸 Thumbnail URL: ${thumbnailUrl}`);
+      console.log(`📸 Generated thumbnail URL: ${thumbnailUrl}`);
 
       return res.json({
         ok: true,
         success: true,
         url: result.secure_url,
         videoUrl: result.secure_url,
-        thumbnailUrl: thumbnailUrl, // FIXED: Frontend expects thumbnailUrl
-        thumbnail: thumbnailUrl,     // Also include for backwards compatibility
+        thumbnailUrl: thumbnailUrl,
+        thumbnail: thumbnailUrl,
         publicId: result.public_id,
         duration: result.duration || 0,
         format: result.format,
@@ -453,12 +447,13 @@ router.post('/video', verifyToken, videoUpload.single('file'), async (req, res) 
     // Video URL provided (external video)
     if (req.body.videoUrl) {
       console.log(`📤 Video URL provided: ${req.body.videoUrl}`);
+      const thumbnailUrl = req.body.thumbnailUrl || generateThumbnailUrl(req.body.videoUrl, null);
       return res.json({
         ok: true,
         success: true,
         url: req.body.videoUrl,
         videoUrl: req.body.videoUrl,
-        thumbnailUrl: req.body.thumbnailUrl || null,
+        thumbnailUrl: thumbnailUrl,
         message: 'Video URL accepted'
       });
     }
