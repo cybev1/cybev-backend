@@ -387,7 +387,7 @@ router.post('/cover', verifyToken, upload.single('file'), async (req, res) => {
 
 // ==========================================
 // UPLOAD VIDEO - POST /api/upload/video
-// FIXED: Fast upload - generates thumbnail URL without waiting
+// FIXED: Fast upload with streaming for large files
 // ==========================================
 const videoUpload = multer({ 
   storage,
@@ -407,23 +407,60 @@ router.post('/video', verifyToken, videoUpload.single('file'), async (req, res) 
     
     // Check if it's a file upload or URL
     if (req.file) {
-      console.log(`📤 Uploading video for user ${userId} (${req.file.size} bytes)`);
+      const fileSizeMB = (req.file.size / (1024 * 1024)).toFixed(2);
+      console.log(`📤 Uploading video for user ${userId} (${fileSizeMB} MB)`);
+
+      // Set longer timeout for large uploads
+      req.setTimeout(300000); // 5 minutes
+      res.setTimeout(300000);
 
       const options = {
         folder: 'cybev/videos',
         resource_type: 'video',
         public_id: `video-${userId}-${Date.now()}`,
-        chunk_size: 6000000,
-        // FIXED: Don't wait for eager transforms - generate thumbnail URL ourselves
-        // This prevents timeout on large videos
+        chunk_size: 6000000, // 6MB chunks for streaming
+        timeout: 300000, // 5 minute timeout
       };
 
-      const result = await uploadToCloudinary(req.file.buffer, options);
+      let result;
+      
+      // For large files (> 50MB), use upload_large with chunking
+      if (req.file.size > 50 * 1024 * 1024) {
+        console.log(`📤 Large file detected, using chunked upload...`);
+        result = await new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { ...options, resource_type: 'video' },
+            (error, result) => {
+              if (error) reject(error);
+              else resolve(result);
+            }
+          );
+          
+          // Write in chunks to avoid memory issues
+          const chunkSize = 6 * 1024 * 1024; // 6MB chunks
+          let offset = 0;
+          
+          const writeChunk = () => {
+            const chunk = req.file.buffer.slice(offset, offset + chunkSize);
+            if (chunk.length > 0) {
+              stream.write(chunk);
+              offset += chunkSize;
+              setImmediate(writeChunk); // Non-blocking
+            } else {
+              stream.end();
+            }
+          };
+          
+          writeChunk();
+        });
+      } else {
+        // For smaller files, use regular upload
+        result = await uploadToCloudinary(req.file.buffer, options);
+      }
 
       console.log(`✅ Video upload successful: ${result.secure_url}`);
       
-      // FIXED: Generate thumbnail URL directly from the video URL
-      // This is instant - no waiting for Cloudinary to process
+      // Generate thumbnail URL directly (instant - no waiting)
       const thumbnailUrl = generateThumbnailUrl(result.secure_url, result.public_id);
       
       console.log(`📸 Generated thumbnail URL: ${thumbnailUrl}`);
@@ -461,7 +498,25 @@ router.post('/video', verifyToken, videoUpload.single('file'), async (req, res) 
     return res.status(400).json({ ok: false, error: 'No video provided' });
     
   } catch (err) {
-    console.error('❌ Video upload error:', err);
+    console.error('❌ Video upload error:', err.message);
+    
+    // Provide helpful error messages
+    if (err.message?.includes('timeout')) {
+      return res.status(408).json({ 
+        ok: false, 
+        success: false,
+        error: 'Upload timed out. Please try a smaller video or check your connection.' 
+      });
+    }
+    
+    if (err.message?.includes('File too large')) {
+      return res.status(413).json({ 
+        ok: false, 
+        success: false,
+        error: 'Video too large. Maximum size is 500MB.' 
+      });
+    }
+    
     res.status(500).json({ 
       ok: false, 
       success: false,
@@ -493,6 +548,6 @@ router.delete('/:publicId', verifyToken, async (req, res) => {
   }
 });
 
-console.log('📤 Upload routes v1.4.0 loaded - FIXED video thumbnails');
+console.log('📤 Upload routes v1.5.0 loaded - Fast video upload with chunking');
 
 module.exports = router;
