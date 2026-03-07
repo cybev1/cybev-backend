@@ -1244,7 +1244,7 @@ const routes = [
   ['auth', '/api/auth', './routes/auth.routes'],
   ['users', '/api/users', './routes/user.routes'],
   ['user-analytics', '/api/user-analytics', './routes/user-analytics.routes'],
-  ['posts', '/api/posts', './routes/post.routes'],
+  ['posts', '/api/posts', './routes/posts.routes'],
   ['comments', '/api/comments', './routes/comment.routes'],
   ['messages', '/api/messages', './routes/message.routes'],
   ['notifications', '/api/notifications', './routes/notification.routes'],
