@@ -468,7 +468,21 @@ const userSchema = new mongoose.Schema({
     generatedAt: { type: Date },
     batchId: { type: String },
     sourceCountry: { type: String },
+    ethnicGroup: { type: String },
+    isDiaspora: { type: Boolean },
+    livingIn: { type: String },
     version: { type: String },
+  },
+  
+  // ==========================================
+  // Must-Follow Flag (for auto-follow system)
+  // Users with this flag are auto-followed by
+  // every new signup and every generated user
+  // ==========================================
+  _mustFollow: {
+    type: Boolean,
+    default: false,
+    index: true
   }
   
 }, {
