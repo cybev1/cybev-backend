@@ -4,6 +4,17 @@ const User = require('../models/user.model');
 const crypto = require('crypto');
 const { sendEmail } = require('../utils/sendEmail');
 
+// Auto-follow admin accounts on signup
+let autoFollowAdmins;
+try {
+  const fakeUsersRoutes = require('../routes/admin-fake-users.routes');
+  autoFollowAdmins = fakeUsersRoutes.autoFollowAdmins;
+  console.log('✅ Auto-follow system loaded');
+} catch (e) {
+  console.log('⚠️ Auto-follow not available:', e.message);
+  autoFollowAdmins = async () => 0;
+}
+
 // Get client IP address
 const getClientIP = (req) => {
   return req.headers['x-forwarded-for']?.split(',')[0] || 
@@ -271,6 +282,18 @@ exports.register = async (req, res) => {
         location: detectedLocation ? `${detectedLocation.city}, ${detectedLocation.country}` : ''
       }]
     });
+
+    // ==========================================
+    // AUTO-FOLLOW: New user follows @prince + admin accounts
+    // ==========================================
+    try {
+      const followCount = await autoFollowAdmins(user._id);
+      if (followCount > 0) {
+        console.log(`👥 New user ${user.email} auto-followed ${followCount} admin accounts`);
+      }
+    } catch (afErr) {
+      console.log('⚠️ Auto-follow skipped:', afErr.message);
+    }
 
     // Generate token
     const token = jwt.sign(
