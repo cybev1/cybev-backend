@@ -1,7 +1,7 @@
 // ============================================
 // FILE: models/user.model.js
 // User Model with OAuth Provider Support
-// VERSION: 5.1 - Added coverImage for profile covers
+// VERSION: 5.2 - Added isSynthetic for synthetic user generation
 // ============================================
 
 const mongoose = require('mongoose');
@@ -454,7 +454,22 @@ const userSchema = new mongoose.Schema({
   backupCodes: [{
     code: String,
     used: { type: Boolean, default: false }
-  }]
+  }],
+  
+  // ==========================================
+  // Synthetic User Marker (Phase 1)
+  // ==========================================
+  isSynthetic: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  syntheticMeta: {
+    generatedAt: { type: Date },
+    batchId: { type: String },
+    sourceCountry: { type: String },
+    version: { type: String },
+  }
   
 }, {
   timestamps: true
