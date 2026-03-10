@@ -2,7 +2,7 @@
 // FILE: server.js
 // PATH: cybev-backend/server.js
 // PURPOSE: Main Express server with all routes
-// VERSION: 7.14.0 - Church Management v3 (Ministry + CE Zones)
+// VERSION: 7.15.0 - Phase 1: Synthetic Users & Engagement Engine
 // PREVIOUS: 7.13.0 - DNS Providers for One-Click Domain Setup
 // 
 // FIXES IN 7.14.0:
@@ -1236,7 +1236,7 @@ app.get('/api/posts/user/:userId', async (req, res) => {
 });
 
 // ==========================================
-// ALL ROUTES - v7.14.0 Church Management v3
+// ALL ROUTES - v7.15.0 Phase 1: Synthetic Users
 // ==========================================
 
 const routes = [
@@ -1287,6 +1287,7 @@ const routes = [
   ['admin-insight', '/api/admin', './routes/admin-insight.routes'],
   ['admin-analytics', '/api/admin-analytics', './routes/admin-analytics.routes'],
   ['admin', '/api/admin', './routes/admin.routes'],
+  ['admin-fake-users', '/api/admin/fake-users', './routes/admin-fake-users.routes'],
   ['moderation', '/api/moderation', './routes/moderation.routes'],
   
   // Church - v3.0 with Ministry & CE Zones
