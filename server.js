@@ -1336,6 +1336,12 @@ const routes = [
   // Premium Email
   ['campaigns-premium', '/api/campaigns-premium', './routes/campaigns-premium.routes'],
   
+  // Watch Parties
+  ['watch-party', '/api/watch-party', './routes/watchParty.routes'],
+  
+  // AI Content Studio
+  ['ai-content', '/api/ai-content', './routes/aiContent.routes'],
+  
   // Debug routes (TEMPORARY - remove after fixing)
   ['debug', '/api/debug', './routes/debug.routes']
   

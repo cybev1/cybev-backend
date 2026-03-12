@@ -39,6 +39,22 @@ function initializeSocket(server) {
     });
   });
 
+  // ─── Watch Party Namespace ───
+  try {
+    const { initWatchPartySocket } = require('./socket/watchParty.socket');
+    initWatchPartySocket(io);
+  } catch (err) {
+    console.log('⚠️ Watch Party socket skipped:', err.message);
+  }
+
+  // ─── Live Chat Namespace ───
+  try {
+    const { initLiveChatSocket } = require('./socket/liveChat.socket');
+    initLiveChatSocket(io);
+  } catch (err) {
+    console.log('⚠️ Live Chat socket skipped:', err.message);
+  }
+
   console.log('🔌 Socket.io initialized');
   return io;
 }
