@@ -1,7 +1,7 @@
 {
   "name": "cybev-backend",
-  "version": "7.0.1",
-  "description": "CYBEV Backend API - Complete Platform with Email, Meet, Social Tools, Campaigns, AI Generation, AI Image, Foundation School",
+  "version": "7.1.0",
+  "description": "CYBEV Backend API - Complete Platform with Email, Meet, Social Tools, Campaigns, AI Generation, AI Image, Foundation School, Watch Parties, AI Studio",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -29,6 +29,7 @@
     "node-cron": "^3.0.3",
     "crypto": "^1.0.1",
     "node-fetch": "^2.7.0",
+    "replicate": "^1.0.0",
     
     "@aws-sdk/client-ses": "^3.490.0",
     "@aws-sdk/client-s3": "^3.490.0",
@@ -57,10 +58,13 @@
     "campaigns",
     "ai-generation",
     "ai-image",
+    "ai-studio",
+    "replicate",
     "video-conferencing",
     "automation",
     "foundation-school",
-    "church-management"
+    "church-management",
+    "watch-parties"
   ],
   "author": "CYBEV",
   "license": "MIT"
