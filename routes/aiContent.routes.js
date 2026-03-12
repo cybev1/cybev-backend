@@ -1,71 +1,81 @@
 // ============================================
 // FILE: aiContent.routes.js
 // PATH: /routes/aiContent.routes.js
-// CYBEV AI Content Tools — Video, Music, Graphics
+// CYBEV AI Content Tools — PRODUCTION
+// Primary: Replicate (video, music, images)
+// Fallback: Runway ML (video), OpenAI DALL-E (images)
 // ============================================
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
 const User = require('../models/user.model');
+const Replicate = require('replicate');
 const axios = require('axios');
 
-// ─── AI Provider Config ───
-// Set these in your .env file
-const AI_CONFIG = {
-  // Video generation (Runway ML, Pika, Kling, etc.)
-  video: {
-    provider: process.env.AI_VIDEO_PROVIDER || 'runway', // 'runway' | 'pika' | 'kling' | 'mock'
-    apiKey: process.env.AI_VIDEO_API_KEY || '',
-    baseUrl: process.env.AI_VIDEO_BASE_URL || 'https://api.dev.runwayml.com/v1'
-  },
-  // Music generation (Suno, Udio, etc.)
-  music: {
-    provider: process.env.AI_MUSIC_PROVIDER || 'suno', // 'suno' | 'udio' | 'mock'
-    apiKey: process.env.AI_MUSIC_API_KEY || '',
-    baseUrl: process.env.AI_MUSIC_BASE_URL || 'https://api.suno.ai/v1'
-  },
-  // Image/Graphics generation (DALL-E, Flux, Stable Diffusion, etc.)
-  graphics: {
-    provider: process.env.AI_GRAPHICS_PROVIDER || 'deepseek', // 'openai' | 'stability' | 'flux' | 'deepseek' | 'mock'
-    apiKey: process.env.AI_GRAPHICS_API_KEY || process.env.DEEPSEEK_API_KEY || '',
-    baseUrl: process.env.AI_GRAPHICS_BASE_URL || ''
-  }
+// ─── Initialize Replicate client ───
+const replicate = new Replicate({
+  auth: process.env.REPLICATE_API_TOKEN
+});
+
+// ─── Fallback API keys ───
+const RUNWAY_API_KEY = process.env.RUNWAY_API_KEY || '';
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const SUNO_API_KEY = process.env.SUNO_API_KEY || '';
+
+// ─── Replicate model IDs ───
+const MODELS = {
+  video: 'wan-video/wan-2.1-t2v-480p',
+  video_hq: 'wan-video/wan-2.5-t2v-fast',
+  video_i2v: 'wan-video/wan-2.1-i2v-480p',
+  music: 'meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedbb',
+  image_fast: 'black-forest-labs/flux-schnell',
+  image_quality: 'black-forest-labs/flux-dev',
 };
 
 // ─── Token costs ───
 const TOKEN_COSTS = {
-  video_short: 100,   // 5-sec clip
-  video_medium: 200,  // 15-sec clip
-  video_long: 500,    // 30-60 sec
-  music_short: 50,    // 30-sec song
-  music_full: 150,    // Full song (2-4 min)
-  graphics_basic: 20, // Single image
-  graphics_hd: 50,    // HD image
-  graphics_batch: 80  // 4 images
+  video_short: 100,
+  video_medium: 200,
+  video_long: 500,
+  music_short: 50,
+  music_full: 150,
+  graphics_basic: 20,
+  graphics_hd: 50,
+  graphics_batch: 80,
 };
 
-// ─── Helper: Check token balance ───
+// ─── Helpers ───
 async function checkAndDeductTokens(userId, cost) {
   const user = await User.findById(userId);
   if (!user) throw new Error('User not found');
   if ((user.tokenBalance || 0) < cost) {
-    throw new Error(`Insufficient tokens. Need ${cost}, have ${user.tokenBalance || 0}`);
+    throw new Error(`Insufficient tokens. Need ${cost} CYBEV, you have ${user.tokenBalance || 0}`);
   }
   user.tokenBalance = (user.tokenBalance || 0) - cost;
   await user.save();
   return user.tokenBalance;
 }
 
-// ─── Helper: Refund tokens on failure ───
 async function refundTokens(userId, amount) {
   await User.findByIdAndUpdate(userId, { $inc: { tokenBalance: amount } });
 }
 
+// Safely extract URL from Replicate output (handles FileOutput, arrays, strings)
+function extractUrl(output) {
+  if (!output) return null;
+  let val = Array.isArray(output) ? output[0] : output;
+  if (val && typeof val === 'object') {
+    if (typeof val.url === 'function') return val.url();
+    if (val.url) return val.url;
+  }
+  return typeof val === 'string' ? val : String(val);
+}
+
+
 // ═══════════════════════════════════════════
-// AI VIDEO MAKER
+//  AI VIDEO GENERATION
 // ═══════════════════════════════════════════
 
-// POST /api/ai-content/video/generate
 router.post('/video/generate', auth, async (req, res) => {
   try {
     const { prompt, duration = 'short', style, aspectRatio = '16:9', sourceImage } = req.body;
@@ -73,107 +83,103 @@ router.post('/video/generate', auth, async (req, res) => {
 
     const costKey = `video_${duration}`;
     const cost = TOKEN_COSTS[costKey] || TOKEN_COSTS.video_short;
-
-    // Deduct tokens
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    let result;
-    const provider = AI_CONFIG.video.provider;
+    const fullPrompt = style ? `${style} style. ${prompt}` : prompt;
+    let prediction;
+    let provider = 'replicate';
 
-    if (provider === 'runway') {
-      // Runway ML Gen-3 API
-      const response = await axios.post(`${AI_CONFIG.video.baseUrl}/image_to_video`, {
+    try {
+      // ─── PRIMARY: Replicate Wan video ───
+      const modelId = duration === 'long' ? MODELS.video_hq : MODELS.video;
+      const targetModel = sourceImage ? MODELS.video_i2v : modelId;
+      const input = { prompt: fullPrompt };
+      if (sourceImage) input.image = sourceImage;
+      // ~81 frames = 5s at 16fps, ~161 frames = 10s
+      input.num_frames = duration === 'short' ? 81 : 161;
+
+      prediction = await replicate.predictions.create({ model: targetModel, input });
+
+    } catch (primaryErr) {
+      console.error('Replicate video failed, trying Runway:', primaryErr.message);
+      if (!RUNWAY_API_KEY) throw primaryErr;
+      provider = 'runway';
+
+      // ─── FALLBACK: Runway ML ───
+      const runwayRes = await axios.post('https://api.dev.runwayml.com/v1/image_to_video', {
         model: 'gen3a_turbo',
-        promptText: prompt,
+        promptText: fullPrompt,
         promptImage: sourceImage || undefined,
         watermark: false,
-        duration: duration === 'short' ? 5 : duration === 'medium' ? 10 : 10,
+        duration: duration === 'short' ? 5 : 10,
         ratio: aspectRatio === '9:16' ? '768:1280' : '1280:768'
       }, {
         headers: {
-          'Authorization': `Bearer ${AI_CONFIG.video.apiKey}`,
+          'Authorization': `Bearer ${RUNWAY_API_KEY}`,
           'Content-Type': 'application/json',
           'X-Runway-Version': '2024-11-06'
         }
       });
-      result = { taskId: response.data.id, status: 'processing', provider: 'runway' };
-
-    } else if (provider === 'mock') {
-      // Mock for development/testing
-      result = {
-        taskId: `mock_${Date.now()}`,
-        status: 'completed',
-        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-        thumbnailUrl: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400',
-        provider: 'mock'
-      };
-    } else {
-      // Generic API call for other providers
-      result = { taskId: `gen_${Date.now()}`, status: 'processing', provider };
+      prediction = { id: runwayRes.data.id, status: 'processing' };
     }
 
     res.json({
-      ...result,
+      taskId: prediction.id,
+      status: prediction.status === 'succeeded' ? 'completed' : 'processing',
+      videoUrl: extractUrl(prediction.output),
+      provider,
       tokensUsed: cost,
       remainingBalance: newBalance,
-      prompt,
-      duration,
-      style
+      prompt: fullPrompt,
+      duration
     });
-
   } catch (err) {
-    console.error('AI Video generation error:', err);
-    if (err.message.includes('Insufficient tokens')) {
-      return res.status(402).json({ error: err.message });
-    }
-    // Refund on API failure
+    console.error('AI Video error:', err.message);
+    if (err.message.includes('Insufficient tokens')) return res.status(402).json({ error: err.message });
     try { await refundTokens(req.user.id, TOKEN_COSTS[`video_${req.body.duration || 'short'}`] || 100); } catch {}
     res.status(500).json({ error: 'Video generation failed', details: err.message });
   }
 });
 
-// GET /api/ai-content/video/status/:taskId
 router.get('/video/status/:taskId', auth, async (req, res) => {
   try {
     const { taskId } = req.params;
+    const { provider = 'replicate' } = req.query;
 
-    if (taskId.startsWith('mock_')) {
+    if (provider === 'runway' && RUNWAY_API_KEY) {
+      const r = await axios.get(`https://api.dev.runwayml.com/v1/tasks/${taskId}`, {
+        headers: { 'Authorization': `Bearer ${RUNWAY_API_KEY}`, 'X-Runway-Version': '2024-11-06' }
+      });
       return res.json({
         taskId,
-        status: 'completed',
-        videoUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
-        thumbnailUrl: 'https://images.unsplash.com/photo-1536440136628-849c177e76a1?w=400'
+        status: r.data.status === 'SUCCEEDED' ? 'completed' : r.data.status === 'FAILED' ? 'failed' : 'processing',
+        videoUrl: r.data.output?.[0] || null,
+        progress: r.data.progress || 0,
+        provider: 'runway'
       });
     }
 
-    if (AI_CONFIG.video.provider === 'runway') {
-      const response = await axios.get(`${AI_CONFIG.video.baseUrl}/tasks/${taskId}`, {
-        headers: {
-          'Authorization': `Bearer ${AI_CONFIG.video.apiKey}`,
-          'X-Runway-Version': '2024-11-06'
-        }
-      });
-      const task = response.data;
-      res.json({
-        taskId,
-        status: task.status === 'SUCCEEDED' ? 'completed' : task.status === 'FAILED' ? 'failed' : 'processing',
-        videoUrl: task.output?.[0] || null,
-        progress: task.progress || 0
-      });
-    } else {
-      res.json({ taskId, status: 'processing', progress: 50 });
-    }
+    const prediction = await replicate.predictions.get(taskId);
+    res.json({
+      taskId,
+      status: prediction.status === 'succeeded' ? 'completed'
+        : (prediction.status === 'failed' || prediction.status === 'canceled') ? 'failed'
+        : 'processing',
+      videoUrl: prediction.status === 'succeeded' ? extractUrl(prediction.output) : null,
+      progress: prediction.status === 'processing' ? 50 : prediction.status === 'succeeded' ? 100 : 0,
+      provider: 'replicate'
+    });
   } catch (err) {
-    console.error('Video status error:', err);
+    console.error('Video status error:', err.message);
     res.status(500).json({ error: 'Failed to check video status' });
   }
 });
 
+
 // ═══════════════════════════════════════════
-// AI SONG COMPOSER
+//  AI MUSIC GENERATION
 // ═══════════════════════════════════════════
 
-// POST /api/ai-content/music/generate
 router.post('/music/generate', auth, async (req, res) => {
   try {
     const { prompt, genre, mood, duration = 'short', instrumental = false, lyrics } = req.body;
@@ -181,86 +187,111 @@ router.post('/music/generate', auth, async (req, res) => {
 
     const costKey = `music_${duration}`;
     const cost = TOKEN_COSTS[costKey] || TOKEN_COSTS.music_short;
-
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    let result;
-    const provider = AI_CONFIG.music.provider;
+    let fullPrompt = prompt;
+    if (genre) fullPrompt += `. Genre: ${genre}`;
+    if (mood) fullPrompt += `. Mood: ${mood}`;
+    if (instrumental) fullPrompt += '. Instrumental only, no vocals';
 
-    if (provider === 'suno') {
-      const response = await axios.post(`${AI_CONFIG.music.baseUrl}/generate`, {
-        prompt: `${prompt}${genre ? `. Genre: ${genre}` : ''}${mood ? `. Mood: ${mood}` : ''}`,
-        make_instrumental: instrumental,
-        custom_lyrics: lyrics || undefined,
-        duration: duration === 'full' ? 240 : 60
-      }, {
-        headers: {
-          'Authorization': `Bearer ${AI_CONFIG.music.apiKey}`,
-          'Content-Type': 'application/json'
+    let prediction;
+    let provider = 'replicate';
+
+    try {
+      // ─── PRIMARY: Replicate MusicGen ───
+      prediction = await replicate.predictions.create({
+        version: MODELS.music.split(':')[1],
+        input: {
+          prompt: fullPrompt,
+          model_version: 'stereo-large',
+          output_format: 'mp3',
+          duration: duration === 'full' ? 30 : 15,
+          normalization_strategy: 'peak',
+          top_k: 250,
+          top_p: 0,
+          temperature: 1,
+          classifier_free_guidance: 3
         }
       });
-      result = { taskId: response.data.id || response.data.task_id, status: 'processing', provider: 'suno' };
-
-    } else if (provider === 'mock') {
-      result = {
-        taskId: `mock_song_${Date.now()}`,
-        status: 'completed',
-        audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-        title: `AI Song: ${prompt.substring(0, 50)}`,
-        coverArt: 'https://images.unsplash.com/photo-1511379938547-c1f69419868d?w=400',
-        genre: genre || 'Pop',
-        duration: duration === 'full' ? 180 : 60,
-        provider: 'mock'
-      };
-    } else {
-      result = { taskId: `gen_${Date.now()}`, status: 'processing', provider };
+    } catch (primaryErr) {
+      console.error('Replicate music failed:', primaryErr.message);
+      if (SUNO_API_KEY) {
+        provider = 'suno';
+        const sunoRes = await axios.post(
+          `${process.env.SUNO_API_BASE_URL || 'https://api.suno.ai/v1'}/generate`,
+          { prompt: fullPrompt, make_instrumental: instrumental, custom_lyrics: lyrics || undefined },
+          { headers: { 'Authorization': `Bearer ${SUNO_API_KEY}` }, timeout: 30000 }
+        );
+        prediction = { id: sunoRes.data.id || sunoRes.data.task_id, status: 'processing' };
+      } else {
+        throw primaryErr;
+      }
     }
 
     res.json({
-      ...result,
+      taskId: prediction.id,
+      status: prediction.status === 'succeeded' ? 'completed' : 'processing',
+      audioUrl: extractUrl(prediction.output),
+      title: `${genre || 'AI'} - ${prompt.substring(0, 40)}`,
+      coverArt: null,
+      genre: genre || 'Various',
+      mood: mood || 'Mixed',
+      provider,
       tokensUsed: cost,
       remainingBalance: newBalance,
-      prompt,
-      genre,
-      mood
+      prompt: fullPrompt
     });
-
   } catch (err) {
-    console.error('AI Music generation error:', err);
-    if (err.message.includes('Insufficient tokens')) {
-      return res.status(402).json({ error: err.message });
-    }
+    console.error('AI Music error:', err.message);
+    if (err.message.includes('Insufficient tokens')) return res.status(402).json({ error: err.message });
     try { await refundTokens(req.user.id, TOKEN_COSTS[`music_${req.body.duration || 'short'}`] || 50); } catch {}
     res.status(500).json({ error: 'Music generation failed', details: err.message });
   }
 });
 
-// GET /api/ai-content/music/status/:taskId
 router.get('/music/status/:taskId', auth, async (req, res) => {
   try {
     const { taskId } = req.params;
+    const { provider = 'replicate' } = req.query;
 
-    if (taskId.startsWith('mock_')) {
-      return res.json({
-        taskId,
-        status: 'completed',
-        audioUrl: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-        coverArt: 'https://images.unsplash.com/photo-1511379938547-c1f69419868d?w=400'
-      });
+    if (provider === 'suno' && SUNO_API_KEY) {
+      try {
+        const r = await axios.get(
+          `${process.env.SUNO_API_BASE_URL || 'https://api.suno.ai/v1'}/status/${taskId}`,
+          { headers: { 'Authorization': `Bearer ${SUNO_API_KEY}` } }
+        );
+        return res.json({
+          taskId,
+          status: r.data.status === 'complete' ? 'completed' : r.data.status === 'error' ? 'failed' : 'processing',
+          audioUrl: r.data.audio_url || null,
+          coverArt: r.data.image_url || null,
+          title: r.data.title || null,
+          provider: 'suno'
+        });
+      } catch {}
     }
 
-    // Suno or other provider status check
-    res.json({ taskId, status: 'processing', progress: 50 });
+    const prediction = await replicate.predictions.get(taskId);
+    res.json({
+      taskId,
+      status: prediction.status === 'succeeded' ? 'completed'
+        : (prediction.status === 'failed' || prediction.status === 'canceled') ? 'failed'
+        : 'processing',
+      audioUrl: prediction.status === 'succeeded' ? extractUrl(prediction.output) : null,
+      progress: prediction.status === 'processing' ? 50 : prediction.status === 'succeeded' ? 100 : 0,
+      provider: 'replicate'
+    });
   } catch (err) {
+    console.error('Music status error:', err.message);
     res.status(500).json({ error: 'Failed to check music status' });
   }
 });
 
+
 // ═══════════════════════════════════════════
-// AI GRAPHICS GENERATOR
+//  AI GRAPHICS GENERATION
 // ═══════════════════════════════════════════
 
-// POST /api/ai-content/graphics/generate
 router.post('/graphics/generate', auth, async (req, res) => {
   try {
     const { prompt, style, size = '1024x1024', count = 1, quality = 'basic' } = req.body;
@@ -268,101 +299,106 @@ router.post('/graphics/generate', auth, async (req, res) => {
 
     const costKey = count > 1 ? 'graphics_batch' : quality === 'hd' ? 'graphics_hd' : 'graphics_basic';
     const cost = TOKEN_COSTS[costKey];
-
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    let result;
-    const provider = AI_CONFIG.graphics.provider;
+    const fullPrompt = style ? `${style} style: ${prompt}` : prompt;
+    const aspectMap = { '1024x1024': '1:1', '1792x1024': '16:9', '1024x1792': '9:16' };
+    const aspect_ratio = aspectMap[size] || '1:1';
 
-    if (provider === 'openai') {
-      const response = await axios.post('https://api.openai.com/v1/images/generations', {
+    let images = [];
+    let provider = 'replicate';
+
+    try {
+      // ─── PRIMARY: Replicate Flux ───
+      const modelId = quality === 'hd' ? MODELS.image_quality : MODELS.image_fast;
+      const numImages = Math.min(count, 4);
+
+      // Run images in parallel
+      const promises = Array.from({ length: numImages }, () =>
+        replicate.run(modelId, {
+          input: {
+            prompt: fullPrompt,
+            aspect_ratio,
+            num_outputs: 1,
+            output_format: 'webp',
+            output_quality: quality === 'hd' ? 95 : 80
+          }
+        })
+      );
+
+      const results = await Promise.allSettled(promises);
+      images = results
+        .filter(r => r.status === 'fulfilled' && r.value)
+        .map(r => ({ url: extractUrl(r.value) }));
+
+    } catch (primaryErr) {
+      console.error('Replicate images failed, trying OpenAI:', primaryErr.message);
+      if (!OPENAI_API_KEY) throw primaryErr;
+      provider = 'openai';
+
+      // ─── FALLBACK: OpenAI DALL-E 3 ───
+      const dalleRes = await axios.post('https://api.openai.com/v1/images/generations', {
         model: 'dall-e-3',
-        prompt: `${style ? `${style} style: ` : ''}${prompt}`,
-        n: Math.min(count, 4),
-        size: size,
+        prompt: fullPrompt,
+        n: 1,
+        size: ['1792x1024', '1024x1792'].includes(size) ? size : '1024x1024',
         quality: quality === 'hd' ? 'hd' : 'standard'
       }, {
-        headers: {
-          'Authorization': `Bearer ${AI_CONFIG.graphics.apiKey}`,
-          'Content-Type': 'application/json'
-        }
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
       });
-      result = {
-        status: 'completed',
-        images: response.data.data.map(img => ({
-          url: img.url,
-          revisedPrompt: img.revised_prompt
-        })),
-        provider: 'openai'
-      };
+      images = dalleRes.data.data.map(img => ({ url: img.url, revisedPrompt: img.revised_prompt }));
+    }
 
-    } else if (provider === 'stability') {
-      const response = await axios.post('https://api.stability.ai/v2beta/stable-image/generate/core', {
-        prompt: `${style ? `${style} style: ` : ''}${prompt}`,
-        output_format: 'png',
-        aspect_ratio: size === '1024x1024' ? '1:1' : size === '1792x1024' ? '16:9' : '1:1'
-      }, {
-        headers: {
-          'Authorization': `Bearer ${AI_CONFIG.graphics.apiKey}`,
-          'Accept': 'application/json'
-        }
-      });
-      result = {
-        status: 'completed',
-        images: [{ url: `data:image/png;base64,${response.data.image}` }],
-        provider: 'stability'
-      };
-
-    } else if (provider === 'mock') {
-      const mockImages = [
-        'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=1024',
-        'https://images.unsplash.com/photo-1558591710-4b4a1ae0f04d?w=1024',
-        'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1024',
-        'https://images.unsplash.com/photo-1579546929518-9e396f3cc809?w=1024',
-      ];
-      result = {
-        status: 'completed',
-        images: mockImages.slice(0, count).map(url => ({ url, revisedPrompt: prompt })),
-        provider: 'mock'
-      };
-    } else {
-      result = { status: 'completed', images: [], provider };
+    if (images.length === 0) {
+      await refundTokens(req.user.id, cost);
+      return res.status(500).json({ error: 'No images were generated' });
     }
 
     res.json({
-      ...result,
+      status: 'completed',
+      images,
+      provider,
       tokensUsed: cost,
       remainingBalance: newBalance,
-      prompt,
+      prompt: fullPrompt,
       style,
       size
     });
-
   } catch (err) {
-    console.error('AI Graphics generation error:', err);
-    if (err.message.includes('Insufficient tokens')) {
-      return res.status(402).json({ error: err.message });
-    }
+    console.error('AI Graphics error:', err.message);
+    if (err.message.includes('Insufficient tokens')) return res.status(402).json({ error: err.message });
     try { await refundTokens(req.user.id, TOKEN_COSTS.graphics_basic); } catch {}
     res.status(500).json({ error: 'Graphics generation failed', details: err.message });
   }
 });
 
+
 // ═══════════════════════════════════════════
-// TOKEN BALANCE
+//  BALANCE & PROVIDER STATUS
 // ═══════════════════════════════════════════
 
-// GET /api/ai-content/balance
 router.get('/balance', auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('tokenBalance');
-    res.json({
-      balance: user?.tokenBalance || 0,
-      costs: TOKEN_COSTS
-    });
+    res.json({ balance: user?.tokenBalance || 0, costs: TOKEN_COSTS });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get balance' });
   }
+});
+
+router.get('/providers', auth, async (req, res) => {
+  res.json({
+    primary: {
+      name: 'Replicate',
+      configured: !!process.env.REPLICATE_API_TOKEN,
+      models: { video: MODELS.video, music: 'meta/musicgen', images: MODELS.image_fast }
+    },
+    fallbacks: {
+      runway: { configured: !!RUNWAY_API_KEY, covers: ['video'] },
+      openai: { configured: !!OPENAI_API_KEY, covers: ['images'] },
+      suno: { configured: !!SUNO_API_KEY, covers: ['music'] }
+    }
+  });
 });
 
 module.exports = router;
