@@ -35,17 +35,6 @@ const Replicate = require('replicate');
 const axios = require('axios');
 const mongoose = require('mongoose');
 
-// ─── Ensure tokenBalance field exists on User schema ───
-try {
-  const userSchema = mongoose.model('User').schema;
-  if (!userSchema.path('tokenBalance')) {
-    userSchema.add({ tokenBalance: { type: Number, default: 0 } });
-    console.log('✅ AI Content: Added tokenBalance field to User schema');
-  }
-} catch (err) {
-  console.log('⚠️ AI Content: Could not add tokenBalance to User schema:', err.message);
-}
-
 // ─── Initialize Replicate client ───
 const replicate = new Replicate({
   auth: process.env.REPLICATE_API_TOKEN
@@ -79,19 +68,24 @@ const TOKEN_COSTS = {
 };
 
 // ─── Helpers ───
+let Wallet;
+try { Wallet = require('../models/wallet.model'); } catch (e) { Wallet = mongoose.model('Wallet'); }
+
 async function checkAndDeductTokens(userId, cost) {
-  const user = await User.findById(userId);
-  if (!user) throw new Error('User not found');
-  if ((user.tokenBalance || 0) < cost) {
-    throw new Error(`Insufficient tokens. Need ${cost} CYBEV, you have ${user.tokenBalance || 0}`);
+  let wallet = await Wallet.findOne({ user: userId });
+  if (!wallet) wallet = await Wallet.create({ user: userId, credits: 0, balance: 0 });
+  if ((wallet.credits || wallet.balance || 0) < cost) {
+    throw new Error(`Insufficient credits. Need ${cost} credits, you have ${wallet.credits || wallet.balance || 0}`);
   }
-  user.tokenBalance = (user.tokenBalance || 0) - cost;
-  await user.save();
-  return user.tokenBalance;
+  await wallet.deductCredits(cost, 'AI_VIDEO', `AI generation: ${cost} credits`);
+  return wallet.credits || wallet.balance || 0;
 }
 
 async function refundTokens(userId, amount) {
-  await User.findByIdAndUpdate(userId, { $inc: { tokenBalance: amount } });
+  let wallet = await Wallet.findOne({ user: userId });
+  if (wallet) {
+    await wallet.addCredits(amount, 'REFUND', `Refund: ${amount} credits (generation failed)`);
+  }
 }
 
 // Safely extract URL from Replicate output (handles FileOutput, arrays, strings)
@@ -413,8 +407,10 @@ router.post('/graphics/generate', auth, async (req, res) => {
 
 router.get('/balance', auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('tokenBalance');
-    res.json({ balance: user?.tokenBalance || 0, costs: TOKEN_COSTS });
+    const userId = req.user.id || req.user.userId;
+    let wallet;
+    try { wallet = await Wallet.findOne({ user: userId }); } catch {}
+    res.json({ balance: wallet?.credits || wallet?.balance || 0, costs: TOKEN_COSTS });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get balance' });
   }
