@@ -128,7 +128,7 @@ router.post('/fund', verifyToken, async (req, res) => {
     let payCurrency = currency;
     // If user pays in NGN/GHS, Flutterwave handles conversion
 
-    const payment = await paymentService.initializePayment({
+    const payment = await paymentService.initializePayment('flutterwave', {
       amount: payAmount,
       currency: payCurrency,
       email: user.email,
@@ -139,7 +139,7 @@ router.post('/fund', verifyToken, async (req, res) => {
       redirectUrl: `${FRONTEND_URL}/wallet?funded=true`
     });
 
-    if (!payment || !payment.link) {
+    if (!payment || !payment.paymentUrl && !payment.link) {
       return res.status(500).json({ error: 'Failed to initialize payment' });
     }
 
@@ -156,7 +156,7 @@ router.post('/fund', verifyToken, async (req, res) => {
 
     res.json({
       ok: true,
-      paymentLink: payment.link,
+      paymentLink: payment.paymentUrl || payment.link,
       reference: payment.reference || payment.tx_ref,
       provider: payment.provider || 'flutterwave'
     });
@@ -178,7 +178,7 @@ router.post('/fund/verify', verifyToken, async (req, res) => {
 
     if (!paymentService) return res.status(503).json({ error: 'Payment service unavailable' });
 
-    const verification = await paymentService.verifyPayment(transactionId || reference);
+    const verification = await paymentService.verifyPayment('flutterwave', transactionId || reference);
     if (!verification || !verification.success) {
       return res.status(400).json({ error: 'Payment verification failed' });
     }
@@ -364,7 +364,7 @@ router.post('/subscribe', verifyToken, async (req, res) => {
       // Not enough USD — try to initiate payment
       if (paymentService) {
         const user = await User.findById(userId).select('email name username');
-        const payment = await paymentService.initializePayment({
+        const payment = await paymentService.initializePayment('flutterwave', {
           amount: price,
           currency: 'USD',
           email: user.email,
@@ -377,7 +377,7 @@ router.post('/subscribe', verifyToken, async (req, res) => {
         return res.json({
           ok: false,
           needsPayment: true,
-          paymentLink: payment.link,
+          paymentLink: payment.paymentUrl || payment.link,
           reference: payment.reference,
           message: `Insufficient balance. Pay $${price} to subscribe to ${planData.name}.`
         });
