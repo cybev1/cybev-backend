@@ -7,10 +7,44 @@
 // ============================================
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
+// Auth middleware - resilient import matching project pattern
+let auth;
+try {
+  auth = require('../middleware/verifyToken');
+} catch (e) {
+  try { auth = require('../middleware/auth.middleware'); } catch (e2) {
+    try {
+      const authModule = require('../middleware/auth');
+      auth = authModule.authenticateToken || authModule;
+    } catch (e3) {
+      auth = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ error: 'No token' });
+        try {
+          const jwt = require('jsonwebtoken');
+          req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+          req.user.id = req.user.userId || req.user.id;
+          next();
+        } catch { return res.status(401).json({ error: 'Invalid token' }); }
+      };
+    }
+  }
+}
 const User = require('../models/user.model');
 const Replicate = require('replicate');
 const axios = require('axios');
+const mongoose = require('mongoose');
+
+// ─── Ensure tokenBalance field exists on User schema ───
+try {
+  const userSchema = mongoose.model('User').schema;
+  if (!userSchema.path('tokenBalance')) {
+    userSchema.add({ tokenBalance: { type: Number, default: 0 } });
+    console.log('✅ AI Content: Added tokenBalance field to User schema');
+  }
+} catch (err) {
+  console.log('⚠️ AI Content: Could not add tokenBalance to User schema:', err.message);
+}
 
 // ─── Initialize Replicate client ───
 const replicate = new Replicate({

@@ -7,7 +7,29 @@ const express = require('express');
 const router = express.Router();
 const WatchParty = require('../models/watchParty.model');
 const User = require('../models/user.model');
-const auth = require('../middleware/auth');
+// Auth middleware - resilient import matching project pattern
+let auth;
+try {
+  auth = require('../middleware/verifyToken');
+} catch (e) {
+  try { auth = require('../middleware/auth.middleware'); } catch (e2) {
+    try {
+      const authModule = require('../middleware/auth');
+      auth = authModule.authenticateToken || authModule;
+    } catch (e3) {
+      auth = (req, res, next) => {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) return res.status(401).json({ error: 'No token' });
+        try {
+          const jwt = require('jsonwebtoken');
+          req.user = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024');
+          req.user.id = req.user.userId || req.user.id;
+          next();
+        } catch { return res.status(401).json({ error: 'Invalid token' }); }
+      };
+    }
+  }
+}
 
 // ─── GET /api/watch-party — List watch parties ───
 router.get('/', async (req, res) => {
