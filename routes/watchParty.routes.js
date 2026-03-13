@@ -82,12 +82,14 @@ router.post('/', auth, async (req, res) => {
     // Auto-publish to feed
     if (publishToFeed && Blog) {
       try {
+        const thumbnail = coverImage || videoSource.thumbnail || '';
+        const wpLink = `${FRONTEND_URL}/watch-party/${party._id}`;
         const feedPost = new Blog({
-          title: `🎬 Watch Party: ${title}`, content: `<p>${description || title}</p><p><a href="${FRONTEND_URL}/watch-party/${party._id}">Join the Watch Party →</a></p>`,
+          title: `🎬 Watch Party: ${title}`, content: `<p>${description || title}</p>${thumbnail ? `<img src="${thumbnail}" alt="${title}" style="width:100%;border-radius:8px;margin:8px 0" />` : ''}<p><a href="${wpLink}">Join the Watch Party →</a></p>`,
           excerpt: description || `Join ${user.displayName || user.username}'s watch party!`,
           author: req.user.id, authorName: user.displayName || user.username || 'CYBEV User',
           category: 'entertainment', tags: ['watch-party', 'live', ...(tags || [])],
-          featuredImage: coverImage || videoSource.thumbnail || '', status: 'published'
+          featuredImage: thumbnail, status: 'published'
         });
         await feedPost.save();
         party.publishedToFeed = true; party.feedPostId = feedPost._id; await party.save();
@@ -182,13 +184,15 @@ router.post('/:id/publish', auth, async (req, res) => {
     if (party.host.toString() !== req.user.id.toString()) return res.status(403).json({ error: 'Host only' });
     if (!party.publishedToFeed && Blog) {
       const user = await User.findById(req.user.id).select('username displayName');
+      const thumbnail = party.coverImage || party.videoSource?.thumbnail || '';
+      const wpLink = `${FRONTEND_URL}/watch-party/${party._id}`;
       const fp = new Blog({
         title: `🎬 Watch Party: ${party.title}`,
-        content: `<p>${party.description || party.title}</p><p><a href="${FRONTEND_URL}/watch-party/${party._id}">Join the Watch Party →</a></p>`,
-        excerpt: party.description || `Join ${user?.displayName}'s watch party!`,
+        content: `<p>${party.description || party.title}</p>${thumbnail ? `<img src="${thumbnail}" alt="${party.title}" style="width:100%;border-radius:8px;margin:8px 0" />` : ''}<p><a href="${wpLink}">Join the Watch Party →</a></p>`,
+        excerpt: party.description || `Join ${user?.displayName || user?.username}'s watch party!`,
         author: req.user.id, authorName: user?.displayName || user?.username || 'CYBEV User',
         category: 'entertainment', tags: ['watch-party', 'live'],
-        featuredImage: party.coverImage || '', status: 'published'
+        featuredImage: thumbnail, status: 'published'
       });
       await fp.save();
       party.publishedToFeed = true; party.feedPostId = fp._id;
@@ -196,7 +200,7 @@ router.post('/:id/publish', auth, async (req, res) => {
     if (groups && Array.isArray(groups)) party.publishedToGroups = [...new Set([...(party.publishedToGroups || []), ...groups])];
     await party.save();
     res.json({ ok: true, message: 'Published!', feedPostId: party.feedPostId });
-  } catch (err) { res.status(500).json({ error: 'Failed' }); }
+  } catch (err) { console.error('Publish error:', err); res.status(500).json({ error: 'Failed' }); }
 });
 
 // POST /:id/invite — Invite users + send notifications
