@@ -1312,6 +1312,7 @@ const routes = [
   // Other
   ['reward', '/api/rewards', './routes/reward.routes'],
   ['content-rewards', '/api/content-rewards', './routes/content-rewards.routes'],
+  ['stream-gen', '/api/stream-gen', './routes/stream-gen.routes'],
   ['leaderboard', '/api/leaderboard', './routes/leaderboard.routes'],
   ['i18n', '/api/i18n', './routes/i18n.routes'],
   ['push', '/api/push', './routes/push.routes'],
