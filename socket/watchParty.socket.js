@@ -1,7 +1,11 @@
 // ============================================
 // FILE: watchParty.socket.js
 // PATH: /socket/watchParty.socket.js
+// VERSION: v2.1.0
 // CYBEV Watch Party Real-Time Sync
+// FIXES: Added end-party socket event handler,
+//        leave-room handler for explicit leave
+// UPDATED: 2026-03-13
 // ============================================
 const WatchParty = require('../models/watchParty.model');
 const User = require('../models/user.model');
@@ -215,6 +219,65 @@ function initWatchPartySocket(io) {
         });
       } catch (err) {
         console.error('request-sync error:', err);
+      }
+    });
+
+    // ─── END PARTY (host broadcasts to all viewers) ───
+    socket.on('end-party', async ({ partyId }) => {
+      try {
+        const party = await WatchParty.findById(partyId).select('host status participants');
+        if (!party) return;
+        // Only host can end via socket
+        if (party.host.toString() !== currentUserId) {
+          return socket.emit('error', { message: 'Only the host can end the party' });
+        }
+        // Update DB if not already ended (REST may have already done this)
+        if (party.status !== 'ended') {
+          party.status = 'ended';
+          party.endedAt = new Date();
+          party.participants.forEach(p => { p.isActive = false; });
+          await party.save();
+        }
+        // Broadcast to ALL viewers in room (including sender)
+        wpNamespace.to(partyId).emit('party-ended', {
+          reason: 'Host ended the party',
+          endedBy: currentUsername
+        });
+        console.log(`🛑 Watch Party ended by host: ${partyId}`);
+      } catch (err) {
+        console.error('end-party error:', err);
+      }
+    });
+
+    // ─── LEAVE ROOM (explicit, before disconnect) ───
+    socket.on('leave-room', async ({ partyId }) => {
+      try {
+        if (!partyId || !currentUserId) return;
+        socket.leave(partyId);
+
+        const party = await WatchParty.findById(partyId);
+        if (party) {
+          const participant = party.participants.find(p => p.user.toString() === currentUserId);
+          if (participant) {
+            participant.isActive = false;
+            await party.save();
+
+            const activeCount = party.participants.filter(p => p.isActive).length;
+            socket.to(partyId).emit('user-left', {
+              userId: currentUserId,
+              username: currentUsername,
+              activeViewers: activeCount
+            });
+            wpNamespace.to(partyId).emit('chat-message', {
+              type: 'system',
+              text: `${currentUsername} left the party`,
+              createdAt: new Date()
+            });
+          }
+        }
+        currentRoom = null;
+      } catch (err) {
+        console.error('leave-room error:', err);
       }
     });
 

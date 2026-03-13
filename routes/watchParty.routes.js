@@ -1,7 +1,12 @@
 // ============================================
 // FILE: watchParty.routes.js
 // PATH: /routes/watchParty.routes.js
-// CYBEV Watch Party v2.0 — Publish, Invite, Boost, Share
+// VERSION: v2.1.0
+// CYBEV Watch Party v2.1 — Publish, Invite, Boost, Share
+// FIXES: 403 on End/Publish (ObjectId comparison),
+//        Missing authorName on feed publish,
+//        Invite accepts userId + userIds
+// UPDATED: 2026-03-13
 // ============================================
 const express = require('express');
 const router = express.Router();
@@ -80,7 +85,8 @@ router.post('/', auth, async (req, res) => {
         const feedPost = new Blog({
           title: `🎬 Watch Party: ${title}`, content: `<p>${description || title}</p><p><a href="${FRONTEND_URL}/watch-party/${party._id}">Join the Watch Party →</a></p>`,
           excerpt: description || `Join ${user.displayName || user.username}'s watch party!`,
-          author: req.user.id, category: 'entertainment', tags: ['watch-party', 'live', ...(tags || [])],
+          author: req.user.id, authorName: user.displayName || user.username || 'CYBEV User',
+          category: 'entertainment', tags: ['watch-party', 'live', ...(tags || [])],
           featuredImage: coverImage || videoSource.thumbnail || '', status: 'published'
         });
         await feedPost.save();
@@ -97,7 +103,7 @@ router.post('/:id/join', auth, async (req, res) => {
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
     if (party.status === 'ended') return res.status(400).json({ error: 'Ended' });
-    const existing = party.participants.find(p => p.user?.toString() === req.user.id);
+    const existing = party.participants.find(p => p.user?.toString() === req.user.id.toString());
     if (existing) { existing.isActive = true; existing.joinedAt = new Date(); }
     else {
       const user = await User.findById(req.user.id).select('username displayName avatar');
@@ -116,7 +122,7 @@ router.post('/:id/leave', auth, async (req, res) => {
   try {
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
-    const p = party.participants.find(p => p.user?.toString() === req.user.id);
+    const p = party.participants.find(p => p.user?.toString() === req.user.id.toString());
     if (p) p.isActive = false;
     await party.save();
     res.json({ message: 'Left' });
@@ -128,7 +134,7 @@ router.post('/:id/end', auth, async (req, res) => {
   try {
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
-    if (party.host.toString() !== req.user.id) return res.status(403).json({ error: 'Host only' });
+    if (party.host.toString() !== req.user.id.toString()) return res.status(403).json({ error: 'Host only' });
     party.status = 'ended'; party.endedAt = new Date();
     party.participants.forEach(p => { p.isActive = false; });
     await party.save();
@@ -173,14 +179,15 @@ router.post('/:id/publish', auth, async (req, res) => {
     const { groups } = req.body;
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
-    if (party.host.toString() !== req.user.id) return res.status(403).json({ error: 'Host only' });
+    if (party.host.toString() !== req.user.id.toString()) return res.status(403).json({ error: 'Host only' });
     if (!party.publishedToFeed && Blog) {
       const user = await User.findById(req.user.id).select('username displayName');
       const fp = new Blog({
         title: `🎬 Watch Party: ${party.title}`,
         content: `<p>${party.description || party.title}</p><p><a href="${FRONTEND_URL}/watch-party/${party._id}">Join the Watch Party →</a></p>`,
         excerpt: party.description || `Join ${user?.displayName}'s watch party!`,
-        author: req.user.id, category: 'entertainment', tags: ['watch-party', 'live'],
+        author: req.user.id, authorName: user?.displayName || user?.username || 'CYBEV User',
+        category: 'entertainment', tags: ['watch-party', 'live'],
         featuredImage: party.coverImage || '', status: 'published'
       });
       await fp.save();
@@ -195,13 +202,14 @@ router.post('/:id/publish', auth, async (req, res) => {
 // POST /:id/invite — Invite users + send notifications
 router.post('/:id/invite', auth, async (req, res) => {
   try {
-    const { userIds } = req.body;
-    if (!userIds?.length) return res.status(400).json({ error: 'userIds required' });
+    const { userIds, userId } = req.body;
+    const ids = userIds?.length ? userIds : (userId ? [userId] : []);
+    if (!ids.length) return res.status(400).json({ error: 'userIds or userId required' });
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
     const inviter = await User.findById(req.user.id).select('username displayName');
     const name = inviter?.displayName || inviter?.username || 'Someone';
-    const newInvites = userIds.filter(uid => !party.invitedUsers.includes(uid));
+    const newInvites = ids.filter(uid => !party.invitedUsers.includes(uid));
     party.invitedUsers.push(...newInvites);
     await party.save();
     if (Notification && newInvites.length) {
