@@ -19,6 +19,14 @@ const User = require('../models/user.model');
 function initWatchPartySocket(io) {
   const wpNamespace = io.of('/watch-party');
 
+  // Helper: total viewer count = real + boosted + synthetic
+  const getActiveViewers = (party) => {
+    const real = (party.participants || []).filter(p => p.isActive).length;
+    const boosted = party.boostedViewers || 0;
+    const synthetic = party.syntheticEngagement?.totalViews || 0;
+    return real + boosted + synthetic;
+  };
+
   wpNamespace.on('connection', (socket) => {
     console.log(`🎬 Watch Party socket connected: ${socket.id}`);
 
@@ -53,7 +61,7 @@ function initWatchPartySocket(io) {
           });
         }
 
-        const activeCount = party.participants.filter(p => p.isActive).length;
+        const activeCount = getActiveViewers(party);
         if (activeCount > party.peakViewers) party.peakViewers = activeCount;
         await party.save();
 
@@ -210,11 +218,11 @@ function initWatchPartySocket(io) {
     // ─── REQUEST SYNC (viewer asks for current state) ───
     socket.on('request-sync', async ({ partyId }) => {
       try {
-        const party = await WatchParty.findById(partyId).select('playbackState participants');
+        const party = await WatchParty.findById(partyId).select('playbackState participants boostedViewers syntheticEngagement');
         if (!party) return;
         socket.emit('sync-state', {
           playbackState: party.playbackState,
-          activeViewers: party.participants.filter(p => p.isActive).length,
+          activeViewers: getActiveViewers(party),
           participants: party.participants.filter(p => p.isActive)
         });
       } catch (err) {
@@ -262,7 +270,7 @@ function initWatchPartySocket(io) {
             participant.isActive = false;
             await party.save();
 
-            const activeCount = party.participants.filter(p => p.isActive).length;
+            const activeCount = getActiveViewers(party);
             socket.to(partyId).emit('user-left', {
               userId: currentUserId,
               username: currentUsername,
@@ -292,7 +300,8 @@ function initWatchPartySocket(io) {
               participant.isActive = false;
               await party.save();
 
-              const activeCount = party.participants.filter(p => p.isActive).length;
+              const activeCount = getActiveViewers(party);
+              const realActive = party.participants.filter(p => p.isActive).length;
 
               socket.to(currentRoom).emit('user-left', {
                 userId: currentUserId,
@@ -306,8 +315,8 @@ function initWatchPartySocket(io) {
                 createdAt: new Date()
               });
 
-              // Auto-end if host leaves and no co-host
-              if (party.host.toString() === currentUserId && activeCount === 0) {
+              // Auto-end if host leaves and no real viewers remain
+              if (party.host.toString() === currentUserId && realActive === 0) {
                 party.status = 'ended';
                 party.endedAt = new Date();
                 await party.save();
