@@ -1,10 +1,10 @@
 // ============================================
 // FILE: watchParty.socket.js
 // PATH: /socket/watchParty.socket.js
-// VERSION: v2.1.0
+// VERSION: v2.3.0
 // CYBEV Watch Party Real-Time Sync
-// FIXES: Added end-party socket event handler,
-//        leave-room handler for explicit leave
+// FIXES: Guest viewer support (guest_* IDs),
+//        Boosted viewer counts, end-party + leave-room
 // UPDATED: 2026-03-13
 // ============================================
 const WatchParty = require('../models/watchParty.model');
@@ -39,29 +39,36 @@ function initWatchPartySocket(io) {
       try {
         currentRoom = partyId;
         currentUserId = userId;
-        currentUsername = username;
+        currentUsername = username || 'Guest';
 
         socket.join(partyId);
 
-        // Update participant status in DB
         const party = await WatchParty.findById(partyId);
         if (!party) return socket.emit('error', { message: 'Party not found' });
 
-        const existing = party.participants.find(p => p.user.toString() === userId);
-        if (existing) {
-          existing.isActive = true;
-          existing.joinedAt = new Date();
-        } else {
-          party.participants.push({
-            user: userId,
-            username,
-            avatar: avatar || '',
-            role: 'viewer',
-            isActive: true
-          });
+        // Guest users (guest_*) don't get stored in DB participants — just socket room
+        const isGuest = typeof userId === 'string' && userId.startsWith('guest_');
+
+        if (!isGuest && userId) {
+          // Authenticated user — update participant status in DB
+          const existing = party.participants.find(p => p.user.toString() === userId);
+          if (existing) {
+            existing.isActive = true;
+            existing.joinedAt = new Date();
+          } else {
+            party.participants.push({
+              user: userId,
+              username,
+              avatar: avatar || '',
+              role: 'viewer',
+              isActive: true
+            });
+          }
         }
 
-        const activeCount = getActiveViewers(party);
+        // Always increment total views (guest or not)
+        party.totalViews = (party.totalViews || 0) + 1;
+        const activeCount = getActiveViewers(party) + (isGuest ? 1 : 0);
         if (activeCount > party.peakViewers) party.peakViewers = activeCount;
         await party.save();
 
@@ -152,19 +159,22 @@ function initWatchPartySocket(io) {
     socket.on('chat-message', async ({ partyId, text }) => {
       try {
         if (!text || !text.trim()) return;
+        const isGuest = typeof currentUserId === 'string' && currentUserId.startsWith('guest_');
 
         const message = {
-          user: currentUserId,
-          username: currentUsername,
+          user: isGuest ? null : currentUserId,
+          username: currentUsername || 'Guest',
           text: text.trim(),
           type: 'message',
           createdAt: new Date()
         };
 
-        // Save to DB (fire-and-forget for speed)
-        WatchParty.findByIdAndUpdate(partyId, {
-          $push: { chatMessages: { $each: [message], $slice: -500 } }
-        }).catch(err => console.error('Chat save error:', err));
+        // Save to DB (fire-and-forget for speed) — skip user field for guests
+        if (!isGuest) {
+          WatchParty.findByIdAndUpdate(partyId, {
+            $push: { chatMessages: { $each: [message], $slice: -500 } }
+          }).catch(err => console.error('Chat save error:', err));
+        }
 
         // Broadcast to entire room including sender
         wpNamespace.to(partyId).emit('chat-message', message);
@@ -262,26 +272,24 @@ function initWatchPartySocket(io) {
       try {
         if (!partyId || !currentUserId) return;
         socket.leave(partyId);
+        const isGuest = typeof currentUserId === 'string' && currentUserId.startsWith('guest_');
 
         const party = await WatchParty.findById(partyId);
         if (party) {
-          const participant = party.participants.find(p => p.user.toString() === currentUserId);
-          if (participant) {
-            participant.isActive = false;
-            await party.save();
-
-            const activeCount = getActiveViewers(party);
-            socket.to(partyId).emit('user-left', {
-              userId: currentUserId,
-              username: currentUsername,
-              activeViewers: activeCount
-            });
-            wpNamespace.to(partyId).emit('chat-message', {
-              type: 'system',
-              text: `${currentUsername} left the party`,
-              createdAt: new Date()
-            });
+          if (!isGuest) {
+            const participant = party.participants.find(p => p.user.toString() === currentUserId);
+            if (participant) {
+              participant.isActive = false;
+              await party.save();
+            }
           }
+
+          const activeCount = getActiveViewers(party);
+          socket.to(partyId).emit('user-left', {
+            userId: currentUserId,
+            username: currentUsername,
+            activeViewers: activeCount
+          });
         }
         currentRoom = null;
       } catch (err) {
@@ -293,35 +301,40 @@ function initWatchPartySocket(io) {
     socket.on('disconnect', async () => {
       try {
         if (currentRoom && currentUserId) {
+          const isGuest = typeof currentUserId === 'string' && currentUserId.startsWith('guest_');
           const party = await WatchParty.findById(currentRoom);
+
           if (party) {
-            const participant = party.participants.find(p => p.user.toString() === currentUserId);
-            if (participant) {
-              participant.isActive = false;
-              await party.save();
-
-              const activeCount = getActiveViewers(party);
-              const realActive = party.participants.filter(p => p.isActive).length;
-
-              socket.to(currentRoom).emit('user-left', {
-                userId: currentUserId,
-                username: currentUsername,
-                activeViewers: activeCount
-              });
-
-              wpNamespace.to(currentRoom).emit('chat-message', {
-                type: 'system',
-                text: `${currentUsername} left the party`,
-                createdAt: new Date()
-              });
-
-              // Auto-end if host leaves and no real viewers remain
-              if (party.host.toString() === currentUserId && realActive === 0) {
-                party.status = 'ended';
-                party.endedAt = new Date();
+            if (!isGuest) {
+              // Authenticated user — mark inactive in DB
+              const participant = party.participants.find(p => p.user.toString() === currentUserId);
+              if (participant) {
+                participant.isActive = false;
                 await party.save();
-                wpNamespace.to(currentRoom).emit('party-ended', { reason: 'Host left and no viewers remain' });
               }
+            }
+
+            const activeCount = getActiveViewers(party);
+            const realActive = party.participants.filter(p => p.isActive).length;
+
+            socket.to(currentRoom).emit('user-left', {
+              userId: currentUserId,
+              username: currentUsername,
+              activeViewers: activeCount
+            });
+
+            wpNamespace.to(currentRoom).emit('chat-message', {
+              type: 'system',
+              text: `${currentUsername} left the party`,
+              createdAt: new Date()
+            });
+
+            // Auto-end if host leaves and no real viewers remain
+            if (!isGuest && party.host.toString() === currentUserId && realActive === 0) {
+              party.status = 'ended';
+              party.endedAt = new Date();
+              await party.save();
+              wpNamespace.to(currentRoom).emit('party-ended', { reason: 'Host left and no viewers remain' });
             }
           }
         }

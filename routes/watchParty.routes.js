@@ -1,11 +1,10 @@
 // ============================================
 // FILE: watchParty.routes.js
 // PATH: /routes/watchParty.routes.js
-// VERSION: v2.1.0
-// CYBEV Watch Party v2.1 — Publish, Invite, Boost, Share
-// FIXES: 403 on End/Publish (ObjectId comparison),
-//        Missing authorName on feed publish,
-//        Invite accepts userId + userIds
+// VERSION: v2.3.0
+// CYBEV Watch Party v2.3 — Guest Access (no login required)
+// FIXES: Guest viewers, optional auth on join/chat/react,
+//        Thumbnail in feed publish, toString on IDs
 // UPDATED: 2026-03-13
 // ============================================
 const express = require('express');
@@ -23,6 +22,27 @@ try { auth = require('../middleware/verifyToken'); } catch (e) {
     }
   }
 }
+
+// Optional auth — sets req.user if token present, otherwise req.user = null (guest)
+const optionalAuth = (req, res, next) => {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) { req.user = null; return next(); }
+  try {
+    const jwt = require('jsonwebtoken');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'cybev_secret_key_2024' || 'cybev-secret-key');
+    req.user = decoded;
+    req.user.id = decoded.userId || decoded.id;
+    // Try to load full user if verifyToken does DB lookup
+    const User = require('../models/user.model');
+    User.findById(req.user.id).select('-password').then(u => {
+      if (u) { req.user.id = u._id; req.user.isAdmin = u.isAdmin; }
+      next();
+    }).catch(() => next());
+  } catch {
+    req.user = null;
+    next();
+  }
+};
 const WatchParty = require('../models/watchParty.model');
 const User = require('../models/user.model');
 let Blog, Notification;
@@ -99,29 +119,36 @@ router.post('/', auth, async (req, res) => {
   } catch (err) { console.error('Create error:', err); res.status(500).json({ error: 'Failed to create' }); }
 });
 
-// POST /:id/join
-router.post('/:id/join', auth, async (req, res) => {
+// POST /:id/join — supports both logged-in users and guests
+router.post('/:id/join', optionalAuth, async (req, res) => {
   try {
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
     if (party.status === 'ended') return res.status(400).json({ error: 'Ended' });
-    const existing = party.participants.find(p => p.user?.toString() === req.user.id.toString());
-    if (existing) { existing.isActive = true; existing.joinedAt = new Date(); }
-    else {
-      const user = await User.findById(req.user.id).select('username displayName avatar');
-      party.participants.push({ user: req.user.id, username: user?.displayName || user?.username || 'User', avatar: user?.avatar || '', role: 'viewer', isActive: true });
+
+    if (req.user) {
+      // Authenticated user
+      const existing = party.participants.find(p => p.user?.toString() === req.user.id.toString());
+      if (existing) { existing.isActive = true; existing.joinedAt = new Date(); }
+      else {
+        const user = await User.findById(req.user.id).select('username displayName avatar');
+        party.participants.push({ user: req.user.id, username: user?.displayName || user?.username || 'User', avatar: user?.avatar || '', role: 'viewer', isActive: true });
+      }
     }
+    // Guests don't get added to participants array — they're tracked via socket/viewer count only
+
     party.totalViews += 1;
-    const active = party.participants.filter(p => p.isActive).length + (party.boostedViewers || 0);
+    const active = party.participants.filter(p => p.isActive).length + (party.boostedViewers || 0) + (party.syntheticEngagement?.totalViews || 0);
     if (active > party.peakViewers) party.peakViewers = active;
     await party.save();
-    res.json({ message: 'Joined', playbackState: party.playbackState, activeViewers: active });
+    res.json({ message: 'Joined', playbackState: party.playbackState, activeViewers: active, isGuest: !req.user });
   } catch (err) { res.status(500).json({ error: 'Failed to join' }); }
 });
 
 // POST /:id/leave
-router.post('/:id/leave', auth, async (req, res) => {
+router.post('/:id/leave', optionalAuth, async (req, res) => {
   try {
+    if (!req.user) return res.json({ message: 'Left' }); // Guests just leave
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
     const p = party.participants.find(p => p.user?.toString() === req.user.id.toString());
@@ -144,15 +171,21 @@ router.post('/:id/end', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// POST /:id/chat
-router.post('/:id/chat', auth, async (req, res) => {
+// POST /:id/chat — guests can chat as "Guest"
+router.post('/:id/chat', optionalAuth, async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, guestName } = req.body;
     if (!text?.trim()) return res.status(400).json({ error: 'Text required' });
     const party = await WatchParty.findById(req.params.id);
     if (!party || party.status === 'ended') return res.status(404).json({ error: 'Not found' });
-    const user = await User.findById(req.user.id).select('username displayName avatar');
-    const msg = { user: req.user.id, username: user?.displayName || user?.username, avatar: user?.avatar || '', text: text.trim(), type: 'message' };
+
+    let msg;
+    if (req.user) {
+      const user = await User.findById(req.user.id).select('username displayName avatar');
+      msg = { user: req.user.id, username: user?.displayName || user?.username, avatar: user?.avatar || '', text: text.trim(), type: 'message' };
+    } else {
+      msg = { username: guestName || 'Guest', text: text.trim(), type: 'message', isGuest: true };
+    }
     party.chatMessages.push(msg);
     if (party.chatMessages.length > 500) party.chatMessages = party.chatMessages.slice(-500);
     await party.save();
@@ -160,15 +193,15 @@ router.post('/:id/chat', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// POST /:id/react
-router.post('/:id/react', auth, async (req, res) => {
+// POST /:id/react — guests can react
+router.post('/:id/react', optionalAuth, async (req, res) => {
   try {
     const { emoji } = req.body;
     const ok = ['🔥','❤️','😂','👏','🎉','😮','💯','🙌','😍','💀','🤣','👀'];
     if (!ok.includes(emoji)) return res.status(400).json({ error: 'Invalid' });
     const party = await WatchParty.findById(req.params.id);
     if (!party || party.status === 'ended') return res.status(404).json({ error: 'Not found' });
-    party.reactions.push({ user: req.user.id, emoji });
+    party.reactions.push({ user: req.user?.id || null, emoji });
     if (party.reactions.length > 1000) party.reactions = party.reactions.slice(-1000);
     await party.save();
     res.json({ message: 'Added' });
@@ -229,8 +262,8 @@ router.post('/:id/invite', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// POST /:id/share — Track share
-router.post('/:id/share', auth, async (req, res) => {
+// POST /:id/share — Track share (guests can share too)
+router.post('/:id/share', optionalAuth, async (req, res) => {
   try {
     await WatchParty.findByIdAndUpdate(req.params.id, { $inc: { shareCount: 1 } });
     res.json({ ok: true });
