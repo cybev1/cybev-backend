@@ -270,7 +270,10 @@ router.post('/:id/share', optionalAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
-// POST /:id/boost — Admin: Add Special User engagement
+// POST /:id/boost — Admin: Smart boost with traffic simulation
+let boostService;
+try { boostService = require('../services/boostSimulation.service'); } catch (e) { console.log('⚠️ Boost simulation service not found, using raw boost'); }
+
 router.post('/:id/boost', auth, async (req, res) => {
   try {
     const { viewers = 0, comments = [], reactions = [], viewCount = 0 } = req.body;
@@ -278,7 +281,16 @@ router.post('/:id/boost', auth, async (req, res) => {
     if (!user?.isAdmin && user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
     const party = await WatchParty.findById(req.params.id);
     if (!party) return res.status(404).json({ error: 'Not found' });
-    if (viewers > 0) party.boostedViewers = (party.boostedViewers || 0) + viewers;
+
+    // ─── Use smart simulation if viewers > 0 ───
+    if (viewers > 0 && boostService) {
+      const config = await boostService.startSimulation(req.params.id, viewers);
+      console.log(`🎯 Smart boost started: ${party.title} → peak ${config.peakTarget}, phase: ${config.phase}`);
+    } else if (viewers > 0) {
+      // Fallback: raw increment
+      party.boostedViewers = (party.boostedViewers || 0) + viewers;
+    }
+
     if (viewCount > 0) {
       if (!party.syntheticEngagement) party.syntheticEngagement = { totalComments: 0, totalReactions: 0, totalViews: 0 };
       party.syntheticEngagement.totalViews += viewCount;
@@ -304,9 +316,57 @@ router.post('/:id/boost', auth, async (req, res) => {
     if (party.chatMessages.length > 1000) party.chatMessages = party.chatMessages.slice(-1000);
     if (party.reactions.length > 2000) party.reactions = party.reactions.slice(-2000);
     await party.save();
-    const total = party.participants.filter(p => p.isActive).length + (party.boostedViewers || 0) + (party.syntheticEngagement?.totalViews || 0);
-    res.json({ ok: true, message: `Boosted! ${viewers} viewers, ${comments.length} comments, ${reactions.length} reactions`, totalViewers: total });
+    const bc = party.boostConfig || {};
+    const simulated = bc.isActive ? (bc.currentSimulated || 0) : (party.boostedViewers || 0);
+    const total = party.participants.filter(p => p.isActive).length + simulated + (party.syntheticEngagement?.totalViews || 0);
+    res.json({
+      ok: true,
+      message: `Boosted! ${viewers} viewers, ${comments.length} comments, ${reactions.length} reactions`,
+      totalViewers: total,
+      simulation: bc.isActive ? { phase: bc.phase, peak: bc.peakTarget, current: bc.currentSimulated } : null
+    });
   } catch (err) { console.error('Boost error:', err); res.status(500).json({ error: 'Failed' }); }
+});
+
+// POST /:id/boost/reduce — Admin: Reduce boost by percentage
+router.post('/:id/boost/reduce', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('isAdmin role');
+    if (!user?.isAdmin && user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    const { percent = 25 } = req.body;
+    if (!boostService) return res.status(500).json({ error: 'Boost service not available' });
+    const config = await boostService.reduceSimulation(req.params.id, percent);
+    res.json({ ok: true, message: `Reduced by ${percent}%`, boost: config });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// POST /:id/boost/stop — Admin: Stop/remove all boost
+router.post('/:id/boost/stop', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('isAdmin role');
+    if (!user?.isAdmin && user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    if (!boostService) {
+      // Fallback: just zero out
+      await WatchParty.findByIdAndUpdate(req.params.id, { boostedViewers: 0, 'syntheticEngagement.totalViews': 0 });
+      return res.json({ ok: true, message: 'Boost cleared' });
+    }
+    const result = await boostService.stopSimulation(req.params.id);
+    res.json({ ok: true, message: 'Boost stopped', ...result });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// GET /:id/boost/status — Admin: Get current boost simulation status
+router.get('/:id/boost/status', auth, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('isAdmin role');
+    if (!user?.isAdmin && user?.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    if (!boostService) {
+      const party = await WatchParty.findById(req.params.id).select('boostConfig boostedViewers title status').lean();
+      return res.json({ ok: true, ...party });
+    }
+    const status = await boostService.getSimulationStatus(req.params.id);
+    res.json({ ok: true, ...status });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 // GET /user/my-parties
