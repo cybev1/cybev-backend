@@ -289,10 +289,41 @@ router.post('/generate-posts', verifyToken, requireAdmin, async (req, res) => {
 
 // Stream viewers, list, delete, countries, must-follow
 router.post('/simulate-stream-viewers', verifyToken, requireAdmin, async (req, res) => {
-  try { const { streamId, viewerCount = 50 } = req.body; if (!streamId) return res.status(400).json({ error: 'streamId required' });
-    const users = await getSpecialUsers(Math.min(viewerCount, 1000)); const ids = users.map(u => u._id);
-    const r = await mongoose.model('LiveStream').findByIdAndUpdate(streamId, { $addToSet: { viewers: { $each: ids } }, $inc: { totalViews: ids.length }, $max: { peakViewers: viewerCount } }, { new: true });
-    if (!r) return res.status(404).json({ error: 'Stream not found' }); res.json({ ok: true, addedViewers: ids.length, totalViewers: r.viewers?.length || 0 });
+  try {
+    const { streamId, viewerCount = 50 } = req.body;
+    if (!streamId) return res.status(400).json({ error: 'streamId required' });
+    const users = await getSpecialUsers(Math.min(viewerCount, 1000));
+    const ids = users.map(u => u._id);
+
+    // Try LiveStream first
+    let r = null;
+    try {
+      r = await mongoose.model('LiveStream').findByIdAndUpdate(streamId, {
+        $addToSet: { viewers: { $each: ids } },
+        $inc: { totalViews: ids.length },
+        $max: { peakViewers: viewerCount }
+      }, { new: true });
+    } catch (e) {}
+
+    // If not found, try WatchParty
+    if (!r) {
+      try {
+        const WatchParty = require('../models/watchParty.model');
+        const party = await WatchParty.findById(streamId);
+        if (party) {
+          party.boostedViewers = (party.boostedViewers || 0) + parseInt(viewerCount);
+          if (!party.syntheticEngagement) party.syntheticEngagement = { totalComments: 0, totalReactions: 0, totalViews: 0 };
+          party.syntheticEngagement.totalViews += parseInt(viewerCount);
+          const totalViewers = party.participants.filter(p => p.isActive).length + party.boostedViewers + (party.syntheticEngagement?.totalViews || 0);
+          if (totalViewers > party.peakViewers) party.peakViewers = totalViewers;
+          await party.save();
+          return res.json({ ok: true, addedViewers: parseInt(viewerCount), totalViewers, type: 'watch-party' });
+        }
+      } catch (e) {}
+    }
+
+    if (!r) return res.status(404).json({ error: 'Stream or Watch Party not found' });
+    res.json({ ok: true, addedViewers: ids.length, totalViewers: r.viewers?.length || 0, type: 'livestream' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
