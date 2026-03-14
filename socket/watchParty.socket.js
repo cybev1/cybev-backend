@@ -10,6 +10,10 @@
 const WatchParty = require('../models/watchParty.model');
 const User = require('../models/user.model');
 
+// Load smart simulation compute function at module level
+let boostCompute;
+try { boostCompute = require('../services/boostSimulation.service').computeCurrentViewers; } catch (e) { console.log('⚠️ boostSimulation.service not found, using raw counts'); }
+
 /**
  * ─── SMART TRAFFIC SIMULATOR ───
  * Makes boosted viewer counts look organic by fluctuating up/down
@@ -125,13 +129,15 @@ class TrafficSimulator {
 
   async _broadcast(partyId, room) {
     try {
-      const party = await WatchParty.findById(partyId).select('participants boostedViewers syntheticEngagement status');
+      const party = await WatchParty.findById(partyId).select('participants boostedViewers syntheticEngagement boostConfig status');
       if (!party || party.status === 'ended') {
         this.stop(partyId);
         return;
       }
       const real = (party.participants || []).filter(p => p.isActive).length;
-      const boosted = party.boostedViewers || 0;
+      const boosted = party.boostConfig?.isActive && boostCompute
+        ? boostCompute(party.boostConfig)
+        : (party.boostedViewers || 0);
       const synthetic = party.syntheticEngagement?.totalViews || 0;
       const base = real + boosted + synthetic;
 
@@ -163,8 +169,7 @@ function initWatchPartySocket(io) {
   wpNamespace.trafficSim = trafficSim;
 
   // Helper: total viewer count = real + simulated/boosted + synthetic
-  let boostCompute;
-  try { boostCompute = require('../services/boostSimulation.service').computeCurrentViewers; } catch (e) {}
+  // boostCompute loaded at module level (line 14)
 
   const getActiveViewers = (party) => {
     const real = (party.participants || []).filter(p => p.isActive).length;
@@ -385,7 +390,7 @@ function initWatchPartySocket(io) {
     // ─── REQUEST SYNC (viewer asks for current state) ───
     socket.on('request-sync', async ({ partyId }) => {
       try {
-        const party = await WatchParty.findById(partyId).select('playbackState participants boostedViewers syntheticEngagement');
+        const party = await WatchParty.findById(partyId).select('playbackState participants boostedViewers syntheticEngagement boostConfig');
         if (!party) return;
         socket.emit('sync-state', {
           playbackState: party.playbackState,
