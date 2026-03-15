@@ -5,7 +5,7 @@
 // CYBEV Watch Party Real-Time Sync
 // FEATURES: Smart traffic simulation, guest support,
 //           organic viewer count fluctuation
-// UPDATED: 2026-03-13
+// UPDATED: 2026-03-13.
 // ============================================
 const WatchParty = require('../models/watchParty.model');
 const User = require('../models/user.model');
