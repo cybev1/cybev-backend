@@ -58,6 +58,17 @@ const watchPartySchema = new mongoose.Schema({
   publishedToGroups: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Group' }],
   shareCount: { type: Number, default: 0 },
   boostedViewers: { type: Number, default: 0 },
+  // ─── Boost Simulation Engine ───
+  boostConfig: {
+    isActive: { type: Boolean, default: false },
+    peakTarget: { type: Number, default: 0 },       // target peak viewers
+    currentSimulated: { type: Number, default: 0 },   // current fluctuating count
+    minFloor: { type: Number, default: 0 },           // never drop below this (% of peak)
+    phase: { type: String, enum: ['climbing', 'peak', 'dipping', 'recovering', 'stopped'], default: 'stopped' },
+    phaseStartedAt: { type: Date },
+    lastTickAt: { type: Date },
+    totalBoostedEver: { type: Number, default: 0 },   // cumulative total ever boosted
+  },
   syntheticEngagement: {
     totalComments: { type: Number, default: 0 },
     totalReactions: { type: Number, default: 0 },
@@ -66,13 +77,23 @@ const watchPartySchema = new mongoose.Schema({
   totalViews: { type: Number, default: 0 },
   peakViewers: { type: Number, default: 0 },
   coverImage: { type: String, default: '' },
-  tags: [{ type: String }]
+  tags: [{ type: String }],
+  // Auto-deletion after 30 days (set when party ends)
+  deleteAfter: { type: Date, default: null, index: true },
+  downloadUrl: { type: String, default: '' },
+  deletionWarned: { type: Boolean, default: false },
 }, { timestamps: true });
 watchPartySchema.index({ host: 1, status: 1 });
 watchPartySchema.index({ status: 1, createdAt: -1 });
 watchPartySchema.index({ privacy: 1, status: 1 });
 watchPartySchema.virtual('activeViewers').get(function() {
-  return this.participants.filter(p => p.isActive).length + (this.boostedViewers || 0) + (this.syntheticEngagement?.totalViews || 0);
+  const real = this.participants.filter(p => p.isActive).length;
+  // Use simulated count if boost is active, otherwise raw boostedViewers
+  const boosted = this.boostConfig?.isActive
+    ? (this.boostConfig.currentSimulated || 0)
+    : (this.boostedViewers || 0);
+  const synthetic = this.syntheticEngagement?.totalViews || 0;
+  return real + boosted + synthetic;
 });
 watchPartySchema.set('toJSON', { virtuals: true });
 watchPartySchema.set('toObject', { virtuals: true });

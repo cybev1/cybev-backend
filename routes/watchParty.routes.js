@@ -119,6 +119,37 @@ router.post('/', auth, async (req, res) => {
   } catch (err) { console.error('Create error:', err); res.status(500).json({ error: 'Failed to create' }); }
 });
 
+// PUT /:id — Edit watch party (host only, works while live)
+router.put('/:id', auth, async (req, res) => {
+  try {
+    const party = await WatchParty.findById(req.params.id);
+    if (!party) return res.status(404).json({ error: 'Not found' });
+    if (party.host.toString() !== req.user.id.toString()) return res.status(403).json({ error: 'Host only' });
+
+    const { title, description, videoSource, coverImage, privacy, maxParticipants, tags } = req.body;
+
+    if (title !== undefined) party.title = title;
+    if (description !== undefined) party.description = description;
+    if (coverImage !== undefined) party.coverImage = coverImage;
+    if (privacy !== undefined) party.privacy = privacy;
+    if (maxParticipants !== undefined) party.maxParticipants = maxParticipants;
+    if (tags !== undefined) party.tags = tags;
+
+    // Allow changing video source mid-party (e.g. switch stream URL)
+    if (videoSource) {
+      if (videoSource.url) party.videoSource.url = videoSource.url;
+      if (videoSource.type) party.videoSource.type = videoSource.type;
+      if (videoSource.thumbnail) party.videoSource.thumbnail = videoSource.thumbnail;
+      if (videoSource.muxPlaybackId) party.videoSource.muxPlaybackId = videoSource.muxPlaybackId;
+    }
+
+    await party.save();
+    await party.populate('host', 'username displayName avatar isVerified');
+    console.log(`✏️ Watch Party edited: ${party.title} by ${req.user.id}`);
+    res.json({ ok: true, party });
+  } catch (err) { console.error('Edit error:', err); res.status(500).json({ error: 'Failed to update' }); }
+});
+
 // POST /:id/join — supports both logged-in users and guests
 router.post('/:id/join', optionalAuth, async (req, res) => {
   try {
@@ -166,8 +197,43 @@ router.post('/:id/end', auth, async (req, res) => {
     if (party.host.toString() !== req.user.id.toString()) return res.status(403).json({ error: 'Host only' });
     party.status = 'ended'; party.endedAt = new Date();
     party.participants.forEach(p => { p.isActive = false; });
+
+    // Set 30-day auto-deletion date
+    party.deleteAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+    // Calculate duration
+    const durationMs = party.endedAt - (party.startedAt || party.createdAt);
+    const durationMin = Math.round(durationMs / 60000);
+    const durationStr = durationMin >= 60 ? `${Math.floor(durationMin / 60)}h ${durationMin % 60}m` : `${durationMin}m`;
+
+    // Auto-publish recap to feed if not already published
+    if (!party.publishedToFeed && Blog) {
+      try {
+        const user = await User.findById(req.user.id).select('username displayName');
+        const thumbnail = party.coverImage || party.videoSource?.thumbnail || '';
+        const totalViewers = party.peakViewers || party.totalViews || 0;
+        const wpLink = `${FRONTEND_URL}/watch-party/${party._id}`;
+
+        const recap = new Blog({
+          title: `🎬 Watch Party Recap: ${party.title}`,
+          content: `<p><strong>${party.title}</strong> has ended!</p>` +
+            `<p>📊 <strong>${totalViewers.toLocaleString()}</strong> peak viewers • ⏱️ Duration: <strong>${durationStr}</strong> • 💬 <strong>${(party.chatMessages || []).length}</strong> chat messages</p>` +
+            (thumbnail ? `<img src="${thumbnail}" alt="${party.title}" style="width:100%;border-radius:8px;margin:12px 0" />` : '') +
+            `<p>${party.description || ''}</p>` +
+            `<p><a href="${wpLink}">View Watch Party →</a></p>`,
+          excerpt: `${party.title} — ${totalViewers.toLocaleString()} viewers, ${durationStr}`,
+          author: req.user.id, authorName: user?.displayName || user?.username || 'CYBEV User',
+          category: 'entertainment', tags: ['watch-party', 'recap'],
+          featuredImage: thumbnail, status: 'published'
+        });
+        await recap.save();
+        party.publishedToFeed = true; party.feedPostId = recap._id;
+        console.log(`📝 Auto-published recap for: ${party.title}`);
+      } catch (e) { console.log('⚠️ Recap publish failed:', e.message); }
+    }
+
     await party.save();
-    res.json({ message: 'Ended', party });
+    res.json({ message: 'Ended', party, deleteAfter: party.deleteAfter });
   } catch (err) { res.status(500).json({ error: 'Failed' }); }
 });
 
