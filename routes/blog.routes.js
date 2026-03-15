@@ -684,6 +684,22 @@ router.delete('/:id', verifyToken, async (req, res) => {
   }
 });
 
+// POST /:id/view - Track blog view
+router.post('/:id/view', async (req, res) => {
+  try {
+    const Blog = getBlog();
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid ID' });
+    }
+    const blog = await Blog.findByIdAndUpdate(id, { $inc: { views: 1 } }, { new: true }).select('views');
+    if (!blog) return res.status(404).json({ ok: false, error: 'Not found' });
+    res.json({ ok: true, views: blog.views });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Failed to track view' });
+  }
+});
+
 // ==========================================
 // GET /:id - Get blog by ID (MUST BE LAST!)
 // ==========================================
