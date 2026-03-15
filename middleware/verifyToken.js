@@ -31,7 +31,9 @@ module.exports = async function (req, res, next) {
       email: user.email,
       name: user.name,
       username: user.username,
-      isEmailVerified: user.isEmailVerified || false
+      isEmailVerified: user.isEmailVerified || false,
+      isAdmin: user.isAdmin || false,
+      role: user.role || (user.isAdmin ? 'admin' : 'user')
     };
     
     next();
