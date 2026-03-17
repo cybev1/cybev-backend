@@ -147,6 +147,16 @@ if (!MONGODB_URI) {
           console.log('⚠️ Automation processor not started:', err.message);
         }
       }
+
+      // Start auto-blog processor (generates articles from Special Users)
+      try {
+        require('./models/autoBlog.model'); // Register model
+        const autoBlogProcessor = require('./cron/auto-blog-processor');
+        autoBlogProcessor.start();
+        console.log('📝 Auto-Blog processor started (hourly)');
+      } catch (err) {
+        console.log('⚠️ Auto-Blog processor not started:', err.message);
+      }
     })
     .catch(err => console.error('❌ MongoDB error:', err.message));
 }
@@ -1341,6 +1351,12 @@ const routes = [
   // Watch Parties
   ['watch-party', '/api/watch-party', './routes/watchParty.routes'],
   
+  // SEO meta tags and social previews
+  ['seo', '/api/seo', './routes/seo.routes'],
+
+  // Auto-Blog campaign management
+  ['auto-blog', '/api/auto-blog', './routes/autoBlog.routes'],
+
   // AI Content Studio
   ['ai-content', '/api/ai-content', './routes/aiContent.routes'],
   
