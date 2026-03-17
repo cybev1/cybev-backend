@@ -16,6 +16,13 @@ const blogSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+
+  slug: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
   
   content: {
     type: String,
@@ -144,6 +151,23 @@ blogSchema.index({ status: 1, createdAt: -1 });
 blogSchema.index({ category: 1 });
 blogSchema.index({ tags: 1 });
 blogSchema.index({ isPinned: 1, author: 1 });
+blogSchema.index({ slug: 1 });
+
+// Auto-generate slug from title on save
+blogSchema.pre('save', async function(next) {
+  if (this.isNew && !this.slug && this.title) {
+    let base = this.title
+      .toLowerCase()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .substring(0, 80)
+      .replace(/-$/, '');
+    // Ensure uniqueness by appending short ID
+    this.slug = `${base}-${this._id.toString().slice(-6)}`;
+  }
+  next();
+});
 
 // Virtual for like count
 blogSchema.virtual('likeCount').get(function() {
