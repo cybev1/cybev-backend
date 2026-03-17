@@ -72,10 +72,12 @@ const flutterwave = {
           tx_ref: `cybev_${type}_${userId}_${Date.now()}`,
           amount,
           currency,
+          payment_options: 'card, mobilemoney, mobilemoneyghana, ussd, banktransfer',
           redirect_url: redirectUrl || `${FRONTEND_URL}/payment/callback?provider=flutterwave`,
           customer: {
             email,
-            name
+            name,
+            phonenumber: metadata?.phone || ''
           },
           customizations: {
             title: 'CYBEV',
