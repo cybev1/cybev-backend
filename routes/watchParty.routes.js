@@ -67,7 +67,17 @@ router.get('/', async (req, res) => {
       WatchParty.find(filter).populate('host', 'username displayName avatar isVerified').select('-chatMessages -reactions').sort({ status: 1, startedAt: -1, scheduledAt: 1 }).skip(skip).limit(parseInt(limit)).lean(),
       WatchParty.countDocuments(filter)
     ]);
-    const enriched = parties.map(p => ({ ...p, activeViewers: (p.participants || []).filter(v => v.isActive).length + (p.boostedViewers || 0) + (p.syntheticEngagement?.totalViews || 0) }));
+    let boostCompute;
+    try { boostCompute = require('../services/boostSimulation.service').computeCurrentViewers; } catch(e) {}
+
+    const enriched = parties.map(p => {
+      const real = (p.participants || []).filter(v => v.isActive).length;
+      const boosted = p.boostConfig?.isActive && boostCompute
+        ? boostCompute(p.boostConfig)
+        : (p.boostedViewers || 0);
+      const synthetic = p.syntheticEngagement?.totalViews || 0;
+      return { ...p, activeViewers: real + boosted + synthetic };
+    });
     res.json({ parties: enriched, total, page: parseInt(page), pages: Math.ceil(total / parseInt(limit)) });
   } catch (err) { res.status(500).json({ error: 'Failed to fetch' }); }
 });
@@ -78,7 +88,17 @@ router.get('/:id', async (req, res) => {
     const party = await WatchParty.findById(req.params.id).populate('host', 'username displayName avatar isVerified').populate('participants.user', 'username displayName avatar isVerified').lean();
     if (!party) return res.status(404).json({ error: 'Not found' });
     if (party.chatMessages) party.chatMessages = party.chatMessages.slice(-100);
-    party.activeViewers = (party.participants || []).filter(v => v.isActive).length + (party.boostedViewers || 0) + (party.syntheticEngagement?.totalViews || 0);
+    let boostCompute2;
+    try { boostCompute2 = require('../services/boostSimulation.service').computeCurrentViewers; } catch(e) {}
+    const realCount = (party.participants || []).filter(v => v.isActive).length;
+    const boostedCount = party.boostConfig?.isActive && boostCompute2
+      ? boostCompute2(party.boostConfig)
+      : (party.boostedViewers || 0);
+    party.activeViewers = realCount + boostedCount + (party.syntheticEngagement?.totalViews || 0);
+    // Track peak viewers
+    if (party.activeViewers > (party.peakViewers || 0)) {
+      WatchParty.findByIdAndUpdate(party._id, { peakViewers: party.activeViewers }).catch(() => {});
+    }
     res.json(party);
   } catch (err) { res.status(500).json({ error: 'Failed to fetch' }); }
 });
@@ -451,22 +471,33 @@ router.get('/:id/analytics', optionalAuth, async (req, res) => {
       .lean();
     if (!party) return res.status(404).json({ error: 'Not found' });
 
+    let boostCalc;
+    try { boostCalc = require('../services/boostSimulation.service').computeCurrentViewers; } catch(e) {}
+
     const startedAt = party.startedAt || party.createdAt;
     const endedAt = party.endedAt || (party.status === 'ended' ? party.updatedAt : new Date());
     const durationMs = new Date(endedAt) - new Date(startedAt);
     const durationMin = Math.round(durationMs / 60000);
 
+    // Total viewers — combine everything
+    const real = (party.participants || []).length;
+    const boosted = party.boostConfig?.isActive && boostCalc
+      ? boostCalc(party.boostConfig)
+      : (party.boostedViewers || 0);
+    const synthetic = party.syntheticEngagement?.totalViews || 0;
+    const totalBoostedEver = (party.boostConfig?.totalBoostedEver || 0) + (party.syntheticEngagement?.totalViews || 0);
+    const peakViewers = party.peakViewers || (real + boosted + synthetic);
+    const totalViews = Math.max(party.totalViews || 0, peakViewers);
+
     // Chat analytics
     const chatMessages = party.chatMessages || [];
     const uniqueChatters = new Set(chatMessages.filter(m => m.user).map(m => m.user.toString())).size;
-    const guestMessages = chatMessages.filter(m => !m.user || m.isGuest).length;
-    const syntheticMessages = chatMessages.filter(m => m.isSynthetic).length;
 
     // Chat timeline — messages per minute
     const chatTimeline = [];
     if (chatMessages.length > 0 && startedAt) {
       const start = new Date(startedAt).getTime();
-      const bucketSize = Math.max(1, Math.ceil(durationMin / 30)); // ~30 data points
+      const bucketSize = Math.max(1, Math.ceil(durationMin / 30));
       for (let i = 0; i < Math.min(durationMin, 300); i += bucketSize) {
         const from = start + i * 60000;
         const to = from + bucketSize * 60000;
@@ -481,94 +512,57 @@ router.get('/:id/analytics', optionalAuth, async (req, res) => {
     // Reaction breakdown
     const reactions = party.reactions || [];
     const reactionBreakdown = {};
-    reactions.forEach(r => {
-      reactionBreakdown[r.emoji] = (reactionBreakdown[r.emoji] || 0) + 1;
-    });
+    reactions.forEach(r => { reactionBreakdown[r.emoji] = (reactionBreakdown[r.emoji] || 0) + 1; });
     const topReactions = Object.entries(reactionBreakdown)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
+      .sort((a, b) => b[1] - a[1]).slice(0, 8)
       .map(([emoji, count]) => ({ emoji, count }));
 
-    // Participant countries (from synthetic users)
-    const participants = party.participants || [];
-    const countryBreakdown = {};
-    participants.forEach(p => {
-      if (p.isSynthetic && p.country) {
-        countryBreakdown[p.country] = (countryBreakdown[p.country] || 0) + 1;
-      }
-    });
-
-    // Viewer count over time (simulated data points for graph)
+    // Viewer timeline (simulated curve for graph)
     const viewerTimeline = [];
-    const peakViewers = party.peakViewers || 0;
-    const boosted = party.boostedViewers || 0;
-    const synthetic = party.syntheticEngagement?.totalViews || 0;
-    const totalBoostedEver = party.boostConfig?.totalBoostedEver || 0;
-    const realParticipants = participants.filter(p => !p.isSynthetic).length;
-
-    // Generate simulated viewer timeline for the graph
     if (durationMin > 0 && peakViewers > 0) {
       const points = Math.min(40, durationMin);
       for (let i = 0; i <= points; i++) {
         const progress = i / points;
         const minute = Math.round(progress * durationMin);
-        // Simulate organic curve: ramp up, peak around 40-60%, gradual decline
         let viewers;
-        if (progress < 0.15) {
-          viewers = Math.round(peakViewers * 0.1 + peakViewers * 0.5 * (progress / 0.15));
-        } else if (progress < 0.5) {
-          viewers = Math.round(peakViewers * 0.6 + peakViewers * 0.4 * ((progress - 0.15) / 0.35));
-        } else if (progress < 0.8) {
-          viewers = Math.round(peakViewers * (1 - 0.15 * ((progress - 0.5) / 0.3)));
-        } else {
-          viewers = Math.round(peakViewers * 0.85 * (1 - 0.3 * ((progress - 0.8) / 0.2)));
-        }
-        // Add jitter
+        if (progress < 0.15) viewers = Math.round(peakViewers * 0.1 + peakViewers * 0.5 * (progress / 0.15));
+        else if (progress < 0.5) viewers = Math.round(peakViewers * 0.6 + peakViewers * 0.4 * ((progress - 0.15) / 0.35));
+        else if (progress < 0.8) viewers = Math.round(peakViewers * (1 - 0.15 * ((progress - 0.5) / 0.3)));
+        else viewers = Math.round(peakViewers * 0.85 * (1 - 0.3 * ((progress - 0.8) / 0.2)));
         viewers += Math.round((Math.random() - 0.5) * peakViewers * 0.05);
-        viewers = Math.max(1, viewers);
-        viewerTimeline.push({ minute, viewers });
+        viewerTimeline.push({ minute, viewers: Math.max(1, viewers) });
       }
     }
+
+    // Country breakdown from participants
+    const countryBreakdown = {};
+    (party.participants || []).forEach(p => {
+      if (p.isSynthetic && p.country) countryBreakdown[p.country] = (countryBreakdown[p.country] || 0) + 1;
+    });
 
     res.json({
       ok: true,
       party: {
-        _id: party._id,
-        title: party.title,
-        description: party.description,
-        status: party.status,
-        host: party.host,
-        coverImage: party.coverImage,
-        videoSource: { type: party.videoSource?.type, url: party.videoSource?.url },
-        privacy: party.privacy,
-        createdAt: party.createdAt,
-        startedAt,
+        _id: party._id, title: party.title, description: party.description,
+        status: party.status, host: party.host, coverImage: party.coverImage,
+        videoSource: { type: party.videoSource?.type }, privacy: party.privacy,
+        createdAt: party.createdAt, startedAt,
         endedAt: party.status === 'ended' ? endedAt : null,
       },
       stats: {
-        durationMinutes: durationMin,
-        peakViewers,
-        totalViews: party.totalViews || 0,
-        realParticipants,
-        boostedViewers: boosted,
-        syntheticViews: synthetic,
-        totalBoostedEver,
+        durationMinutes: durationMin, peakViewers, totalViews,
+        boostedViewers: boosted, totalBoostedEver,
         shareCount: party.shareCount || 0,
-        chatMessageCount: chatMessages.length,
-        uniqueChatters,
-        guestMessages,
-        syntheticMessages,
+        chatMessageCount: chatMessages.length, uniqueChatters,
         reactionCount: reactions.length,
         publishedToFeed: party.publishedToFeed || false,
       },
       charts: {
-        viewerTimeline,
-        chatTimeline,
-        topReactions,
+        viewerTimeline, chatTimeline, topReactions,
         countryBreakdown: Object.entries(countryBreakdown).sort((a, b) => b[1] - a[1]).slice(0, 15).map(([country, count]) => ({ country, count })),
       }
     });
-  } catch (err) { console.error('Analytics error:', err); res.status(500).json({ error: 'Failed to fetch analytics' }); }
+  } catch (err) { console.error('Analytics error:', err); res.status(500).json({ error: 'Failed' }); }
 });
 
 module.exports = router;
