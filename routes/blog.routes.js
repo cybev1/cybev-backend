@@ -700,6 +700,79 @@ router.post('/:id/view', async (req, res) => {
   }
 });
 
+// POST /:id/share - Track social share
+router.post('/:id/share', async (req, res) => {
+  try {
+    const Blog = getBlog();
+    const { id } = req.params;
+    const { platform = 'copy' } = req.body;
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ ok: false, error: 'Invalid ID' });
+    const update = { $inc: { 'shares.total': 1 } };
+    if (['twitter', 'facebook', 'linkedin', 'whatsapp', 'telegram', 'copy'].includes(platform)) {
+      update.$inc[`shares.platforms.${platform}`] = 1;
+    }
+    const blog = await Blog.findByIdAndUpdate(id, update, { new: true }).select('shares');
+    if (!blog) return res.status(404).json({ ok: false, error: 'Not found' });
+    res.json({ ok: true, shares: blog.shares });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: 'Failed to track share' });
+  }
+});
+
+// GET /feed/rss - RSS feed for Google News, aggregators, podcasts
+router.get('/feed/rss', async (req, res) => {
+  try {
+    const Blog = getBlog();
+    const SITE_URL = process.env.SITE_URL || process.env.FRONTEND_URL || 'https://cybev.io';
+    const blogs = await Blog.find({ status: 'published', isDeleted: { $ne: true } })
+      .populate('author', 'name username')
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .select('title slug excerpt content author featuredImage tags category createdAt updatedAt seo')
+      .lean();
+
+    const items = blogs.map(b => {
+      const link = b.slug ? `${SITE_URL}/blog/${b.slug}` : `${SITE_URL}/blog/${b._id}`;
+      const desc = b.seo?.metaDescription || b.excerpt || (b.content || '').replace(/<[^>]*>/g, '').substring(0, 300);
+      return `    <item>
+      <title><![CDATA[${b.title}]]></title>
+      <link>${link}</link>
+      <guid isPermaLink="true">${link}</guid>
+      <description><![CDATA[${desc}]]></description>
+      <pubDate>${new Date(b.createdAt).toUTCString()}</pubDate>
+      <author>${b.author?.name || b.author?.username || 'CYBEV User'}</author>
+      ${(b.tags || []).map(t => `<category>${t}</category>`).join('\n      ')}
+      ${b.featuredImage ? `<enclosure url="${b.featuredImage}" type="image/jpeg" />` : ''}
+    </item>`;
+    }).join('\n');
+
+    const rss = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>CYBEV — Where Creators Connect</title>
+    <link>${SITE_URL}</link>
+    <description>Latest articles, blogs, and content from creators on CYBEV — the global social platform for creators, ministries, and communities.</description>
+    <language>en</language>
+    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
+    <atom:link href="${SITE_URL}/api/blogs/feed/rss" rel="self" type="application/rss+xml" />
+    <image>
+      <url>${SITE_URL}/logo.png</url>
+      <title>CYBEV</title>
+      <link>${SITE_URL}</link>
+    </image>
+${items}
+  </channel>
+</rss>`;
+
+    res.set('Content-Type', 'application/rss+xml; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=3600');
+    res.send(rss);
+  } catch (err) {
+    console.error('RSS error:', err);
+    res.status(500).send('Failed to generate RSS');
+  }
+});
+
 // ==========================================
 // GET /:id - Get blog by ID (MUST BE LAST!)
 // ==========================================
