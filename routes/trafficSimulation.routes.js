@@ -1,7 +1,6 @@
 // ============================================
 // FILE: routes/trafficSimulation.routes.js
-// CYBEV Traffic Simulation — Admin API
-// VERSION: 1.0
+// CYBEV Traffic Simulation v2.0 — Admin API + Live Analytics
 // ============================================
 const express = require('express');
 const router = express.Router();
@@ -14,92 +13,78 @@ catch { auth = (req, res, next) => { const t = req.headers.authorization?.replac
 if (!isAdmin) isAdmin = (req, res, next) => { if (req.user?.role === 'admin' || req.user?.isAdmin) return next(); res.status(403).json({ error: 'Admin only' }); };
 
 let trafficService;
-try { trafficService = require('../services/trafficSimulation.service'); } catch (e) { console.log('⚠️ Traffic simulation service not loaded:', e.message); }
+try { trafficService = require('../services/trafficSimulation.service'); } catch (e) { console.log('⚠️ Traffic service not loaded:', e.message); }
 
-// GET /api/traffic/status — Check proxy and cron status
+// GET /api/traffic/status — Proxy status + config
 router.get('/status', auth, isAdmin, async (req, res) => {
   try {
-    const proxyConfig = trafficService?.getProxyConfig?.();
+    const proxy = trafficService?.getProxyConfig?.();
     res.json({
       success: true,
-      proxyConfigured: !!proxyConfig,
-      proxyHost: proxyConfig?.host || 'Not configured',
-      envVars: {
-        BRIGHTDATA_HOST: !!process.env.BRIGHTDATA_HOST,
-        BRIGHTDATA_USERNAME: !!process.env.BRIGHTDATA_USERNAME,
-        BRIGHTDATA_PASSWORD: !!process.env.BRIGHTDATA_PASSWORD,
-      }
+      proxyConfigured: !!proxy,
+      proxyHost: proxy ? `${proxy.host}:${proxy.port}` : 'Not configured',
     });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// POST /api/traffic/run — Run a traffic simulation batch (fire-and-forget)
+// GET /api/traffic/live — Live analytics (poll this every 2-3 seconds while running)
+router.get('/live', auth, isAdmin, async (req, res) => {
+  try {
+    if (!trafficService) return res.json({ success: true, stats: null });
+    res.json({ success: true, stats: trafficService.getLiveStats() });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/traffic/run — Start simulation batch
 router.post('/run', auth, isAdmin, async (req, res) => {
   try {
     if (!trafficService) return res.status(500).json({ error: 'Traffic service not loaded' });
+    const { articlesCount = 10, visitsPerArticle = 3, concurrency = 15, targetCategory, targetBlogIds } = req.body;
 
-    const {
-      articlesCount = 10,
-      visitsPerArticle = 3,
-      targetCategory,
-      targetBlogIds,
-      useProxy = true
-    } = req.body;
+    // Check if already running
+    const live = trafficService.getLiveStats();
+    if (live.isRunning) {
+      return res.status(409).json({ success: false, error: 'Simulation already running', progress: live.progress });
+    }
+
+    const totalSessions = articlesCount * visitsPerArticle;
+    const estSeconds = Math.ceil(totalSessions / concurrency * 1.5);
 
     res.json({
       success: true,
-      message: `Traffic simulation started: ${articlesCount} articles × ${visitsPerArticle} visits`,
-      estimatedTime: `${articlesCount * visitsPerArticle * 10}s`
+      message: `Started: ${totalSessions} sessions (${concurrency} concurrent)`,
+      estimatedTime: `${Math.ceil(estSeconds / 60)} min`,
+      totalSessions
     });
 
-    // Run in background
-    trafficService.runTrafficSimulation({
-      articlesCount,
-      visitsPerArticle,
-      targetCategory,
-      targetBlogIds,
-      useProxy
-    }).then(result => {
-      console.log('🚗 Traffic batch result:', JSON.stringify(result.stats || {}));
-    }).catch(e => {
-      console.error('🚗 Traffic batch error:', e.message);
-    });
+    trafficService.runTrafficSimulation({ articlesCount, visitsPerArticle, concurrency, targetCategory, targetBlogIds })
+      .catch(e => console.error('Traffic error:', e.message));
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// POST /api/traffic/cron/start — Start automatic traffic cron
-router.post('/cron/start', auth, isAdmin, async (req, res) => {
-  try {
-    if (!trafficService) return res.status(500).json({ error: 'Traffic service not loaded' });
-    const { intervalMinutes = 60 } = req.body;
-    trafficService.startTrafficCron(intervalMinutes);
-    res.json({ success: true, message: `Traffic cron started (every ${intervalMinutes} min)` });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-// POST /api/traffic/cron/stop — Stop automatic traffic cron
-router.post('/cron/stop', auth, isAdmin, async (req, res) => {
-  try {
-    if (!trafficService) return res.status(500).json({ error: 'Traffic service not loaded' });
-    trafficService.stopTrafficCron();
-    res.json({ success: true, message: 'Traffic cron stopped' });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-// POST /api/traffic/test — Test proxy connection
+// POST /api/traffic/test — Test proxy
 router.post('/test', auth, isAdmin, async (req, res) => {
   try {
-    if (!trafficService) return res.status(500).json({ error: 'Traffic service not loaded' });
+    if (!trafficService) return res.status(500).json({ error: 'Not loaded' });
     const result = await trafficService.visitPage('https://httpbin.org/ip');
-    res.json({
-      success: true,
-      proxyWorking: result.success,
-      status: result.status,
-      elapsed: result.elapsed + 'ms',
-      error: result.error || null
-    });
+    res.json({ success: true, proxyWorking: result.success, status: result.status, elapsed: result.elapsed + 'ms', error: result.error || null });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-console.log('🚗 Traffic simulation routes loaded');
+// POST /api/traffic/cron/start
+router.post('/cron/start', auth, isAdmin, async (req, res) => {
+  try {
+    if (!trafficService) return res.status(500).json({ error: 'Not loaded' });
+    trafficService.startTrafficCron(req.body?.intervalMinutes || 60);
+    res.json({ success: true, message: `Cron started (every ${req.body?.intervalMinutes || 60} min)` });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// POST /api/traffic/cron/stop
+router.post('/cron/stop', auth, isAdmin, async (req, res) => {
+  try { trafficService?.stopTrafficCron(); res.json({ success: true }); }
+  catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+console.log('🚗 Traffic simulation routes v2.0 loaded');
 module.exports = router;
