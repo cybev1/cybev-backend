@@ -157,6 +157,63 @@ if (!MONGODB_URI) {
       } catch (err) {
         console.log('⚠️ Auto-Blog processor not started:', err.message);
       }
+
+      // Register SEO Campaign model
+      try {
+        require('./models/seoCampaign.model');
+        console.log('🔍 SEO Campaign model registered');
+      } catch (err) {
+        console.log('⚠️ SEO Campaign model not loaded:', err.message);
+      }
+
+      // Stream cleanup cron — kill abandoned streams every 15 minutes
+      try {
+        const LiveStream = require('./models/livestream.model');
+        const Blog = require('./models/blog.model');
+        setInterval(async () => {
+          try {
+            const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+            // End stuck streams older than 2 hours
+            const staleStreams = await LiveStream.find({
+              status: { $in: ['preparing', 'live'] },
+              $or: [
+                { createdAt: { $lt: twoHoursAgo } },
+                { startedAt: { $lt: twoHoursAgo } }
+              ]
+            });
+            if (staleStreams.length > 0) {
+              const staleIds = staleStreams.map(s => s._id);
+              await LiveStream.updateMany(
+                { _id: { $in: staleIds } },
+                { $set: { status: 'ended', isActive: false, endedAt: new Date(), endReason: 'cron-cleanup' } }
+              );
+              // Clean up orphaned live blog posts
+              const feedPostIds = staleStreams.map(s => s.feedPostId).filter(Boolean);
+              if (feedPostIds.length) {
+                await Blog.updateMany(
+                  { _id: { $in: feedPostIds } },
+                  { $set: { isDeleted: true, deletedAt: new Date() } }
+                );
+              }
+              // Also soft-delete blogs by title pattern
+              await Blog.updateMany(
+                {
+                  title: { $regex: /^🔴 LIVE:/ },
+                  createdAt: { $lt: twoHoursAgo },
+                  isDeleted: { $ne: true }
+                },
+                { $set: { isDeleted: true, deletedAt: new Date() } }
+              );
+              console.log(`🧹 Cron: cleaned ${staleStreams.length} abandoned streams + feed posts`);
+            }
+          } catch (e) {
+            console.log('Stream cleanup cron error:', e.message);
+          }
+        }, 15 * 60 * 1000); // Every 15 minutes
+        console.log('🧹 Stream cleanup cron started (every 15 min)');
+      } catch (err) {
+        console.log('⚠️ Stream cleanup cron not started:', err.message);
+      }
     })
     .catch(err => console.error('❌ MongoDB error:', err.message));
 }
