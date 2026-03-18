@@ -104,6 +104,56 @@ const blogSchema = new mongoose.Schema({
     default: null
   },
 
+  // ─── Livestream Integration ───
+  contentType: {
+    type: String,
+    enum: ['blog', 'live', 'watch_party', 'vlog', null],
+    default: null
+  },
+  liveStreamId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LiveStream',
+    default: null,
+    index: true
+  },
+  streamId: {
+    type: mongoose.Schema.Types.ObjectId,
+    default: null
+  },
+  isLive: {
+    type: Boolean,
+    default: false
+  },
+  streamData: {
+    streamId: String,
+    playbackId: String,
+    rtmpUrl: String,
+    isLive: Boolean
+  },
+  postType: {
+    type: String,
+    default: null
+  },
+  isPublished: {
+    type: Boolean,
+    default: false
+  },
+  authorProfilePicture: String,
+  authorId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null
+  },
+
+  // ─── SEO Data ───
+  seoData: {
+    keyword: String,
+    metaDescription: String,
+    faqSchema: String,
+    readabilityScore: String,
+    keywordDensity: String
+  },
+
   // Comments count (denormalized for performance)
   commentsCount: {
     type: Number,
@@ -152,6 +202,8 @@ blogSchema.index({ category: 1 });
 blogSchema.index({ tags: 1 });
 blogSchema.index({ isPinned: 1, author: 1 });
 blogSchema.index({ slug: 1 });
+blogSchema.index({ contentType: 1, isDeleted: 1 });
+blogSchema.index({ liveStreamId: 1 });
 
 // Auto-generate slug from title on save
 blogSchema.pre('save', async function(next) {
