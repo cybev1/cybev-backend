@@ -19,22 +19,31 @@ const SITE_URL = process.env.SITE_URL || 'https://cybev.io';
 const API_URL = process.env.API_URL || 'https://api.cybev.io';
 
 // ─── Brightdata Proxy Config ───
-// Set these in Railway env vars:
-//   BRIGHTDATA_HOST=brd.superproxy.io
-//   BRIGHTDATA_PORT=22225
-//   BRIGHTDATA_USERNAME=brd-customer-XXXX-zone-residential
-//   BRIGHTDATA_PASSWORD=XXXX
+// Supports two formats:
+//   BRIGHTDATA_ENDPOINT=brd.superproxy.io:33335 (host:port)
+//   Or separate: BRIGHTDATA_HOST + BRIGHTDATA_PORT
 function getProxyConfig() {
-  const host = process.env.BRIGHTDATA_HOST || 'brd.superproxy.io';
-  const port = process.env.BRIGHTDATA_PORT || '22225';
   const username = process.env.BRIGHTDATA_USERNAME;
   const password = process.env.BRIGHTDATA_PASSWORD;
 
   if (!username || !password) return null;
 
+  let host = 'brd.superproxy.io';
+  let port = 33335;
+
+  // Parse BRIGHTDATA_ENDPOINT if provided (format: host:port)
+  if (process.env.BRIGHTDATA_ENDPOINT) {
+    const parts = process.env.BRIGHTDATA_ENDPOINT.split(':');
+    host = parts[0];
+    port = parseInt(parts[1]) || 33335;
+  } else {
+    host = process.env.BRIGHTDATA_HOST || 'brd.superproxy.io';
+    port = parseInt(process.env.BRIGHTDATA_PORT || '33335');
+  }
+
   return {
     host,
-    port: parseInt(port),
+    port,
     auth: { username, password },
     protocol: 'http'
   };
