@@ -1357,6 +1357,9 @@ const routes = [
   // Auto-Blog campaign management
   ['auto-blog', '/api/auto-blog', './routes/autoBlog.routes'],
 
+  // User Auto-Blog (regular users)
+  ['user-auto-blog', '/api/user-auto-blog', './routes/userAutoBlog.routes'],
+
   // AI Content Studio
   ['ai-content', '/api/ai-content', './routes/aiContent.routes'],
   
