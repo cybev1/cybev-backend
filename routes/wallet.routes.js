@@ -146,9 +146,18 @@ router.post('/fund', verifyToken, async (req, res) => {
     // Create pending transaction
     let wallet = await Wallet.findOne({ user: userId });
     if (!wallet) wallet = await Wallet.create({ user: userId });
+
+    // Calculate USD equivalent for display
+    const rates = { USD: 1, GHS: 16, NGN: 1600, KES: 155 };
+    const rate = rates[currency] || 1;
+    const usdEquiv = currency === 'USD' ? amount : Math.round((amount / rate) * 100) / 100;
+    const desc = currency === 'USD' 
+      ? `Funding $${amount} via card` 
+      : `Funded $${usdEquiv.toFixed(2)} via ${currency} (${amount.toLocaleString()} ${currency})`;
+
     wallet.transactions.push({
-      type: 'FUND_FLUTTERWAVE', currency: 'USD', amount,
-      description: `Funding $${amount} via ${paymentMethod}`,
+      type: 'FUND_FLUTTERWAVE', currency: 'USD', amount: usdEquiv,
+      description: desc,
       reference: payment.reference || payment.tx_ref,
       status: 'pending'
     });
@@ -671,6 +680,128 @@ router.post('/webhook/flutterwave', async (req, res) => {
     console.error('Flutterwave webhook error:', err);
     res.status(200).json({ message: 'Error but acknowledged' });
   }
+});
+
+
+// ═══════════════════════════════════════════
+//  ADMIN: Manual Fund/Credit Management
+// ═══════════════════════════════════════════
+
+const requireAdmin = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id || req.user._id);
+    if (!user || (user.role !== 'admin' && !user.isAdmin)) return res.status(403).json({ error: 'Admin access required' });
+    next();
+  } catch { return res.status(500).json({ error: 'Auth check failed' }); }
+};
+
+// POST /admin/adjust — Add or deduct USD/credits from any user
+router.post('/admin/adjust', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { userId, type, amount, reason } = req.body;
+    // type: 'add_usd', 'deduct_usd', 'add_credits', 'deduct_credits'
+    if (!userId || !type || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'userId, type, amount (>0), and reason required' });
+    }
+
+    let wallet = await Wallet.findOne({ user: userId });
+    if (!wallet) wallet = await Wallet.create({ user: userId });
+
+    const adminUser = await User.findById(req.user.id).select('name username');
+    const adminName = adminUser?.name || adminUser?.username || 'Admin';
+    const desc = `${reason || 'Admin adjustment'} (by ${adminName})`;
+
+    switch (type) {
+      case 'add_usd':
+        wallet.usdBalance += amount;
+        wallet.totalFunded = (wallet.totalFunded || 0) + amount;
+        wallet.transactions.push({
+          type: 'ADMIN_CREDIT', currency: 'USD', amount,
+          description: `Admin: +$${amount.toFixed(2)} — ${desc}`,
+          reference: `admin-${Date.now()}`, status: 'completed'
+        });
+        break;
+      case 'deduct_usd':
+        if (wallet.usdBalance < amount) return res.status(400).json({ error: `User only has $${wallet.usdBalance.toFixed(2)}` });
+        wallet.usdBalance -= amount;
+        wallet.transactions.push({
+          type: 'ADMIN_DEBIT', currency: 'USD', amount: -amount,
+          description: `Admin: -$${amount.toFixed(2)} — ${desc}`,
+          reference: `admin-${Date.now()}`, status: 'completed'
+        });
+        break;
+      case 'add_credits':
+        wallet.credits += amount;
+        wallet.totalCreditsEarned = (wallet.totalCreditsEarned || 0) + amount;
+        wallet.balance = wallet.credits;
+        wallet.transactions.push({
+          type: 'ADMIN_CREDIT', currency: 'CREDITS', amount,
+          description: `Admin: +${amount} credits — ${desc}`,
+          reference: `admin-${Date.now()}`, status: 'completed'
+        });
+        break;
+      case 'deduct_credits':
+        if (wallet.credits < amount) return res.status(400).json({ error: `User only has ${wallet.credits} credits` });
+        wallet.credits -= amount;
+        wallet.balance = wallet.credits;
+        wallet.transactions.push({
+          type: 'ADMIN_DEBIT', currency: 'CREDITS', amount: -amount,
+          description: `Admin: -${amount} credits — ${desc}`,
+          reference: `admin-${Date.now()}`, status: 'completed'
+        });
+        break;
+      default:
+        return res.status(400).json({ error: 'Invalid type. Use: add_usd, deduct_usd, add_credits, deduct_credits' });
+    }
+
+    await wallet.save();
+    const targetUser = await User.findById(userId).select('name username email');
+    console.log(`💰 Admin ${adminName} adjusted ${targetUser?.username || userId}: ${type} ${amount} — ${reason}`);
+
+    res.json({
+      ok: true,
+      message: `${type.replace('_', ' ')} of ${amount} applied to ${targetUser?.username || userId}`,
+      wallet: { usdBalance: wallet.usdBalance, credits: wallet.credits }
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /admin/user-wallet/:userId — View any user's wallet
+router.get('/admin/user-wallet/:userId', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const wallet = await Wallet.findOne({ user: req.params.userId }).lean();
+    const user = await User.findById(req.params.userId).select('name username email avatar');
+    if (!wallet) return res.json({ ok: true, wallet: { usdBalance: 0, credits: 0 }, user });
+    res.json({ ok: true, wallet, user });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /admin/set-plan — Manually set user's plan
+router.post('/admin/set-plan', verifyToken, requireAdmin, async (req, res) => {
+  try {
+    const { userId, plan } = req.body;
+    const plans = Wallet.PLANS || {};
+    if (!plans[plan]) return res.status(400).json({ error: 'Invalid plan', available: Object.keys(plans) });
+
+    let wallet = await Wallet.findOne({ user: userId });
+    if (!wallet) wallet = await Wallet.create({ user: userId });
+
+    const now = new Date();
+    const expiresAt = new Date(now); expiresAt.setMonth(expiresAt.getMonth() + 1);
+    wallet.subscription = { plan, status: 'active', startedAt: now, expiresAt, autoRenew: false };
+    if (plans[plan].monthlyCredits) {
+      wallet.credits += plans[plan].monthlyCredits;
+      wallet.balance = wallet.credits;
+    }
+    wallet.transactions.push({
+      type: 'ADMIN_PLAN', currency: 'USD', amount: 0,
+      description: `Admin: Plan set to ${plans[plan].name}`,
+      reference: `admin-plan-${Date.now()}`, status: 'completed'
+    });
+    await wallet.save();
+
+    res.json({ ok: true, message: `Plan set to ${plans[plan].name}`, wallet: { subscription: wallet.subscription } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 module.exports = router;
