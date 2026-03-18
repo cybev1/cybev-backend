@@ -94,6 +94,7 @@ router.get('/', optionalAuth, async (req, res) => {
 
     // Build query for public/published blogs
     const query = {
+      isDeleted: { $ne: true },
       $or: [
         { status: 'published' },
         { status: 'public' },
