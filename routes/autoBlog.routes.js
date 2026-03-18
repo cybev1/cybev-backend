@@ -88,30 +88,30 @@ router.post('/campaigns/:id/toggle', verifyToken, requireAdmin, async (req, res)
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /campaigns/:id/run-now — Trigger immediate generation
+// POST /campaigns/:id/run-now — Trigger immediate generation (fire-and-forget)
 router.post('/campaigns/:id/run-now', verifyToken, requireAdmin, async (req, res) => {
   try {
     const AutoBlogCampaign = mongoose.model('AutoBlogCampaign');
     const campaign = await AutoBlogCampaign.findById(req.params.id);
     if (!campaign) return res.status(404).json({ error: 'Not found' });
 
-    // Temporarily force current hour into posting hours so it runs
     const autoBlogProcessor = require('../cron/auto-blog-processor');
     
     // Override posting hours temporarily
-    const origHours = campaign.postingHours;
+    const origHours = [...campaign.postingHours];
     campaign.postingHours = [new Date().getHours()];
     await campaign.save();
     
-    // Run processor
-    await autoBlogProcessor.runNow();
-    
-    // Restore original hours
-    await AutoBlogCampaign.findByIdAndUpdate(campaign._id, { postingHours: origHours });
-    
-    // Reload for updated stats
-    const updated = await AutoBlogCampaign.findById(campaign._id).lean();
-    res.json({ ok: true, message: 'Generation triggered', campaign: updated });
+    // Respond immediately — generation runs in background
+    res.json({ ok: true, message: `Generating ${campaign.articlesPerDay} articles in background. Check back in a few minutes.` });
+
+    // Run in background (don't await)
+    autoBlogProcessor.runNow()
+      .then(() => AutoBlogCampaign.findByIdAndUpdate(campaign._id, { postingHours: origHours }))
+      .catch(err => {
+        console.error('Run-now background error:', err.message);
+        AutoBlogCampaign.findByIdAndUpdate(campaign._id, { postingHours: origHours }).catch(() => {});
+      });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
