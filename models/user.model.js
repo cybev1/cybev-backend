@@ -483,7 +483,16 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
     index: true
-  }
+  },
+
+  // SEO Command Center — persistent social channels
+  seoSocialChannels: [{
+    platform: { type: String, enum: ['youtube', 'facebook', 'instagram', 'tiktok', 'twitter', 'linkedin', 'website', 'podcast'] },
+    url: String,
+    handle: String,
+    promotionStyle: { type: String, enum: ['subtle', 'moderate', 'aggressive'], default: 'moderate' },
+    enabled: { type: Boolean, default: true }
+  }]
   
 }, {
   timestamps: true
