@@ -150,7 +150,7 @@ async function processAutoBlogCampaigns() {
         }
 
         try {
-          const wordCount = campaign.articleLength === 'short' ? '400-600' : campaign.articleLength === 'long' ? '1200-1800' : '700-1000';
+          const wordCount = campaign.articleLength === 'short' ? '500-700' : campaign.articleLength === 'long' ? '1200-1800' : '800-1100';
           const authorName = author.displayName || author.name || author.username;
 
           let socialSection = '';
@@ -169,19 +169,41 @@ async function processAutoBlogCampaigns() {
           }
 
           const seoInstruction = campaign.includeSEO
-            ? `\nOptimize for SEO: include relevant keywords naturally, use ## subheadings with keyword-rich text, write a compelling meta description.`
+            ? `\nOptimize for SEO: include relevant keywords naturally 2-3 times, use ## subheadings with keyword-rich text.`
             : '';
+
+          // Humanized writing styles to rotate
+          const writingStyles = [
+            'Start with a personal anecdote or a bold question that hooks the reader.',
+            'Open with a surprising statistic or little-known fact.',
+            'Begin with a short story or real-world scenario the reader can relate to.',
+            'Start with a bold controversial opinion, then back it up with evidence.',
+            'Open with "Let me tell you something..." or a direct address to the reader.',
+          ];
+          const style = writingStyles[Math.floor(Math.random() * writingStyles.length)];
 
           const content = await generateAI(
             `Write a ${wordCount} word blog article about "${topic}" in the ${category} category.
-Use a ${tone} tone. Write naturally as a real person, not generic AI.
-Include 3-5 ## subheadings. Use short paragraphs. Be engaging and informative.
-Don't include the title — start directly with the content.${seoInstruction}${socialSection}
-At the very end, return these on separate lines:
-META_TITLE: (SEO title, max 60 chars)
-META_DESC: (meta description, max 155 chars)
+
+WRITING STYLE:
+- ${style}
+- Use a ${tone} tone. Write like a real human blogger — use contractions, ask rhetorical questions, share opinions.
+- Include personal touches like "I've found that...", "Here's what most people miss...", "Let's be honest..."
+- Vary paragraph lengths — some short (1-2 sentences), some longer.
+- Use **bold** for key phrases. Include a numbered list or bullet points where natural.
+- End with a thought-provoking conclusion or call-to-action.
+
+STRUCTURE:
+- 4-6 ## subheadings that are creative (not generic like "Introduction" or "Conclusion")
+- Don't include the main title — start directly with content.
+- Between sections, add image placeholders: [IMAGE: descriptive search query]
+- Add 2-3 image placeholders throughout the article.${seoInstruction}${socialSection}
+
+At the very end, on separate lines:
+META_TITLE: (compelling SEO title, max 60 chars)
+META_DESC: (meta description that makes people click, max 155 chars)
 KEYWORDS: (5-8 comma-separated keywords)`,
-            `You are ${authorName}, a ${niche} content creator on CYBEV.io. Write with personality and expertise. Your writing should be unique, not generic.`
+            `You are ${authorName}, a passionate ${niche} blogger on CYBEV.io. You write with personality, humor, and expertise. You share real insights, not generic advice. Your voice is distinctive — readers recognize your style. You occasionally reference trending topics, pop culture, or personal experiences. Never use phrases like "In conclusion", "In today's world", "In this article we will explore", or "It's important to note". Be original.`
           );
 
           if (!content) { failed++; continue; }
@@ -203,6 +225,24 @@ KEYWORDS: (5-8 comma-separated keywords)`,
 
           if (!metaDesc) metaDesc = articleContent.replace(/<[^>]*>/g, '').replace(/[#*\n]/g, ' ').substring(0, 155).trim();
           if (!keywords.length) keywords = topic.toLowerCase().split(' ').filter(w => w.length > 3).slice(0, 5);
+
+          // Replace [IMAGE: query] placeholders with real Pexels images
+          if (campaign.includeImages) {
+            const imgMatches = articleContent.match(/\[IMAGE:\s*([^\]]+)\]/gi) || [];
+            for (const match of imgMatches) {
+              const query = match.replace(/\[IMAGE:\s*/i, '').replace(/\]$/, '').trim();
+              const imgUrl = await getImage(query);
+              if (imgUrl) {
+                articleContent = articleContent.replace(match,
+                  `\n\n![${query}](${imgUrl})\n\n`);
+              } else {
+                articleContent = articleContent.replace(match, '');
+              }
+            }
+          } else {
+            // Remove image placeholders if images disabled
+            articleContent = articleContent.replace(/\[IMAGE:[^\]]*\]/gi, '');
+          }
 
           // Get featured image
           let featuredImage = '';
