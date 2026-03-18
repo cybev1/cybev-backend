@@ -60,7 +60,7 @@ const walletSchema = new mongoose.Schema({
 
   // ─── Subscription ───
   subscription: {
-    plan: { type: String, enum: ['free', 'pro', 'business', 'enterprise'], default: 'free' },
+    plan: { type: String, enum: ['free', 'starter', 'pro', 'business', 'enterprise'], default: 'free' },
     status: { type: String, enum: ['active', 'canceled', 'expired', 'past_due'], default: 'active' },
     startedAt: { type: Date },
     expiresAt: { type: Date },
@@ -95,30 +95,82 @@ walletSchema.statics.PLANS = {
     name: 'Free',
     price: 0,
     monthlyCredits: 50,
-    features: ['Basic content creation', '50 credits/month', 'Community access'],
-    limits: { aiVideo: 0, aiMusic: 2, aiGraphics: 5, boosts: 0 }
+    features: [
+      'Unlimited blog posts', '3 AI articles/month', 'Auto-Blog: 1 article/week',
+      'Host watch parties (unlimited viewers)', 'Boost: pay-as-you-go ($1/1K)',
+      'Full analytics & SEO tools', 'Social media scheduling',
+      'All church/organization features', 'AI Studio: 2 videos, 5 songs, 10 images/month',
+      'Email campaigns: 100 contacts', '50 credits/month'
+    ],
+    limits: {
+      aiArticles: 3, autoBlogPerWeek: 1, autoBlogPerDay: 0,
+      aiVideo: 2, aiMusic: 5, aiGraphics: 10,
+      emailContacts: 100, boostIncluded: 0,
+      websites: 1, watchPartyMaxBoost: 5000
+    }
+  },
+  starter: {
+    name: 'Starter',
+    price: 4.99,
+    monthlyCredits: 500,
+    features: [
+      'Unlimited blog posts', '15 AI articles/month', 'Auto-Blog: 3 articles/day',
+      'Host watch parties (unlimited viewers)', 'Boost: 5K included + pay-as-you-go',
+      'Full analytics & SEO tools', 'Social media scheduling',
+      'All church/organization features', 'AI Studio: 10 videos, 30 songs, 100 images/month',
+      'Email campaigns: 1K contacts', '500 credits/month', '7-day free trial'
+    ],
+    limits: {
+      aiArticles: 15, autoBlogPerWeek: -1, autoBlogPerDay: 3,
+      aiVideo: 10, aiMusic: 30, aiGraphics: 100,
+      emailContacts: 1000, boostIncluded: 5000,
+      websites: 3, watchPartyMaxBoost: 10000
+    }
   },
   pro: {
     name: 'Pro',
-    price: 4.99,
-    monthlyCredits: 500,
-    features: ['AI Studio access', '500 credits/month', 'Analytics dashboard', 'Custom domain', 'Priority support'],
-    limits: { aiVideo: 10, aiMusic: 30, aiGraphics: 100, boosts: 5 }
+    price: 14.99,
+    monthlyCredits: 2000,
+    features: [
+      'Unlimited blog posts', '50 AI articles/month', 'Auto-Blog: 10 articles/day',
+      'Host watch parties (unlimited viewers)', 'Boost: 20K included + pay-as-you-go',
+      'Full analytics & SEO tools', 'Social media scheduling',
+      'All church/organization features', 'AI Studio: 50 videos, 100 songs, 500 images/month',
+      'Email campaigns: 10K contacts', '2,000 credits/month', '14-day free trial'
+    ],
+    limits: {
+      aiArticles: 50, autoBlogPerWeek: -1, autoBlogPerDay: 10,
+      aiVideo: 50, aiMusic: 100, aiGraphics: 500,
+      emailContacts: 10000, boostIncluded: 20000,
+      websites: 10, watchPartyMaxBoost: 50000
+    }
   },
   business: {
     name: 'Business',
-    price: 14.99,
-    monthlyCredits: 2000,
-    features: ['Unlimited AI Studio', '2,000 credits/month', 'Advanced analytics', 'Team management', 'API access', 'White-label'],
-    limits: { aiVideo: 50, aiMusic: 100, aiGraphics: 500, boosts: 20 }
-  },
-  enterprise: {
-    name: 'Enterprise',
     price: 49.99,
     monthlyCredits: 10000,
-    features: ['Everything in Business', '10,000 credits/month', 'Dedicated support', 'Custom integrations', 'SLA guarantee', 'Unlimited everything'],
-    limits: { aiVideo: -1, aiMusic: -1, aiGraphics: -1, boosts: -1 } // -1 = unlimited
+    features: [
+      'Unlimited blog posts', 'Unlimited AI articles', 'Auto-Blog: 30 articles/day',
+      'Host watch parties (unlimited viewers)', 'Boost: 100K included + pay-as-you-go',
+      'Full analytics & SEO tools', 'Social media scheduling',
+      'All church/organization features', 'AI Studio: unlimited',
+      'Email campaigns: unlimited contacts', '10,000 credits/month',
+      'Priority support', 'White-label options', 'API access'
+    ],
+    limits: {
+      aiArticles: -1, autoBlogPerWeek: -1, autoBlogPerDay: 30,
+      aiVideo: -1, aiMusic: -1, aiGraphics: -1,
+      emailContacts: -1, boostIncluded: 100000,
+      websites: -1, watchPartyMaxBoost: -1
+    }
   }
+};
+
+// Boost pricing — pay-as-you-go
+walletSchema.statics.BOOST_PRICING = {
+  pricePerThousand: 1.00,  // $1 per 1,000 viewers
+  minimumPurchase: 1000,   // min 1K viewers
+  creditRate: 100,         // or 100 credits per 1K viewers
 };
 
 walletSchema.statics.EARNING_RATES = {
