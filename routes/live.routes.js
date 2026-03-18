@@ -1373,6 +1373,74 @@ router.get('/:streamId/status', async (req, res) => {
   }
 });
 
+// ==========================================
+// POST /api/live/admin/cleanup-all — Platform-wide cleanup (admin only)
+// Ends ALL abandoned streams and removes their feed posts
+// ==========================================
+router.post('/admin/cleanup-all', verifyToken, async (req, res) => {
+  try {
+    if (req.user?.role !== 'admin' && !req.user?.isAdmin) {
+      return res.status(403).json({ success: false, error: 'Admin only' });
+    }
+
+    const maxAge = req.body.maxAgeHours || 2;
+    const cutoff = new Date(Date.now() - maxAge * 60 * 60 * 1000);
+
+    // Find all stuck streams
+    const staleStreams = await LiveStream.find({
+      status: { $in: ['preparing', 'live'] },
+      $or: [
+        { createdAt: { $lt: cutoff } },
+        { startedAt: { $lt: cutoff } }
+      ]
+    });
+
+    const streamIds = staleStreams.map(s => s._id);
+    const feedPostIds = staleStreams.map(s => s.feedPostId).filter(Boolean);
+
+    // End all stuck streams
+    const streamResult = await LiveStream.updateMany(
+      { _id: { $in: streamIds } },
+      { $set: { status: 'ended', isActive: false, endedAt: new Date(), endReason: 'admin-cleanup' } }
+    );
+
+    // Soft-delete their feed posts
+    let blogResult = { modifiedCount: 0 };
+    try {
+      let Blog;
+      try { Blog = require('../models/blog.model'); } catch { Blog = mongoose.model('Blog'); }
+      
+      // Delete by feedPostId + by LIVE title pattern
+      blogResult = await Blog.updateMany(
+        {
+          $or: [
+            { _id: { $in: feedPostIds } },
+            { liveStreamId: { $in: streamIds } },
+            { streamId: { $in: streamIds } },
+            { title: { $regex: /^🔴 LIVE:/ }, createdAt: { $lt: cutoff } }
+          ],
+          isDeleted: { $ne: true }
+        },
+        { $set: { isDeleted: true, deletedAt: new Date() } }
+      );
+    } catch (e) {
+      console.log('Blog cleanup error:', e.message);
+    }
+
+    console.log(`🧹 Admin cleanup: ${streamResult.modifiedCount} streams ended, ${blogResult.modifiedCount} blog posts removed`);
+
+    res.json({
+      success: true,
+      streamsEnded: streamResult.modifiedCount,
+      blogPostsRemoved: blogResult.modifiedCount,
+      totalStaleFound: staleStreams.length
+    });
+  } catch (error) {
+    console.error('Admin cleanup error:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 console.log('✅ Live routes loaded (with /streams, /active, /status, thumbnail & feed support)');
 
 module.exports = router;
