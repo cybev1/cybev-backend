@@ -347,7 +347,7 @@ router.post('/withdraw', verifyToken, async (req, res) => {
 
 router.post('/subscribe', verifyToken, async (req, res) => {
   try {
-    const { plan } = req.body;
+    const { plan, currency = 'USD' } = req.body;
     const plans = Wallet.PLANS || {};
     if (!plans[plan]) return res.status(400).json({ error: 'Invalid plan', available: Object.keys(plans) });
     if (plan === 'free') return res.status(400).json({ error: 'Use /cancel to downgrade to free' });
@@ -357,21 +357,26 @@ router.post('/subscribe', verifyToken, async (req, res) => {
     if (!wallet) wallet = await Wallet.create({ user: userId });
 
     const planData = plans[plan];
-    const price = planData.price;
+    const priceUSD = planData.price;
 
-    // Check USD balance
-    if (wallet.usdBalance < price) {
-      // Not enough USD — try to initiate payment
+    // Convert price to user's currency
+    const rates = { USD: 1, GHS: 16, NGN: 1600, KES: 155 };
+    const rate = rates[currency] || 1;
+    const localPrice = Math.ceil(priceUSD * rate * 100) / 100; // round up to 2 decimals
+
+    // Check USD balance first
+    if (wallet.usdBalance < priceUSD) {
+      // Not enough USD — initiate payment in user's currency
       if (paymentService) {
         const user = await User.findById(userId).select('email name username');
         const payment = await paymentService.initializePayment('flutterwave', {
-          amount: price,
-          currency: 'USD',
+          amount: localPrice,
+          currency: currency,
           email: user.email,
           name: user.name || user.username,
           userId,
           type: 'subscription',
-          metadata: { plan, userId },
+          metadata: { plan, userId, originalPriceUSD: priceUSD, currency },
           redirectUrl: `${FRONTEND_URL}/wallet?subscribed=${plan}`
         });
         return res.json({
@@ -379,10 +384,10 @@ router.post('/subscribe', verifyToken, async (req, res) => {
           needsPayment: true,
           paymentLink: payment.paymentUrl || payment.link,
           reference: payment.reference,
-          message: `Insufficient balance. Pay $${price} to subscribe to ${planData.name}.`
+          message: `Pay ${currency === 'USD' ? '$' : ''}${localPrice} ${currency} to subscribe to ${planData.name}.`
         });
       }
-      return res.status(400).json({ error: `Insufficient balance. Need $${price}, have $${wallet.usdBalance.toFixed(2)}. Fund your wallet first.` });
+      return res.status(400).json({ error: `Insufficient balance. Need $${priceUSD}, have $${wallet.usdBalance.toFixed(2)}. Fund your wallet first.` });
     }
 
     // Deduct and activate
