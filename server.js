@@ -214,6 +214,18 @@ if (!MONGODB_URI) {
       } catch (err) {
         console.log('⚠️ Stream cleanup cron not started:', err.message);
       }
+
+      // Start traffic simulation cron if Brightdata is configured
+      try {
+        const trafficService = require('./services/trafficSimulation.service');
+        if (trafficService.getProxyConfig()) {
+          trafficService.startTrafficCron(90); // Every 90 minutes
+        } else {
+          console.log('🚗 Traffic sim: Set BRIGHTDATA_USERNAME + BRIGHTDATA_PASSWORD to enable');
+        }
+      } catch (err) {
+        console.log('⚠️ Traffic simulation not started:', err.message);
+      }
     })
     .catch(err => console.error('❌ MongoDB error:', err.message));
 }
@@ -1410,6 +1422,7 @@ const routes = [
   
   // SEO meta tags and social previews
   ['seo', '/api/seo', './routes/seo.routes'],
+  ['traffic', '/api/traffic', './routes/trafficSimulation.routes'],
 
   // Auto-Blog campaign management
   ['auto-blog', '/api/auto-blog', './routes/autoBlog.routes'],
