@@ -84,7 +84,7 @@ router.autoFollowAdmins = autoFollowAdmins;
 router.getMustFollowAccounts = getMustFollowAccounts;
 
 async function getSpecialUsers(count) {
-  return mongoose.model('User').aggregate([{ $match: { isSynthetic: true, status: 'active' } }, { $sample: { size: Math.min(count, 1000) } }, { $project: { _id: 1, name: 1, username: 1, avatar: 1 } }]);
+  return mongoose.model('User').aggregate([{ $match: { isSynthetic: true, status: 'active' } }, { $sample: { size: count } }, { $project: { _id: 1, name: 1, username: 1, avatar: 1 } }]);
 }
 
 // GET /stats
@@ -140,7 +140,7 @@ router.post('/generate', verifyToken, requireAdmin, async (req, res) => {
 router.post('/simulate-engagement', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { action = 'like', count = 50, targetId = null } = req.body;
-    const users = await getSpecialUsers(Math.min(count, 500));
+    const users = await getSpecialUsers(count);
     if (!users.length) return res.status(400).json({ error: 'No special users. Generate first.' });
     let engaged = 0, errors = 0;
 
@@ -217,7 +217,7 @@ router.post('/simulate-engagement', verifyToken, requireAdmin, async (req, res) 
 router.post('/generate-articles', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { count = 5, topics = [], category = 'general' } = req.body;
-    const n = Math.min(count, 20);
+    const n = count;
     let Blog; try { Blog = mongoose.model('Blog'); } catch { Blog = require('../models/blog.model'); }
     const authors = await getSpecialUsers(n);
     if (!authors.length) return res.status(400).json({ error: 'No special users. Generate first.' });
@@ -263,7 +263,7 @@ router.post('/generate-posts', verifyToken, requireAdmin, async (req, res) => {
   try {
     const { count = 10 } = req.body;
     let Blog; try { Blog = mongoose.model('Blog'); } catch { Blog = require('../models/blog.model'); }
-    const authors = await getSpecialUsers(Math.min(count, 50));
+    const authors = await getSpecialUsers(count);
     if (!authors.length) return res.status(400).json({ error: 'No special users.' });
     const POSTS = [
       'Just had an amazing day! Life is beautiful 🌟','Working on something exciting! 🚀','Grateful for this community! 🙏',
@@ -276,7 +276,7 @@ router.post('/generate-posts', verifyToken, requireAdmin, async (req, res) => {
       'Happy to connect with everyone here on CYBEV!','The future is digital 🌐','Just celebrated a milestone! 🎊',
     ];
     let created = 0;
-    for (let i = 0; i < Math.min(count, 50); i++) {
+    for (let i = 0; i < count; i++) {
       try {
         const a = authors[i % authors.length]; const c = POSTS[Math.floor(Math.random() * POSTS.length)];
         await Blog.create({ title: c.substring(0, 60), content: c, author: a._id, authorName: a.name, category: 'general', status: 'published', contentType: 'post', type: 'post', views: Math.floor(Math.random() * 100) + 5, createdAt: new Date(Date.now() - Math.floor(Math.random() * 3 * 86400000)) });
@@ -292,7 +292,7 @@ router.post('/simulate-stream-viewers', verifyToken, requireAdmin, async (req, r
   try {
     const { streamId, viewerCount = 50 } = req.body;
     if (!streamId) return res.status(400).json({ error: 'streamId required' });
-    const users = await getSpecialUsers(Math.min(viewerCount, 1000));
+    const users = await getSpecialUsers(viewerCount);
     const ids = users.map(u => u._id);
 
     // Try LiveStream first
