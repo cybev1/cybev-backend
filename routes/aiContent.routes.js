@@ -45,14 +45,14 @@ const RUNWAY_API_KEY = process.env.RUNWAY_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const SUNO_API_KEY = process.env.SUNO_API_KEY || '';
 
-// ─── Replicate model IDs ───
+// ─── Replicate model IDs (updated March 2026) ───
 const MODELS = {
-  video: 'wan-video/wan-2.1-t2v-480p',
+  video: 'wan-video/wan-2.2-t2v-fast',
   video_hq: 'wan-video/wan-2.5-t2v-fast',
-  video_i2v: 'wan-video/wan-2.1-i2v-480p',
+  video_i2v: 'wan-video/wan-2.2-i2v-fast',
   music: 'meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedbb',
   image_fast: 'black-forest-labs/flux-schnell',
-  image_quality: 'black-forest-labs/flux-dev',
+  image_quality: 'black-forest-labs/flux-1.1-pro',
 };
 
 // ─── Token costs ───
