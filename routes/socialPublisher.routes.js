@@ -122,6 +122,196 @@ try {
 }
 
 // ==========================================
+// CYBEV AUTO-PUBLISH (no external API needed)
+// ==========================================
+
+// POST /api/social-publisher/publish-to-cybev - Publish directly to CYBEV as blog or feed post
+router.post('/publish-to-cybev', auth, async (req, res) => {
+  try {
+    const { title, content, type = 'blog', hashtags, category, featuredImage, excerpt } = req.body;
+    if (!content) return res.status(400).json({ ok: false, error: 'Content is required' });
+
+    const userId = req.user.id || req.user.userId;
+
+    if (type === 'blog') {
+      const Blog = mongoose.model('Blog');
+      const User = mongoose.model('User');
+      
+      let authorName = 'CYBEV User';
+      try {
+        const user = await User.findById(userId).select('name username displayName');
+        authorName = user?.displayName || user?.name || user?.username || 'CYBEV User';
+      } catch {}
+
+      const slug = (title || 'untitled')
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') + '-' + Date.now().toString(36);
+
+      const blog = new Blog({
+        title: title || content.substring(0, 80),
+        content,
+        excerpt: excerpt || content.replace(/<[^>]*>/g, '').substring(0, 200),
+        slug,
+        author: userId,
+        user: userId,
+        userId,
+        authorName,
+        status: 'published',
+        tags: hashtags || [],
+        category: category || 'general',
+        featuredImage: featuredImage || '',
+        publishedAt: new Date(),
+        seo: {
+          metaTitle: title || content.substring(0, 60),
+          metaDescription: excerpt || content.replace(/<[^>]*>/g, '').substring(0, 155),
+          keywords: hashtags || []
+        }
+      });
+
+      await blog.save();
+      res.json({ 
+        ok: true, 
+        type: 'blog',
+        postId: blog._id, 
+        postUrl: `https://cybev.io/blog/${blog._id}`,
+        message: 'Published to CYBEV as blog post'
+      });
+    } else {
+      // Feed post — create as short blog
+      const Blog = mongoose.model('Blog');
+      const User = mongoose.model('User');
+      
+      let authorName = 'CYBEV User';
+      try {
+        const user = await User.findById(userId).select('name username displayName');
+        authorName = user?.displayName || user?.name || user?.username || 'CYBEV User';
+      } catch {}
+
+      const blog = new Blog({
+        title: content.substring(0, 80),
+        content: `<p>${content}</p>`,
+        excerpt: content.substring(0, 200),
+        slug: 'post-' + Date.now().toString(36),
+        author: userId,
+        user: userId,
+        userId,
+        authorName,
+        status: 'published',
+        tags: hashtags || [],
+        category: category || 'general',
+        featuredImage: featuredImage || '',
+        publishedAt: new Date()
+      });
+
+      await blog.save();
+      res.json({ 
+        ok: true, 
+        type: 'feed_post',
+        postId: blog._id, 
+        postUrl: `https://cybev.io/blog/${blog._id}`,
+        message: 'Published to CYBEV feed'
+      });
+    }
+  } catch (err) {
+    console.error('CYBEV publish error:', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// POST /api/social-publisher/format-for-platforms - AI formats content per platform
+router.post('/format-for-platforms', auth, async (req, res) => {
+  try {
+    const { content, title, platforms, hashtags } = req.body;
+    if (!content) return res.status(400).json({ ok: false, error: 'Content required' });
+
+    const tagStr = (hashtags || []).join(' ');
+    const link = 'https://cybev.io';
+
+    // Generate platform-specific versions
+    const formatted = {};
+
+    // Facebook — longer, storytelling, link preview friendly
+    formatted.facebook = {
+      text: `${content}\n\n${tagStr}\n\n🔗 Read more: ${link}`,
+      charLimit: 63206,
+      tips: 'Facebook favors longer posts with engagement questions. Add a link for preview card.'
+    };
+
+    // Instagram — hashtag heavy, no clickable links, CTA to bio
+    const igText = content.length > 2200 ? content.substring(0, 2150) + '...' : content;
+    formatted.instagram = {
+      text: `${igText}\n\n.\n.\n.\n${tagStr}\n\n📌 Link in bio`,
+      charLimit: 2200,
+      tips: 'Links don\'t work in IG captions. Use "link in bio". Put hashtags after dots for clean look.'
+    };
+
+    // Twitter/X — concise, thread if long
+    const tweetBase = content.length > 250 ? content.substring(0, 247) + '...' : content;
+    formatted.twitter = {
+      text: `${tweetBase}\n\n${tagStr}\n\n${link}`,
+      charLimit: 280,
+      thread: content.length > 280 ? splitIntoThread(content, hashtags, link) : null,
+      tips: 'Keep under 280 chars. For longer content, use a thread (multiple tweets).'
+    };
+
+    // YouTube — description + tags format
+    formatted.youtube = {
+      title: title || content.substring(0, 100),
+      description: `${content}\n\n🔗 Visit: ${link}\n\n📌 Subscribe for more!\n\nTags: ${(hashtags || []).join(', ')}`,
+      tags: hashtags || [],
+      tips: 'Use this as video description. First 2 lines show in search results.'
+    };
+
+    // TikTok — short hook + hashtags
+    const ttText = content.length > 150 ? content.substring(0, 147) + '...' : content;
+    formatted.tiktok = {
+      text: `${ttText} ${tagStr}`,
+      charLimit: 2200,
+      tips: 'Start with a hook. First 3 seconds matter. Hashtags help discovery.'
+    };
+
+    // LinkedIn — professional, thought-leadership
+    formatted.linkedin = {
+      text: `${content}\n\n${tagStr}\n\n💡 What are your thoughts? Drop a comment below.\n\n${link}`,
+      charLimit: 3000,
+      tips: 'LinkedIn rewards professional insights. Ask a question to boost engagement.'
+    };
+
+    // KingsChat
+    formatted.kingschat = {
+      text: `${content}\n\n${tagStr}`,
+      tips: 'Direct copy-paste. Keep it conversational and ministry-focused.'
+    };
+
+    res.json({ ok: true, formatted });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+function splitIntoThread(content, hashtags, link) {
+  const words = content.split(/\s+/);
+  const tweets = [];
+  let current = '';
+  
+  for (const word of words) {
+    if ((current + ' ' + word).length > 270) {
+      tweets.push(current.trim());
+      current = word;
+    } else {
+      current += ' ' + word;
+    }
+  }
+  if (current.trim()) tweets.push(current.trim());
+  
+  // Add numbering and link to last tweet
+  return tweets.map((t, i) => {
+    let text = `${i + 1}/${tweets.length} ${t}`;
+    if (i === tweets.length - 1) text += `\n\n${(hashtags || []).join(' ')}\n${link}`;
+    return text;
+  });
+}
+
+// ==========================================
 // PLATFORM CONNECTIONS
 // ==========================================
 
