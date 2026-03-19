@@ -42,12 +42,12 @@ async function generateAI(prompt, system = 'You are an expert content creator.')
 async function getImage(query) {
   if (!PEXELS_KEY) return '';
   try {
-    const { data } = await axios.get(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5`, {
+    const { data } = await axios.get(`https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=5&orientation=landscape`, {
       headers: { Authorization: PEXELS_KEY }, timeout: 10000
     });
     const photos = data.photos || [];
     if (!photos.length) return '';
-    return photos[Math.floor(Math.random() * photos.length)].src?.large || '';
+    return photos[Math.floor(Math.random() * photos.length)].src?.landscape || photos[0].src?.original || '';
   } catch { return ''; }
 }
 
@@ -199,11 +199,18 @@ STRUCTURE:
 - Between sections, add image placeholders: [IMAGE: descriptive search query]
 - Add 2-3 image placeholders throughout the article.${seoInstruction}${socialSection}
 
+HEADLINE RULES (for Google Discover):
+- The META_TITLE must create a curiosity gap — make people NEED to click
+- Use power words: Shocking, Secret, Surprising, Essential, Inside, Truth, Hidden
+- Numbers work: "7 Secrets...", "The 3 Things..."
+- Keep META_TITLE under 70 chars but make it irresistible
+- META_DESC should promise a payoff for reading
+
 At the very end, on separate lines:
-META_TITLE: (compelling SEO title, max 60 chars)
+META_TITLE: (irresistible curiosity-gap headline, max 70 chars — NOT generic)
 META_DESC: (meta description that makes people click, max 155 chars)
 KEYWORDS: (5-8 comma-separated keywords)`,
-            `You are ${authorName}, a passionate ${niche} blogger on CYBEV.io. You write with personality, humor, and expertise. You share real insights, not generic advice. Your voice is distinctive — readers recognize your style. You occasionally reference trending topics, pop culture, or personal experiences. Never use phrases like "In conclusion", "In today's world", "In this article we will explore", or "It's important to note". Be original.`
+            `You are ${authorName}, a passionate ${niche} blogger on CYBEV.io. You write with personality, humor, and expertise. You share real insights, not generic advice. Your voice is distinctive — readers recognize your style. You occasionally reference trending topics, pop culture, or personal experiences. Never use phrases like "In conclusion", "In today's world", "In this article we will explore", or "It's important to note". Be original. Write headlines that belong on Google Discover — catchy, specific, and impossible to scroll past.`
           );
 
           if (!content) { failed++; continue; }
