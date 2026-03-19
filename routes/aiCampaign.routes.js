@@ -38,10 +38,11 @@ const auth = authenticateToken;
 // ==========================================
 
 async function generateWithAI(prompt, systemPrompt, maxTokens = 4096) {
-  // Try DeepSeek first
+  // Try DeepSeek first (use same URL as working auto-blog-processor)
   if (process.env.DEEPSEEK_API_KEY) {
     try {
-      const resp = await axios.post('https://api.deepseek.com/v1/chat/completions', {
+      console.log('🤖 AI Campaign: Calling DeepSeek...');
+      const resp = await axios.post('https://api.deepseek.com/chat/completions', {
         model: 'deepseek-chat',
         messages: [
           { role: 'system', content: systemPrompt },
@@ -50,18 +51,25 @@ async function generateWithAI(prompt, systemPrompt, maxTokens = 4096) {
         temperature: 0.8,
         max_tokens: maxTokens
       }, {
-        headers: { 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}` },
-        timeout: 60000
+        headers: { 
+          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 90000
       });
+      console.log('🤖 AI Campaign: DeepSeek responded ✅');
       return resp.data.choices[0].message.content;
     } catch (e) {
-      console.log('DeepSeek failed, trying fallback:', e.message);
+      console.log('❌ DeepSeek failed:', e.response?.status, e.response?.data?.error?.message || e.message);
     }
+  } else {
+    console.log('⚠️ DEEPSEEK_API_KEY not set');
   }
 
   // OpenAI fallback
   if (process.env.OPENAI_API_KEY) {
     try {
+      console.log('🤖 AI Campaign: Calling OpenAI fallback...');
       const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
         model: 'gpt-4o-mini',
         messages: [
@@ -72,15 +80,18 @@ async function generateWithAI(prompt, systemPrompt, maxTokens = 4096) {
         max_tokens: maxTokens
       }, {
         headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
-        timeout: 60000
+        timeout: 90000
       });
+      console.log('🤖 AI Campaign: OpenAI responded ✅');
       return resp.data.choices[0].message.content;
     } catch (e) {
-      console.log('OpenAI failed:', e.message);
+      console.log('❌ OpenAI failed:', e.response?.status, e.response?.data?.error?.message || e.message);
     }
+  } else {
+    console.log('⚠️ OPENAI_API_KEY not set');
   }
 
-  throw new Error('No AI provider available');
+  return null; // Return null instead of throwing — caller handles fallback
 }
 
 function parseJSON(text) {
@@ -243,126 +254,105 @@ async function generateCalendarBackground(campaign) {
   console.log(`🗓️ Generating ${campaign.durationDays}-day calendar for "${campaign.name}"...`);
 
   const calendar = [];
-  const batchSize = 7; // Generate 7 days at a time
+  const batchSize = 5; // Smaller batches for reliability
   const totalDays = campaign.durationDays;
 
   for (let batchStart = 0; batchStart < totalDays; batchStart += batchSize) {
     const batchEnd = Math.min(batchStart + batchSize, totalDays);
     const daysInBatch = batchEnd - batchStart;
 
-    const systemPrompt = `You are an expert social media strategist and content planner for the "${campaign.niche}" niche.
+    const systemPrompt = `You are an expert social media strategist for the "${campaign.niche}" niche.
 Target audience: ${campaign.targetAudience || 'general audience'}
 Brand voice: ${campaign.brandVoice}
 Goals: ${campaign.goals.join(', ')}
 Platforms: ${campaign.platforms.join(', ')}
-
-RULES:
-- Each day gets ${campaign.postsPerDay} content pieces
-- Mix content types: blogs (long-form), social posts (captions), video scripts, graphics prompts, music prompts, reels
-- Make content progressive — build themes across the week
-- Include trending hooks, emotional triggers, and clear CTAs
-- Hashtags should be relevant and a mix of popular + niche
-- Graphics prompts should describe the visual in detail for AI image generation
-- Video scripts should be 30-60 second outlines
-- ALWAYS respond with ONLY valid JSON, no extra text`;
+RULES: Each day gets ${campaign.postsPerDay} content pieces. Mix types: blogs, social posts, video scripts, graphics prompts.
+ALWAYS respond with ONLY valid JSON array, no markdown, no extra text.`;
 
     const prompt = `Generate content for days ${batchStart + 1} to ${batchEnd} of a ${totalDays}-day campaign.
+Return a JSON array:
+[{"dayNumber":${batchStart + 1},"theme":"Theme","content":[{"type":"social_post","platform":"instagram","title":"Title","caption":"Caption text","hashtags":["#tag"],"mediaPrompt":"Image description","mediaType":"image","callToAction":"CTA","tone":"inspirational","scheduledTime":"09:00"}]}]
+Generate exactly ${daysInBatch} days with ${campaign.postsPerDay} pieces each. Be SPECIFIC, not generic.`;
 
-Content mix preferences: ${JSON.stringify(campaign.contentMix)}
-
-Return a JSON array where each element represents one day:
-[
-  {
-    "dayNumber": ${batchStart + 1},
-    "theme": "Day's theme",
-    "content": [
-      {
-        "type": "social_post",
-        "platform": "instagram",
-        "title": "Post title",
-        "caption": "The actual post caption text...",
-        "hashtags": ["#tag1", "#tag2"],
-        "mediaPrompt": "Detailed description for AI image generation: a vibrant...",
-        "mediaType": "image",
-        "callToAction": "Link in bio!",
-        "tone": "inspirational",
-        "scheduledTime": "09:00"
-      },
-      {
-        "type": "blog",
-        "platform": "cybev",
-        "title": "Blog Title Here",
-        "caption": "Meta description for SEO",
-        "content": "Full blog post content (3-5 paragraphs minimum)...",
-        "hashtags": ["#tag1"],
-        "seoKeywords": ["keyword1", "keyword2"],
-        "callToAction": "Subscribe for more!",
-        "tone": "educational",
-        "scheduledTime": "14:00"
-      }
-    ]
-  }
-]
-
-Generate exactly ${daysInBatch} days with ${campaign.postsPerDay} pieces each. Make content SPECIFIC, ACTIONABLE, and ENGAGING — not generic filler.`;
-
+    let days = null;
     try {
       const result = await generateWithAI(prompt, systemPrompt, 4096);
-      const days = parseJSON(result);
-
-      for (const day of days) {
-        const dayDate = new Date(campaign.startDate);
-        dayDate.setDate(dayDate.getDate() + (day.dayNumber - 1));
-
-        calendar.push({
-          dayNumber: day.dayNumber,
-          date: dayDate,
-          theme: day.theme || `Day ${day.dayNumber}`,
-          content: (day.content || []).map(piece => ({
-            type: piece.type || 'social_post',
-            platform: piece.platform || 'all',
-            title: piece.title || '',
-            caption: piece.caption || '',
-            content: piece.content || '',
-            hashtags: piece.hashtags || [],
-            mediaPrompt: piece.mediaPrompt || '',
-            mediaType: piece.mediaType || 'none',
-            seoKeywords: piece.seoKeywords || [],
-            callToAction: piece.callToAction || '',
-            tone: piece.tone || campaign.brandVoice,
-            scheduledTime: piece.scheduledTime || '09:00',
-            status: 'ready'
-          })),
-          notes: ''
-        });
+      if (result) {
+        days = parseJSON(result);
+        console.log(`  ✅ Days ${batchStart + 1}-${batchEnd} generated by AI`);
       }
-
-      console.log(`  ✅ Days ${batchStart + 1}-${batchEnd} generated`);
     } catch (err) {
-      console.error(`  ❌ Batch ${batchStart + 1}-${batchEnd} failed:`, err.message);
-      // Fill with placeholder days
+      console.error(`  ❌ AI parse error for batch ${batchStart + 1}-${batchEnd}:`, err.message);
+    }
+
+    // Template fallback if AI failed
+    if (!days || !Array.isArray(days) || days.length === 0) {
+      console.log(`  📝 Using template fallback for days ${batchStart + 1}-${batchEnd}`);
+      days = [];
+      const contentTypes = ['social_post', 'blog', 'video_script', 'graphics_prompt', 'social_post', 'reel_script'];
+      const themes = [
+        'Introduction & Brand Story', 'Value & Tips', 'Behind the Scenes', 'Community Engagement',
+        'Product/Service Highlight', 'Testimonial & Social Proof', 'Education & How-To',
+        'Trending Topic', 'Challenge & Interactive', 'Recap & Preview'
+      ];
       for (let d = batchStart; d < batchEnd; d++) {
-        const dayDate = new Date(campaign.startDate);
-        dayDate.setDate(dayDate.getDate() + d);
-        calendar.push({
+        const pieces = [];
+        for (let p = 0; p < campaign.postsPerDay; p++) {
+          pieces.push({
+            type: contentTypes[(d + p) % contentTypes.length],
+            platform: campaign.platforms[p % campaign.platforms.length] || 'cybev',
+            title: `Day ${d + 1} — ${campaign.niche} Content ${p + 1}`,
+            caption: `[Edit this] Write engaging ${campaign.brandVoice} content about ${campaign.niche} for your ${campaign.targetAudience || 'audience'}. Include a strong hook and call to action.`,
+            hashtags: [`#${campaign.niche.replace(/[^a-zA-Z]/g, '')}`, '#CYBEV', '#ContentCreator'],
+            mediaPrompt: `Professional ${campaign.niche.toLowerCase()} themed visual, ${campaign.brandVoice} style`,
+            mediaType: 'image',
+            callToAction: 'Follow for more!',
+            tone: campaign.brandVoice,
+            scheduledTime: campaign.postingTimes?.[p] || '09:00'
+          });
+        }
+        days.push({
           dayNumber: d + 1,
-          date: dayDate,
-          theme: 'Generation failed — edit manually',
-          content: [],
-          notes: `AI generation failed: ${err.message}`
+          theme: themes[d % themes.length],
+          content: pieces
         });
       }
     }
 
-    // Small delay between batches to avoid rate limits
+    for (const day of days) {
+      const dayDate = new Date(campaign.startDate);
+      dayDate.setDate(dayDate.getDate() + ((day.dayNumber || (batchStart + 1)) - 1));
+
+      calendar.push({
+        dayNumber: day.dayNumber || (batchStart + 1),
+        date: dayDate,
+        theme: day.theme || `Day ${day.dayNumber}`,
+        content: (day.content || []).map(piece => ({
+          type: piece.type || 'social_post',
+          platform: piece.platform || 'all',
+          title: piece.title || '',
+          caption: piece.caption || '',
+          content: piece.content || '',
+          hashtags: piece.hashtags || [],
+          mediaPrompt: piece.mediaPrompt || '',
+          mediaType: piece.mediaType || 'none',
+          seoKeywords: piece.seoKeywords || [],
+          callToAction: piece.callToAction || '',
+          tone: piece.tone || campaign.brandVoice,
+          scheduledTime: piece.scheduledTime || '09:00',
+          status: 'ready'
+        })),
+        notes: ''
+      });
+    }
+
+    // Delay between batches
     if (batchStart + batchSize < totalDays) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 1500));
     }
   }
 
-  // Sort by day number and save
   calendar.sort((a, b) => a.dayNumber - b.dayNumber);
-
   const totalPieces = calendar.reduce((sum, day) => sum + day.content.length, 0);
 
   await AICampaign.findByIdAndUpdate(campaign._id, {
@@ -487,6 +477,11 @@ ${req.body.instructions ? `Special instructions: ${req.body.instructions}` : ''}
 Return JSON: { "title": "...", "caption": "...", "content": "...", "hashtags": [...], "mediaPrompt": "...", "callToAction": "..." }`;
 
     const result = await generateWithAI(prompt, 'You are a creative content strategist. Respond with ONLY valid JSON.', 2048);
+    
+    if (!result) {
+      return res.status(500).json({ ok: false, error: 'AI generation failed — both providers unavailable. Check /api/ai-campaigns/test-ai' });
+    }
+    
     const parsed = parseJSON(result);
 
     piece.title = parsed.title || piece.title;
@@ -592,6 +587,58 @@ router.get('/stats/overview', auth, async (req, res) => {
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+// GET /api/ai-campaigns/test-ai - Test if AI providers are working
+router.get('/test-ai', auth, async (req, res) => {
+  const results = {
+    deepseek: { configured: !!process.env.DEEPSEEK_API_KEY, working: false },
+    openai: { configured: !!process.env.OPENAI_API_KEY, working: false }
+  };
+
+  // Test DeepSeek
+  if (process.env.DEEPSEEK_API_KEY) {
+    try {
+      const resp = await axios.post('https://api.deepseek.com/chat/completions', {
+        model: 'deepseek-chat',
+        messages: [{ role: 'user', content: 'Reply with just: OK' }],
+        max_tokens: 10
+      }, {
+        headers: { 'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
+        timeout: 15000
+      });
+      results.deepseek.working = true;
+      results.deepseek.response = resp.data.choices?.[0]?.message?.content?.substring(0, 50);
+    } catch (e) {
+      results.deepseek.error = e.response?.data?.error?.message || e.message;
+    }
+  }
+
+  // Test OpenAI
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: 'Reply with just: OK' }],
+        max_tokens: 10
+      }, {
+        headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` },
+        timeout: 15000
+      });
+      results.openai.working = true;
+      results.openai.response = resp.data.choices?.[0]?.message?.content?.substring(0, 50);
+    } catch (e) {
+      results.openai.error = e.response?.data?.error?.message || e.message;
+    }
+  }
+
+  const anyWorking = results.deepseek.working || results.openai.working;
+  res.json({ 
+    ok: true, 
+    aiAvailable: anyWorking,
+    message: anyWorking ? 'AI is working — calendar generation will use AI' : 'No AI provider working — will use template fallback',
+    providers: results 
+  });
 });
 
 module.exports = router;
