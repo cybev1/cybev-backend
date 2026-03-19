@@ -1446,6 +1446,9 @@ const routes = [
   // AI Campaign Planner + Social Publisher (v1.0)
   ['ai-campaigns', '/api/ai-campaigns', './routes/aiCampaign.routes'],
   ['social-publisher', '/api/social-publisher', './routes/socialPublisher.routes'],
+
+  // Web Stories for Google Discover
+  ['web-stories', '/api/web-stories', './routes/webStories.routes'],
   
   // Debug routes (TEMPORARY - remove after fixing)
   ['debug', '/api/debug', './routes/debug.routes']
