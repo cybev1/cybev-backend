@@ -1,7 +1,8 @@
 // ============================================
 // FILE: aiContent.routes.js
 // PATH: /routes/aiContent.routes.js
-// CYBEV AI Content Tools — PRODUCTION
+// CYBEV AI Content Tools — PRODUCTION v2.0
+// + Script Writer (DeepSeek AI → structured storyboards)
 // Primary: Replicate (video, music, images)
 // Fallback: Runway ML (video), OpenAI DALL-E (images)
 // ============================================
@@ -44,6 +45,7 @@ const replicate = new Replicate({
 const RUNWAY_API_KEY = process.env.RUNWAY_API_KEY || '';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const SUNO_API_KEY = process.env.SUNO_API_KEY || '';
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 
 // ─── Replicate model IDs (updated March 2026) ───
 const MODELS = {
@@ -65,6 +67,7 @@ const TOKEN_COSTS = {
   graphics_basic: 20,
   graphics_hd: 50,
   graphics_batch: 80,
+  script_write: 0,  // Script writing is FREE — only final generation costs
 };
 
 // ─── Helpers ───
@@ -109,20 +112,247 @@ function extractUrl(output) {
 }
 
 
+// ═══════════════════════════════════════════════════════
+//  AI SCRIPT WRITER — DeepSeek generates structured scripts
+//  FREE to use (only final generation costs credits)
+// ═══════════════════════════════════════════════════════
+
+// DeepSeek / OpenAI fallback for script generation
+async function generateScript(systemPrompt, userPrompt) {
+  const providers = [
+    { name: 'deepseek', url: 'https://api.deepseek.com/v1/chat/completions', key: DEEPSEEK_API_KEY, model: 'deepseek-chat' },
+    { name: 'openai', url: 'https://api.openai.com/v1/chat/completions', key: OPENAI_API_KEY, model: 'gpt-4o-mini' },
+  ];
+
+  for (const p of providers) {
+    if (!p.key) continue;
+    try {
+      const resp = await axios.post(p.url, {
+        model: p.model,
+        temperature: 0.8,
+        max_tokens: 4096,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        response_format: { type: 'json_object' }
+      }, {
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${p.key}` },
+        timeout: 60000
+      });
+      const text = resp.data.choices?.[0]?.message?.content;
+      if (!text) continue;
+      // Parse JSON from response (handle markdown code blocks)
+      const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
+      return JSON.parse(cleaned);
+    } catch (err) {
+      console.error(`Script generation failed with ${p.name}:`, err.message);
+      continue;
+    }
+  }
+  throw new Error('All AI providers failed for script generation');
+}
+
+
+// ─── VIDEO SCRIPT ───
+router.post('/script/video', auth, async (req, res) => {
+  try {
+    const { idea, style, duration = 30, aspectRatio = '16:9' } = req.body;
+    if (!idea || idea.trim().length < 3) return res.status(400).json({ error: 'Please provide a brief idea (at least 3 characters)' });
+
+    const sceneDuration = 5;
+    const sceneCount = Math.max(2, Math.min(24, Math.round(duration / sceneDuration)));
+
+    const systemPrompt = `You are a professional video storyboard writer for CYBEV Studio. You create detailed scene-by-scene storyboards for AI video generation.
+
+IMPORTANT: Respond with ONLY valid JSON matching this exact structure:
+{
+  "title": "string — catchy title for the video",
+  "totalDuration": ${duration},
+  "scenes": [
+    {
+      "sceneNumber": 1,
+      "duration": ${sceneDuration},
+      "visual": "string — detailed visual description of what appears on screen (2-3 sentences). Include subjects, environment, lighting, colors.",
+      "camera": "string — camera angle/movement (e.g. 'Wide establishing shot, slow pan right', 'Close-up, slight zoom in', 'Aerial drone, tracking forward')",
+      "textOverlay": "string or empty — text/caption shown on screen if any",
+      "narration": "string or empty — voiceover text if any",
+      "transition": "string — transition to next scene (Cut, Fade, Dissolve, Wipe, Zoom)"
+    }
+  ],
+  "musicSuggestion": "string — background music mood/style suggestion",
+  "targetAudience": "string — who this video is for"
+}
+
+Generate exactly ${sceneCount} scenes. Each scene should be ${sceneDuration} seconds.
+Make visuals extremely detailed and specific — these become AI generation prompts.
+${style ? `Visual style: ${style}.` : ''}
+Aspect ratio: ${aspectRatio}.`;
+
+    const userPrompt = `Create a ${duration}-second video storyboard for this idea:\n\n"${idea.trim()}"`;
+
+    const script = await generateScript(systemPrompt, userPrompt);
+
+    // Validate structure
+    if (!script.scenes || !Array.isArray(script.scenes) || script.scenes.length === 0) {
+      throw new Error('Invalid script structure returned');
+    }
+
+    res.json({
+      ok: true,
+      script,
+      meta: { sceneCount: script.scenes.length, totalDuration: duration, style, aspectRatio }
+    });
+  } catch (err) {
+    console.error('Video script error:', err.message);
+    res.status(500).json({ error: 'Failed to generate video script', details: err.message });
+  }
+});
+
+
+// ─── MUSIC SCRIPT ───
+router.post('/script/music', auth, async (req, res) => {
+  try {
+    const { idea, genre, mood, duration = 'short', instrumental = false } = req.body;
+    if (!idea || idea.trim().length < 3) return res.status(400).json({ error: 'Please provide a brief idea (at least 3 characters)' });
+
+    const isFullSong = duration === 'full';
+
+    const systemPrompt = `You are a professional songwriter and music producer for CYBEV Studio. You write detailed song scripts for AI music generation.
+
+IMPORTANT: Respond with ONLY valid JSON matching this exact structure:
+{
+  "title": "string — catchy song title",
+  "genre": "${genre || 'Based on the idea'}",
+  "mood": "${mood || 'Based on the idea'}",
+  "tempo": "string — e.g. '120 BPM, medium-fast'",
+  "key": "string — musical key e.g. 'C major' or 'A minor'",
+  "instruments": ["string array — key instruments"],
+  "sections": [
+    {
+      "type": "string — Intro/Verse 1/Pre-Chorus/Chorus/Verse 2/Bridge/Outro",
+      "duration": "string — approximate length e.g. '8 bars' or '15 seconds'",
+      ${instrumental ? '"instrumentalNotes": "string — what instruments do here, dynamics, feel"' : '"lyrics": "string — full lyrics for this section",\n      "vocalDirection": "string — how to sing it (e.g. soft and breathy, powerful belt, spoken word)"'},
+      "productionNotes": "string — arrangement, effects, energy level"
+    }
+  ],
+  "overallVibe": "string — 1-2 sentence summary of the song's feel and energy",
+  "referenceArtists": ["string array — artists with similar style (for AI guidance)"]
+}
+
+${isFullSong ? 'Create a full song with Intro, Verse 1, Pre-Chorus, Chorus, Verse 2, Bridge, Final Chorus, Outro.' : 'Create a short piece with Intro, Verse, Chorus, Outro.'}
+${genre ? `Genre: ${genre}.` : ''}
+${mood ? `Mood: ${mood}.` : ''}
+${instrumental ? 'This is an INSTRUMENTAL track — no vocals/lyrics. Focus on instrument descriptions and arrangement.' : 'Include full lyrics — make them creative, emotional, and singable.'}`;
+
+    const userPrompt = `Write a ${isFullSong ? 'full' : 'short 30-second'} ${instrumental ? 'instrumental' : 'song'} script for this idea:\n\n"${idea.trim()}"`;
+
+    const script = await generateScript(systemPrompt, userPrompt);
+
+    if (!script.sections || !Array.isArray(script.sections) || script.sections.length === 0) {
+      throw new Error('Invalid script structure returned');
+    }
+
+    res.json({
+      ok: true,
+      script,
+      meta: { sectionCount: script.sections.length, duration, genre, mood, instrumental }
+    });
+  } catch (err) {
+    console.error('Music script error:', err.message);
+    res.status(500).json({ error: 'Failed to generate music script', details: err.message });
+  }
+});
+
+
+// ─── GRAPHICS SCRIPT ───
+router.post('/script/graphics', auth, async (req, res) => {
+  try {
+    const { idea, style, size = '1024x1024' } = req.body;
+    if (!idea || idea.trim().length < 3) return res.status(400).json({ error: 'Please provide a brief idea (at least 3 characters)' });
+
+    const systemPrompt = `You are a professional graphic designer and art director for CYBEV Studio. You create detailed visual briefs for AI image generation.
+
+IMPORTANT: Respond with ONLY valid JSON matching this exact structure:
+{
+  "title": "string — descriptive title for the image",
+  "prompt": "string — highly detailed AI image generation prompt (3-5 sentences). Include subject, environment, lighting, colors, textures, composition, mood. Be extremely specific.",
+  "negativePrompt": "string — things to avoid (e.g. 'blurry, distorted, text artifacts, low quality')",
+  "style": "${style || 'Based on the idea'}",
+  "composition": {
+    "layout": "string — e.g. 'Rule of thirds, subject centered', 'Golden ratio spiral', 'Symmetrical'",
+    "foreground": "string — what's in the foreground",
+    "midground": "string — main subject area",
+    "background": "string — background elements",
+    "focusPoint": "string — where the eye should go first"
+  },
+  "colorPalette": {
+    "primary": "string — dominant color with hex",
+    "secondary": "string — secondary color with hex",
+    "accent": "string — accent color with hex",
+    "mood": "string — overall color mood (warm, cool, vibrant, muted, etc.)"
+  },
+  "textElements": [
+    {
+      "text": "string — text to include (or empty array if no text)",
+      "position": "string — where on the image",
+      "style": "string — font style/weight"
+    }
+  ],
+  "technicalNotes": "string — resolution notes, aspect ratio tips, rendering style details",
+  "variations": ["string array — 2-3 alternative prompt angles the user could try"]
+}
+
+${style ? `Art style: ${style}.` : ''}
+Size: ${size}.
+Make the prompt extremely detailed — this goes directly to an AI image generator.`;
+
+    const userPrompt = `Create a detailed visual brief for this graphic idea:\n\n"${idea.trim()}"`;
+
+    const script = await generateScript(systemPrompt, userPrompt);
+
+    if (!script.prompt) {
+      throw new Error('Invalid script structure returned');
+    }
+
+    res.json({
+      ok: true,
+      script,
+      meta: { style, size }
+    });
+  } catch (err) {
+    console.error('Graphics script error:', err.message);
+    res.status(500).json({ error: 'Failed to generate graphics script', details: err.message });
+  }
+});
+
+
 // ═══════════════════════════════════════════
 //  AI VIDEO GENERATION
 // ═══════════════════════════════════════════
 
 router.post('/video/generate', auth, async (req, res) => {
   try {
-    const { prompt, duration = 'short', style, aspectRatio = '16:9', sourceImage } = req.body;
+    const { prompt, duration = 'short', style, aspectRatio = '16:9', sourceImage, script } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
     const costKey = `video_${duration}`;
     const cost = TOKEN_COSTS[costKey] || TOKEN_COSTS.video_short;
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    const fullPrompt = style ? `${style} style. ${prompt}` : prompt;
+    // If a script was provided, compile scenes into a single rich prompt
+    let fullPrompt;
+    if (script && script.scenes && Array.isArray(script.scenes)) {
+      const sceneDescs = script.scenes.map((s, i) =>
+        `Scene ${i + 1}: ${s.visual}. Camera: ${s.camera || 'Standard'}.${s.textOverlay ? ` Text overlay: "${s.textOverlay}"` : ''}`
+      ).join(' | ');
+      fullPrompt = `${style ? `${style} style. ` : ''}${script.title || ''}: ${sceneDescs}`;
+      // Truncate to 2000 chars for model limits
+      if (fullPrompt.length > 2000) fullPrompt = fullPrompt.substring(0, 1997) + '...';
+    } else {
+      fullPrompt = style ? `${style} style. ${prompt}` : prompt;
+    }
+
     let prediction;
     let provider = 'replicate';
 
@@ -219,17 +449,40 @@ router.get('/video/status/:taskId', auth, async (req, res) => {
 
 router.post('/music/generate', auth, async (req, res) => {
   try {
-    const { prompt, genre, mood, duration = 'short', instrumental = false, lyrics } = req.body;
+    const { prompt, genre, mood, duration = 'short', instrumental = false, lyrics, script } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
     const costKey = `music_${duration}`;
     const cost = TOKEN_COSTS[costKey] || TOKEN_COSTS.music_short;
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    let fullPrompt = prompt;
-    if (genre) fullPrompt += `. Genre: ${genre}`;
-    if (mood) fullPrompt += `. Mood: ${mood}`;
-    if (instrumental) fullPrompt += '. Instrumental only, no vocals';
+    // Build prompt from script if provided
+    let fullPrompt;
+    if (script && script.sections && Array.isArray(script.sections)) {
+      const parts = [];
+      if (script.genre) parts.push(`Genre: ${script.genre}`);
+      if (script.mood) parts.push(`Mood: ${script.mood}`);
+      if (script.tempo) parts.push(`Tempo: ${script.tempo}`);
+      if (script.key) parts.push(`Key: ${script.key}`);
+      if (script.instruments) parts.push(`Instruments: ${script.instruments.join(', ')}`);
+      if (script.overallVibe) parts.push(script.overallVibe);
+
+      // Compile lyrics/sections
+      const sectionDescs = script.sections.map(s => {
+        if (s.lyrics) return `[${s.type}] ${s.lyrics}`;
+        if (s.instrumentalNotes) return `[${s.type}] ${s.instrumentalNotes}`;
+        return `[${s.type}]`;
+      }).join(' ');
+      parts.push(sectionDescs);
+
+      fullPrompt = parts.join('. ');
+      if (fullPrompt.length > 2000) fullPrompt = fullPrompt.substring(0, 1997) + '...';
+    } else {
+      fullPrompt = prompt;
+      if (genre) fullPrompt += `. Genre: ${genre}`;
+      if (mood) fullPrompt += `. Mood: ${mood}`;
+      if (instrumental) fullPrompt += '. Instrumental only, no vocals';
+    }
 
     let prediction;
     let provider = 'replicate';
@@ -254,9 +507,11 @@ router.post('/music/generate', auth, async (req, res) => {
       console.error('Replicate music failed:', primaryErr.message);
       if (SUNO_API_KEY) {
         provider = 'suno';
+        // Extract lyrics from script if available
+        const scriptLyrics = script?.sections?.filter(s => s.lyrics).map(s => `[${s.type}]\n${s.lyrics}`).join('\n\n');
         const sunoRes = await axios.post(
           `${process.env.SUNO_API_BASE_URL || 'https://api.suno.ai/v1'}/generate`,
-          { prompt: fullPrompt, make_instrumental: instrumental, custom_lyrics: lyrics || undefined },
+          { prompt: fullPrompt, make_instrumental: instrumental, custom_lyrics: scriptLyrics || lyrics || undefined },
           { headers: { 'Authorization': `Bearer ${SUNO_API_KEY}` }, timeout: 30000 }
         );
         prediction = { id: sunoRes.data.id || sunoRes.data.task_id, status: 'processing' };
@@ -269,10 +524,10 @@ router.post('/music/generate', auth, async (req, res) => {
       taskId: prediction.id,
       status: prediction.status === 'succeeded' ? 'completed' : 'processing',
       audioUrl: extractUrl(prediction.output),
-      title: `${genre || 'AI'} - ${prompt.substring(0, 40)}`,
+      title: script?.title || `${genre || 'AI'} - ${prompt.substring(0, 40)}`,
       coverArt: null,
-      genre: genre || 'Various',
-      mood: mood || 'Mixed',
+      genre: script?.genre || genre || 'Various',
+      mood: script?.mood || mood || 'Mixed',
       provider,
       tokensUsed: cost,
       remainingBalance: newBalance,
@@ -331,92 +586,106 @@ router.get('/music/status/:taskId', auth, async (req, res) => {
 
 router.post('/graphics/generate', auth, async (req, res) => {
   try {
-    const { prompt, style, size = '1024x1024', count = 1, quality = 'basic' } = req.body;
+    const { prompt, style, size = '1024x1024', count = 1, quality = 'basic', script } = req.body;
     if (!prompt) return res.status(400).json({ error: 'Prompt is required' });
 
     const costKey = count > 1 ? 'graphics_batch' : quality === 'hd' ? 'graphics_hd' : 'graphics_basic';
     const cost = TOKEN_COSTS[costKey];
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    const fullPrompt = style ? `${style} style: ${prompt}` : prompt;
-    const aspectMap = { '1024x1024': '1:1', '1792x1024': '16:9', '1024x1792': '9:16' };
-    const aspect_ratio = aspectMap[size] || '1:1';
+    // Build prompt from script if provided
+    let fullPrompt;
+    if (script && script.prompt) {
+      fullPrompt = script.prompt;
+      // Append composition details for richer prompt
+      if (script.composition) {
+        const comp = script.composition;
+        fullPrompt += `. Composition: ${comp.layout || ''}. Foreground: ${comp.foreground || ''}. Background: ${comp.background || ''}.`;
+      }
+      if (script.colorPalette?.mood) {
+        fullPrompt += ` Color mood: ${script.colorPalette.mood}.`;
+      }
+      if (script.negativePrompt) {
+        fullPrompt += ` Avoid: ${script.negativePrompt}.`;
+      }
+      if (fullPrompt.length > 2000) fullPrompt = fullPrompt.substring(0, 1997) + '...';
+    } else {
+      fullPrompt = style ? `${style} style. ${prompt}` : prompt;
+    }
 
     let images = [];
     let provider = 'replicate';
 
     try {
       // ─── PRIMARY: Replicate Flux ───
-      const modelId = quality === 'hd' ? MODELS.image_quality : MODELS.image_fast;
-      const numImages = Math.min(count, 4);
+      const model = quality === 'hd' ? MODELS.image_quality : MODELS.image_fast;
+      const [w, h] = size.split('x').map(Number);
 
-      // Run images in parallel
-      const promises = Array.from({ length: numImages }, () =>
-        replicate.run(modelId, {
+      // Generate images (Flux fast supports batch)
+      for (let i = 0; i < count; i++) {
+        const prediction = await replicate.run(model, {
           input: {
             prompt: fullPrompt,
-            aspect_ratio,
-            num_outputs: 1,
+            ...(quality === 'hd' ? { width: w, height: h } : { aspect_ratio: w > h ? '16:9' : w < h ? '9:16' : '1:1' }),
             output_format: 'webp',
-            output_quality: quality === 'hd' ? 95 : 80
+            output_quality: quality === 'hd' ? 95 : 80,
+            num_inference_steps: quality === 'hd' ? 25 : 4,
+            ...(script?.negativePrompt ? { negative_prompt: script.negativePrompt } : {})
           }
-        })
-      );
-
-      const results = await Promise.allSettled(promises);
-      images = results
-        .filter(r => r.status === 'fulfilled' && r.value)
-        .map(r => ({ url: extractUrl(r.value) }));
+        });
+        const url = extractUrl(prediction);
+        if (url) images.push({ url, index: i + 1 });
+      }
 
     } catch (primaryErr) {
-      console.error('Replicate images failed, trying OpenAI:', primaryErr.message);
+      console.error('Replicate image failed, trying OpenAI DALL-E:', primaryErr.message);
       if (!OPENAI_API_KEY) throw primaryErr;
       provider = 'openai';
 
-      // ─── FALLBACK: OpenAI DALL-E 3 ───
+      // ─── FALLBACK: OpenAI DALL-E ───
       const dalleRes = await axios.post('https://api.openai.com/v1/images/generations', {
         model: 'dall-e-3',
         prompt: fullPrompt,
         n: 1,
-        size: ['1792x1024', '1024x1792'].includes(size) ? size : '1024x1024',
-        quality: quality === 'hd' ? 'hd' : 'standard'
+        size: size === '1024x1024' ? '1024x1024' : size === '1792x1024' ? '1792x1024' : '1024x1792',
+        quality: quality === 'hd' ? 'hd' : 'standard',
+        response_format: 'url'
       }, {
-        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        timeout: 60000
       });
-      images = dalleRes.data.data.map(img => ({ url: img.url, revisedPrompt: img.revised_prompt }));
+      images = dalleRes.data.data.map((d, i) => ({ url: d.url, index: i + 1 }));
     }
 
-    if (images.length === 0) {
-      await refundTokens(req.user.id, cost);
-      return res.status(500).json({ error: 'No images were generated' });
-    }
+    if (images.length === 0) throw new Error('No images generated');
 
     res.json({
-      status: 'completed',
       images,
+      prompt: fullPrompt,
+      style: script?.style || style,
       provider,
       tokensUsed: cost,
-      remainingBalance: newBalance,
-      prompt: fullPrompt,
-      style,
-      size
+      remainingBalance: newBalance
     });
   } catch (err) {
     console.error('AI Graphics error:', err.message);
     if (err.message.includes('Insufficient tokens')) return res.status(402).json({ error: err.message });
-    try { await refundTokens(req.user.id, TOKEN_COSTS.graphics_basic); } catch {}
-    res.status(500).json({ error: 'Graphics generation failed', details: err.message });
+    try {
+      const costKey = (req.body.count || 1) > 1 ? 'graphics_batch' : (req.body.quality === 'hd' ? 'graphics_hd' : 'graphics_basic');
+      await refundTokens(req.user.id, TOKEN_COSTS[costKey]);
+    } catch {}
+    res.status(500).json({ error: 'Image generation failed', details: err.message });
   }
 });
 
 
 // ═══════════════════════════════════════════
-//  BALANCE & PROVIDER STATUS
+//  BALANCE & PROVIDERS
 // ═══════════════════════════════════════════
 
 router.get('/balance', auth, async (req, res) => {
   try {
-    const userId = req.user.id || req.user.userId;
+    const userId = req.user.id;
     let wallet;
     try { wallet = await Wallet.findOne({ user: userId }); } catch {}
     res.json({ balance: wallet?.credits || wallet?.balance || 0, costs: TOKEN_COSTS });
@@ -437,6 +706,10 @@ router.get('/providers', auth, async (req, res) => {
       openai: { configured: !!OPENAI_API_KEY, covers: ['images'] },
       suno: { configured: !!SUNO_API_KEY, covers: ['music'] }
     },
+    scriptWriter: {
+      deepseek: { configured: !!DEEPSEEK_API_KEY },
+      openai: { configured: !!OPENAI_API_KEY }
+    },
     costs: TOKEN_COSTS
   });
 });
@@ -445,6 +718,7 @@ router.get('/providers', auth, async (req, res) => {
 router.get('/test', auth, async (req, res) => {
   const results = {
     replicate: { configured: !!process.env.REPLICATE_API_TOKEN, working: false },
+    deepseek: { configured: !!DEEPSEEK_API_KEY, working: false },
     runway: { configured: !!RUNWAY_API_KEY, working: false },
     openai: { configured: !!OPENAI_API_KEY, working: false },
     suno: { configured: !!SUNO_API_KEY, working: false }
@@ -458,6 +732,22 @@ router.get('/test', auth, async (req, res) => {
       results.replicate.recentJobs = r?.results?.length || 0;
     } catch (e) {
       results.replicate.error = e.message?.substring(0, 100);
+    }
+  }
+
+  // Test DeepSeek (for Script Writer)
+  if (DEEPSEEK_API_KEY) {
+    try {
+      await axios.post('https://api.deepseek.com/v1/chat/completions', {
+        model: 'deepseek-chat', max_tokens: 10,
+        messages: [{ role: 'user', content: 'ping' }]
+      }, {
+        headers: { 'Authorization': `Bearer ${DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json' },
+        timeout: 10000
+      });
+      results.deepseek.working = true;
+    } catch (e) {
+      results.deepseek.error = e.response?.data?.error?.message || e.message?.substring(0, 100);
     }
   }
 
@@ -477,6 +767,8 @@ router.get('/test', auth, async (req, res) => {
   const summary = [];
   if (results.replicate.working) summary.push('Video ✅ Music ✅ Images ✅ (Replicate)');
   else if (results.openai.working) summary.push('Images ✅ (OpenAI DALL-E)');
+  if (results.deepseek.working) summary.push('Script Writer ✅ (DeepSeek)');
+  else if (results.openai.working) summary.push('Script Writer ✅ (OpenAI fallback)');
   if (!anyWorking) summary.push('⚠️ No providers working — add REPLICATE_API_TOKEN to Railway env vars');
 
   // Check admin status
@@ -493,7 +785,8 @@ router.get('/test', auth, async (req, res) => {
     costs: TOKEN_COSTS,
     setupGuide: !anyWorking ? {
       replicate: 'Get token at replicate.com/account/api-tokens → add REPLICATE_API_TOKEN to Railway',
-      openai: 'Get key at platform.openai.com/api-keys → add OPENAI_API_KEY to Railway (covers images via DALL-E)',
+      deepseek: 'Get key at platform.deepseek.com → add DEEPSEEK_API_KEY to Railway (Script Writer)',
+      openai: 'Get key at platform.openai.com/api-keys → add OPENAI_API_KEY to Railway (covers images via DALL-E + script fallback)',
       runway: 'Optional: runwayml.com → add RUNWAY_API_KEY (video fallback)',
       suno: 'Optional: suno.ai → add SUNO_API_KEY (music fallback)'
     } : undefined
