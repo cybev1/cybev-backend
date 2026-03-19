@@ -72,6 +72,15 @@ let Wallet;
 try { Wallet = require('../models/wallet.model'); } catch (e) { Wallet = mongoose.model('Wallet'); }
 
 async function checkAndDeductTokens(userId, cost) {
+  // Admin bypass — admins generate for free (for testing & CYBEV marketing)
+  try {
+    const user = await User.findById(userId).select('role isAdmin');
+    if (user && (user.role === 'admin' || user.isAdmin)) {
+      console.log(`🎟️ Admin bypass: skipping ${cost} credit charge for user ${userId}`);
+      return 999999;
+    }
+  } catch {}
+
   let wallet = await Wallet.findOne({ user: userId });
   if (!wallet) wallet = await Wallet.create({ user: userId, credits: 0, balance: 0 });
   if ((wallet.credits || wallet.balance || 0) < cost) {
@@ -427,7 +436,67 @@ router.get('/providers', auth, async (req, res) => {
       runway: { configured: !!RUNWAY_API_KEY, covers: ['video'] },
       openai: { configured: !!OPENAI_API_KEY, covers: ['images'] },
       suno: { configured: !!SUNO_API_KEY, covers: ['music'] }
+    },
+    costs: TOKEN_COSTS
+  });
+});
+
+// ─── Test AI providers are actually working ───
+router.get('/test', auth, async (req, res) => {
+  const results = {
+    replicate: { configured: !!process.env.REPLICATE_API_TOKEN, working: false },
+    runway: { configured: !!RUNWAY_API_KEY, working: false },
+    openai: { configured: !!OPENAI_API_KEY, working: false },
+    suno: { configured: !!SUNO_API_KEY, working: false }
+  };
+
+  // Test Replicate
+  if (process.env.REPLICATE_API_TOKEN) {
+    try {
+      const r = await replicate.predictions.list();
+      results.replicate.working = true;
+      results.replicate.recentJobs = r?.results?.length || 0;
+    } catch (e) {
+      results.replicate.error = e.message?.substring(0, 100);
     }
+  }
+
+  // Test OpenAI (for DALL-E)
+  if (OPENAI_API_KEY) {
+    try {
+      await axios.get('https://api.openai.com/v1/models', {
+        headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` }, timeout: 10000
+      });
+      results.openai.working = true;
+    } catch (e) {
+      results.openai.error = e.response?.data?.error?.message || e.message?.substring(0, 100);
+    }
+  }
+
+  const anyWorking = Object.values(results).some(r => r.working);
+  const summary = [];
+  if (results.replicate.working) summary.push('Video ✅ Music ✅ Images ✅ (Replicate)');
+  else if (results.openai.working) summary.push('Images ✅ (OpenAI DALL-E)');
+  if (!anyWorking) summary.push('⚠️ No providers working — add REPLICATE_API_TOKEN to Railway env vars');
+
+  // Check admin status
+  let isAdmin = false;
+  try { const u = await User.findById(req.user.id).select('role isAdmin'); isAdmin = u?.role === 'admin' || u?.isAdmin; } catch {}
+
+  res.json({
+    ok: true,
+    anyWorking,
+    isAdmin,
+    adminBypass: isAdmin ? 'Credits bypassed — you generate for free' : 'Normal billing applies',
+    summary: summary.join(', '),
+    providers: results,
+    costs: TOKEN_COSTS,
+    setupGuide: !anyWorking ? {
+      replicate: 'Get token at replicate.com/account/api-tokens → add REPLICATE_API_TOKEN to Railway',
+      openai: 'Get key at platform.openai.com/api-keys → add OPENAI_API_KEY to Railway (covers images via DALL-E)',
+      runway: 'Optional: runwayml.com → add RUNWAY_API_KEY (video fallback)',
+      suno: 'Optional: suno.ai → add SUNO_API_KEY (music fallback)'
+    } : undefined
   });
 });
 
