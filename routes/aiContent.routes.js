@@ -120,37 +120,104 @@ function extractUrl(output) {
 // DeepSeek / OpenAI fallback for script generation
 async function generateScript(systemPrompt, userPrompt) {
   const providers = [
-    { name: 'deepseek', url: 'https://api.deepseek.com/v1/chat/completions', key: DEEPSEEK_API_KEY, model: 'deepseek-chat' },
-    { name: 'openai', url: 'https://api.openai.com/v1/chat/completions', key: OPENAI_API_KEY, model: 'gpt-4o-mini' },
+    { name: 'deepseek', url: 'https://api.deepseek.com/v1/chat/completions', key: DEEPSEEK_API_KEY, model: 'deepseek-chat', supportsJson: true },
+    { name: 'openai', url: 'https://api.openai.com/v1/chat/completions', key: OPENAI_API_KEY, model: 'gpt-4o-mini', supportsJson: true },
   ];
 
+  const errors = [];
+
   for (const p of providers) {
-    if (!p.key) continue;
+    if (!p.key) {
+      console.log(`⚠️ Script writer: ${p.name} skipped (no API key)`);
+      continue;
+    }
     try {
-      const resp = await axios.post(p.url, {
+      console.log(`🎬 Script writer: trying ${p.name}...`);
+      const body = {
         model: p.model,
         temperature: 0.8,
         max_tokens: 4096,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
-        ],
-        response_format: { type: 'json_object' }
-      }, {
+        ]
+      };
+      // Only add response_format if provider supports it — some DeepSeek versions reject it
+      if (p.supportsJson) {
+        try {
+          body.response_format = { type: 'json_object' };
+        } catch {}
+      }
+
+      const resp = await axios.post(p.url, body, {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${p.key}` },
-        timeout: 60000
+        timeout: 90000  // 90s — DeepSeek can be slow
       });
+
       const text = resp.data.choices?.[0]?.message?.content;
-      if (!text) continue;
-      // Parse JSON from response (handle markdown code blocks)
-      const cleaned = text.replace(/```json\s*/gi, '').replace(/```\s*/g, '').trim();
-      return JSON.parse(cleaned);
+      if (!text) {
+        errors.push(`${p.name}: empty response`);
+        continue;
+      }
+
+      console.log(`✅ Script writer: ${p.name} responded (${text.length} chars)`);
+
+      // Robust JSON extraction — handle markdown blocks, leading text, etc.
+      let jsonStr = text;
+      // Strip markdown code fences
+      jsonStr = jsonStr.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+      // Try to find JSON object in response (some models add preamble)
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+      if (jsonMatch) jsonStr = jsonMatch[0];
+      jsonStr = jsonStr.trim();
+
+      const parsed = JSON.parse(jsonStr);
+      console.log(`✅ Script writer: JSON parsed successfully from ${p.name}`);
+      return parsed;
+
     } catch (err) {
-      console.error(`Script generation failed with ${p.name}:`, err.message);
+      const detail = err.response?.data?.error?.message || err.response?.data?.error || err.message;
+      console.error(`❌ Script writer: ${p.name} failed:`, detail);
+      errors.push(`${p.name}: ${detail}`);
+
+      // If it's a JSON mode error, retry WITHOUT response_format
+      if (err.response?.status === 400 && p.supportsJson) {
+        try {
+          console.log(`🔄 Script writer: retrying ${p.name} without JSON mode...`);
+          const retryResp = await axios.post(p.url, {
+            model: p.model, temperature: 0.8, max_tokens: 4096,
+            messages: [
+              { role: 'system', content: systemPrompt + '\n\nIMPORTANT: Respond with ONLY valid JSON. No markdown, no extra text.' },
+              { role: 'user', content: userPrompt }
+            ]
+          }, {
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${p.key}` },
+            timeout: 90000
+          });
+          const retryText = retryResp.data.choices?.[0]?.message?.content;
+          if (retryText) {
+            let rJson = retryText.replace(/```json\s*/gi, '').replace(/```\s*/g, '');
+            const rMatch = rJson.match(/\{[\s\S]*\}/);
+            if (rMatch) rJson = rMatch[0];
+            const retryParsed = JSON.parse(rJson.trim());
+            console.log(`✅ Script writer: retry without JSON mode succeeded for ${p.name}`);
+            return retryParsed;
+          }
+        } catch (retryErr) {
+          console.error(`❌ Script writer: ${p.name} retry also failed:`, retryErr.message);
+          errors.push(`${p.name} retry: ${retryErr.message}`);
+        }
+      }
       continue;
     }
   }
-  throw new Error('All AI providers failed for script generation');
+
+  // If no providers had keys at all, give a clear message
+  if (!DEEPSEEK_API_KEY && !OPENAI_API_KEY) {
+    throw new Error('No AI provider configured. Add DEEPSEEK_API_KEY or OPENAI_API_KEY in Railway environment variables.');
+  }
+
+  throw new Error(`All AI providers failed: ${errors.join(' | ')}`);
 }
 
 
