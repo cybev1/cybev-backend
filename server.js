@@ -158,6 +158,16 @@ if (!MONGODB_URI) {
         console.log('⚠️ Auto-Blog processor not started:', err.message);
       }
 
+      // Start social publisher processor (publishes scheduled posts)
+      try {
+        require('./models/aiCampaign.model'); // Register AI Campaign model
+        const socialPublisherProcessor = require('./cron/social-publisher-processor');
+        socialPublisherProcessor.start();
+        console.log('📤 Social Publisher processor started (every 5 min)');
+      } catch (err) {
+        console.log('⚠️ Social Publisher processor not started:', err.message);
+      }
+
       // Register SEO Campaign model
       try {
         require('./models/seoCampaign.model');
@@ -1432,6 +1442,10 @@ const routes = [
 
   // AI Content Studio
   ['ai-content', '/api/ai-content', './routes/aiContent.routes'],
+
+  // AI Campaign Planner + Social Publisher (v1.0)
+  ['ai-campaigns', '/api/ai-campaigns', './routes/aiCampaign.routes'],
+  ['social-publisher', '/api/social-publisher', './routes/socialPublisher.routes'],
   
   // Debug routes (TEMPORARY - remove after fixing)
   ['debug', '/api/debug', './routes/debug.routes']
@@ -1575,7 +1589,7 @@ app.get('/api/health', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.json({
-    message: 'CYBEV API v7.14.0 - Church Management v3 (Ministry + CE Zones)',
+    message: 'CYBEV API v7.16.0 - AI Campaign Planner + Social Publisher',
     docs: 'https://docs.cybev.io',
     health: '/api/health',
     features: [
@@ -1583,7 +1597,8 @@ app.get('/', (req, res) => {
       'feed', 'posts', 'followers', 'vlogs',
       'meet', 'social-tools', 'campaigns', 'ai-generate', 'ai-image', 
       'church', 'church-v3', 'church-ministry-selection', 'church-ce-zones',
-      'church-registration', 'forms', 'email-platform', 'automation'
+      'church-registration', 'forms', 'email-platform', 'automation',
+      'ai-campaign-planner', 'social-publisher'
     ]
   });
 });
