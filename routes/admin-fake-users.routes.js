@@ -111,7 +111,7 @@ router.post('/generate', verifyToken, requireAdmin, async (req, res) => {
   try {
     if (!FakeUserGenerator) return res.status(500).json({ error: 'Generator not loaded' });
     const { count = 100, country = null, daysBack = 365 } = req.body;
-    const n = Math.min(count, 5000);
+    const n = count;
     const gen = new FakeUserGenerator();
     const batchId = `batch_${Date.now()}`;
     const data = gen.generateBatch(n, { country: country || undefined, daysBack, batchId });
