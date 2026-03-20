@@ -134,12 +134,12 @@ router.delete('/:id', auth, async (req, res) => {
 
 router.post('/:id/characters', auth, async (req, res) => {
   try {
-    const { name, role = 'main', description, faceImageUrl, voiceId, referenceImages, referenceVideoUrl } = req.body;
+    const { name, role = 'main', description, faceImageUrl, voiceId, voiceRecordingUrl, referenceImages, referenceVideoUrl } = req.body;
     if (!name) return res.status(400).json({ error: 'Character name required' });
     const project = await MovieProject.findOne({ _id: req.params.id, user: req.user.id });
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
-    project.characters.push({ name, role, description, faceImageUrl, voiceId: voiceId || project.defaultVoiceId, referenceImages: referenceImages || [], referenceVideoUrl });
+    project.characters.push({ name, role, description, faceImageUrl, voiceId: voiceId || project.defaultVoiceId, voiceRecordingUrl, referenceImages: referenceImages || [], referenceVideoUrl });
     await project.save();
     console.log(`🎭 Character added: "${name}" (${role}) to "${project.title}"`);
     res.json({ ok: true, character: project.characters[project.characters.length - 1], characters: project.characters });
@@ -152,7 +152,7 @@ router.put('/:id/characters/:charId', auth, async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
     const char = project.characters.id(req.params.charId);
     if (!char) return res.status(404).json({ error: 'Character not found' });
-    const allowed = ['name', 'role', 'description', 'faceImageUrl', 'voiceId', 'referenceImages', 'referenceVideoUrl'];
+    const allowed = ['name', 'role', 'description', 'faceImageUrl', 'voiceId', 'voiceRecordingUrl', 'referenceImages', 'referenceVideoUrl'];
     for (const k of allowed) { if (req.body[k] !== undefined) char[k] = req.body[k]; }
     await project.save();
     res.json({ ok: true, character: char });
