@@ -232,6 +232,13 @@ router.post('/script/video', auth, async (req, res) => {
 
     const systemPrompt = `You are a professional video storyboard writer for CYBEV Studio. You create detailed scene-by-scene storyboards for AI video generation.
 
+CRITICAL RULES FOR VISUAL DESCRIPTIONS:
+- The "visual" field is sent directly to an AI video generator that CANNOT render text.
+- NEVER describe text, words, letters, titles, logos, captions, URLs, or written content in the "visual" field.
+- NEVER write things like "text appears saying..." or "title card reads..." or "logo of..." in visuals.
+- Instead, describe ONLY what the camera sees: people, environments, lighting, colors, actions, expressions.
+- If text/titles are needed, put them in "textOverlay" (these get burned on separately by software).
+
 IMPORTANT: Respond with ONLY valid JSON matching this exact structure:
 {
   "title": "string — catchy title for the video",
@@ -240,10 +247,10 @@ IMPORTANT: Respond with ONLY valid JSON matching this exact structure:
     {
       "sceneNumber": 1,
       "duration": ${sceneDuration},
-      "visual": "string — detailed visual description of what appears on screen (2-3 sentences). Include subjects, environment, lighting, colors.",
+      "visual": "string — PURE VISUAL description only (2-3 sentences). Describe people, places, lighting, colors, actions. NO text/words/logos/titles.",
       "camera": "string — camera angle/movement (e.g. 'Wide establishing shot, slow pan right', 'Close-up, slight zoom in', 'Aerial drone, tracking forward')",
-      "textOverlay": "string or empty — text/caption shown on screen if any",
-      "narration": "string or empty — voiceover text if any",
+      "textOverlay": "string or empty — clean text caption to burn on screen via software (short, max 8 words)",
+      "narration": "string — voiceover script that a narrator will SPEAK ALOUD for this scene (1-2 sentences, natural speech)",
       "transition": "string — transition to next scene (Cut, Fade, Dissolve, Wipe, Zoom)"
     }
   ],
@@ -252,7 +259,7 @@ IMPORTANT: Respond with ONLY valid JSON matching this exact structure:
 }
 
 Generate exactly ${sceneCount} scenes. Each scene should be ${sceneDuration} seconds.
-Make visuals extremely detailed and specific — these become AI generation prompts.
+Make visuals extremely detailed — describe the IMAGERY, not text. Every scene MUST have narration text (this becomes the spoken voiceover).
 ${style ? `Visual style: ${style}.` : ''}
 Aspect ratio: ${aspectRatio}.`;
 
@@ -416,7 +423,7 @@ router.post('/video/generate', auth, async (req, res) => {
 
       for (let i = 0; i < script.scenes.length; i++) {
         const scene = script.scenes[i];
-        const scenePrompt = `${style ? `${style} style. ` : ''}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}${scene.textOverlay ? `. Text on screen: "${scene.textOverlay}"` : ''}`;
+        const scenePrompt = `${style ? `${style} style. ` : ''}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}. Photorealistic quality. IMPORTANT: Do not render any text, words, letters, titles, captions, watermarks, logos, or written content anywhere in the frame. Pure visual imagery only.`;
 
         // Wait 11s between predictions (Replicate: 6 requests/min, burst of 1)
         if (i > 0) {
@@ -884,10 +891,10 @@ async function generateTTS(text, voiceId = 'nova', tmpDir) {
   try {
     const resp = await axios.post('https://api.openai.com/v1/audio/speech', {
       model: 'tts-1-hd',
-      voice: config.voice,  // Use the base OpenAI voice (onyx, nova, etc.) — no accent text
-      input: text.trim(),   // ONLY the actual narration text
+      voice: config.voice,
+      input: text.trim(),
       response_format: 'mp3',
-      speed: 1.0
+      speed: config.speed || 1.0
     }, {
       headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
       responseType: 'arraybuffer',
@@ -904,7 +911,7 @@ async function generateTTS(text, voiceId = 'nova', tmpDir) {
 
 router.post('/video/merge', auth, async (req, res) => {
   try {
-    const { videoUrls, title = 'CYBEV-video', narrations, voice = 'nova', addVoiceover = false } = req.body;
+    const { videoUrls, title = 'CYBEV-video', narrations, textOverlays, voice = 'nova', addVoiceover = false } = req.body;
     if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length < 2) {
       return res.status(400).json({ error: 'At least 2 video URLs required' });
     }
@@ -1038,12 +1045,76 @@ router.post('/video/merge', auth, async (req, res) => {
     const mergedStats = fs.statSync(mergedPath);
     console.log(`  ✅ Merged video: ${(mergedStats.size / 1024 / 1024).toFixed(1)}MB${addVoiceover ? ' (with voiceover)' : ''}`);
 
-    // 5. Upload to Cloudinary
+    // 5. Burn text overlays via ffmpeg drawtext (clean text, no AI typos)
+    let finalVideoPath = mergedPath;
+    if (textOverlays && Array.isArray(textOverlays) && textOverlays.some(t => t?.trim())) {
+      const overlaidPath = path.join(tmpDir, 'overlaid.mp4');
+      // Build drawtext filter chain: each overlay shows for its scene duration
+      const sceneDuration = 5; // seconds per scene
+      const drawtextParts = textOverlays.map((text, i) => {
+        if (!text?.trim()) return null;
+        const escaped = text.trim().replace(/'/g, "'\\''").replace(/:/g, '\\:');
+        const startT = i * sceneDuration;
+        const endT = startT + sceneDuration;
+        return `drawtext=text='${escaped}':fontsize=28:fontcolor=white:borderw=2:bordercolor=black:x=(w-text_w)/2:y=h-60:enable='between(t,${startT},${endT})'`;
+      }).filter(Boolean);
+
+      if (drawtextParts.length > 0) {
+        try {
+          const filterStr = drawtextParts.join(',');
+          execSync(
+            `ffmpeg -y -i "${mergedPath}" -vf "${filterStr}" -c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart "${overlaidPath}"`,
+            { stdio: 'ignore', timeout: 300000 }
+          );
+          finalVideoPath = overlaidPath;
+          console.log(`  📝 Text overlays burned on ${drawtextParts.length} scenes`);
+        } catch (e) {
+          console.log(`  ⚠️ Text overlay burn failed, using video without overlays:`, e.message?.substring(0, 100));
+        }
+      }
+    }
+
+    // 6. Generate thumbnails at multiple timestamps
+    const thumbnails = [];
+    try {
+      // Get video duration
+      const durationStr = execSync(
+        `ffprobe -v error -show_entries format=duration -of csv=p=0 "${finalVideoPath}"`,
+        { timeout: 10000 }
+      ).toString().trim();
+      const totalDuration = parseFloat(durationStr) || 30;
+      // Generate 4 thumbnails at 10%, 30%, 50%, 70% of video
+      const timestamps = [0.1, 0.3, 0.5, 0.7].map(p => Math.max(1, Math.floor(totalDuration * p)));
+
+      const cloudinary = require('cloudinary').v2;
+      for (let ti = 0; ti < timestamps.length; ti++) {
+        const thumbPath = path.join(tmpDir, `thumb-${ti}.jpg`);
+        try {
+          execSync(
+            `ffmpeg -y -ss ${timestamps[ti]} -i "${finalVideoPath}" -vframes 1 -q:v 2 -vf "scale=640:-1" "${thumbPath}"`,
+            { stdio: 'ignore', timeout: 15000 }
+          );
+          // Upload thumbnail to Cloudinary
+          const thumbResult = await new Promise((resolve, reject) => {
+            cloudinary.uploader.upload(thumbPath, {
+              folder: 'cybev/ai-studio/thumbnails',
+              public_id: `thumb-${title.replace(/[^a-zA-Z0-9-]/g, '-').substring(0, 30)}-${ti}-${Date.now()}`,
+            }, (err, result) => err ? reject(err) : resolve(result));
+          });
+          thumbnails.push({ url: thumbResult.secure_url, timestamp: timestamps[ti] });
+        } catch {}
+      }
+      if (thumbnails.length) console.log(`  🖼️ Generated ${thumbnails.length} thumbnails`);
+    } catch (e) {
+      console.log(`  ⚠️ Thumbnail generation skipped:`, e.message?.substring(0, 80));
+    }
+
+    // 7. Upload final video to Cloudinary
     let cloudinaryUrl = null;
     try {
       const cloudinary = require('cloudinary').v2;
       const uploadResult = await new Promise((resolve, reject) => {
-        cloudinary.uploader.upload(mergedPath, {
+        cloudinary.uploader.upload(finalVideoPath, {
           resource_type: 'video',
           folder: 'cybev/ai-studio/merged',
           public_id: `${title.replace(/[^a-zA-Z0-9-]/g, '-').substring(0, 50)}-${Date.now()}`,
@@ -1059,7 +1130,7 @@ router.post('/video/merge', auth, async (req, res) => {
       console.error('  ❌ Cloudinary upload failed:', uploadErr.message);
     }
 
-    // 6. Cleanup
+    // 8. Cleanup
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     if (!cloudinaryUrl) {
@@ -1072,6 +1143,7 @@ router.post('/video/merge', auth, async (req, res) => {
       clipCount: normalizedPaths.length,
       hasVoiceover: addVoiceover && ttsAudioPaths.some(p => p),
       voice: addVoiceover ? voice : null,
+      thumbnails,
       title
     });
   } catch (err) {
@@ -1127,6 +1199,14 @@ const VOICE_CONFIG = {
   'onyx-epic':      { provider: 'openai', voice: 'onyx',    label: 'Titan',    accent: 'Epic',          gender: 'Male',   accentHint: 'Speak in a thunderous, epic, dramatic movie trailer narrator voice. Deep, powerful, commanding attention. Short punchy phrases. ' },
   'onyx-ng-deep':   { provider: 'openai', voice: 'onyx',    label: 'Obinna',   accent: 'Nigerian Deep', gender: 'Male',   accentHint: 'Speak in a deep, authoritative Nigerian English narrator voice with Igbo-influenced gravitas. Documentary style, commanding. ' },
   'onyx-za-deep':   { provider: 'openai', voice: 'onyx',    label: 'Mandla',   accent: 'SA Deep',       gender: 'Male',   accentHint: 'Speak in a deep, resonant South African English narrator voice with Zulu-influenced depth. Like a wildlife documentary. ' },
+  // Children's voices
+  'shimmer-child':  { provider: 'openai', voice: 'shimmer', label: 'Lily',     accent: 'Child',         gender: 'Girl',   accentHint: 'Speak in a cheerful, bright, young girl voice full of excitement and wonder. Like a 9 year old telling a story. ', speed: 1.1 },
+  'nova-child':     { provider: 'openai', voice: 'nova',    label: 'Zara',     accent: 'Child',         gender: 'Girl',   accentHint: 'Speak in a sweet, curious, enthusiastic young girl voice. Like an animated cartoon character. Energetic and fun. ', speed: 1.1 },
+  'alloy-child':    { provider: 'openai', voice: 'alloy',   label: 'Sam',      accent: 'Child',         gender: 'Neutral', accentHint: 'Speak in a playful, youthful, energetic kid voice. Like a young explorer discovering something amazing. ', speed: 1.15 },
+  'echo-child':     { provider: 'openai', voice: 'echo',    label: 'Max',      accent: 'Child',         gender: 'Boy',    accentHint: 'Speak in a bright, enthusiastic young boy voice full of energy. Like a kid telling his friends about an adventure. ', speed: 1.1 },
+  'fable-child':    { provider: 'openai', voice: 'fable',   label: 'Oliver',   accent: 'Child British', gender: 'Boy',    accentHint: 'Speak in a polite, curious young British boy voice. Like a child narrator in a storybook. ', speed: 1.1 },
+  'nova-child-ng':  { provider: 'openai', voice: 'nova',    label: 'Amaka',    accent: 'Child Nigerian', gender: 'Girl',  accentHint: 'Speak in a cheerful young Nigerian girl voice with natural warmth and excitement. ', speed: 1.1 },
+  'echo-child-gh':  { provider: 'openai', voice: 'echo',    label: 'Kofi',     accent: 'Child Ghanaian', gender: 'Boy',   accentHint: 'Speak in a bright, happy young Ghanaian boy voice full of curiosity. ', speed: 1.1 },
 };
 
 // Preview cache (in-memory, cleared on restart)
