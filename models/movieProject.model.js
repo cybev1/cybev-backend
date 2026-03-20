@@ -59,7 +59,7 @@ const movieProjectSchema = new mongoose.Schema({
   // Project info
   title: { type: String, required: true },
   type: { type: String, enum: ['movie', 'series', 'short'], default: 'short' },
-  genre: { type: String, default: 'drama' }, // drama, comedy, action, documentary, horror, sci-fi, romance, thriller, animation, faith
+  genre: { type: [String], default: ['drama'] }, // supports multiple genres
   logline: { type: String, default: '' }, // One-line pitch
   synopsis: { type: String, default: '' }, // Full synopsis
   style: { type: String, default: 'Cinematic' },
