@@ -914,7 +914,9 @@ router.post('/video/merge', auth, async (req, res) => {
     const {
       videoUrls, title = 'CYBEV-video', narrations, textOverlays,
       voice = 'nova', addVoiceover = false,
-      autoCaptions = false, textStyle = 'dynamic'  // textStyle: 'dynamic' | 'minimal' | 'bold' | 'cinematic'
+      autoCaptions = false, textStyle = 'dynamic',
+      logoUrl, logoPosition = 'top-right', logoSize = 80, logoOpacity = 0.8,
+      introImageUrl, outroImageUrl, introDuration = 3, outroDuration = 3
     } = req.body;
     if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length < 2) {
       return res.status(400).json({ error: 'At least 2 video URLs required' });
@@ -1136,6 +1138,96 @@ router.post('/video/merge', auth, async (req, res) => {
       }
     }
 
+    // 5b. Logo watermark overlay
+    if (logoUrl) {
+      const logoPath = path.join(tmpDir, 'logo.png');
+      try {
+        const logoResp = await axios({ url: logoUrl, responseType: 'arraybuffer', timeout: 30000 });
+        fs.writeFileSync(logoPath, logoResp.data);
+        const logoOverlaidPath = path.join(tmpDir, 'logo-overlaid.mp4');
+        // Position mapping
+        const positions = {
+          'top-left': `x=20:y=20`,
+          'top-right': `x=main_w-overlay_w-20:y=20`,
+          'bottom-left': `x=20:y=main_h-overlay_h-20`,
+          'bottom-right': `x=main_w-overlay_w-20:y=main_h-overlay_h-20`,
+          'center': `x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2`
+        };
+        const pos = positions[logoPosition] || positions['top-right'];
+        const opacity = Math.min(1, Math.max(0.1, logoOpacity));
+        execSync(
+          `ffmpeg -y -i "${finalVideoPath}" -i "${logoPath}" -filter_complex "[1:v]scale=${logoSize}:-1,format=rgba,colorchannelmixer=aa=${opacity}[logo];[0:v][logo]overlay=${pos}" -c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart "${logoOverlaidPath}"`,
+          { stdio: 'ignore', timeout: 300000 }
+        );
+        finalVideoPath = logoOverlaidPath;
+        console.log(`  🏷️ Logo watermark added (${logoPosition}, ${logoSize}px, ${opacity * 100}% opacity)`);
+      } catch (e) {
+        console.log(`  ⚠️ Logo overlay failed:`, e.message?.substring(0, 100));
+      }
+    }
+
+    // 5c. Intro/Outro image slides (if provided)
+    if (introImageUrl || outroImageUrl) {
+      const parts = [];
+
+      // Build intro clip from image
+      if (introImageUrl) {
+        const introImgPath = path.join(tmpDir, 'intro-img.jpg');
+        const introClipPath = path.join(tmpDir, 'intro-clip.ts');
+        try {
+          const iResp = await axios({ url: introImageUrl, responseType: 'arraybuffer', timeout: 30000 });
+          fs.writeFileSync(introImgPath, iResp.data);
+          execSync(
+            `ffmpeg -y -loop 1 -i "${introImgPath}" -f lavfi -i anullsrc=r=44100:cl=stereo -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -t ${introDuration} -shortest -f mpegts "${introClipPath}"`,
+            { stdio: 'ignore', timeout: 60000 }
+          );
+          parts.push(introClipPath);
+          console.log(`  🎬 Intro image slide added (${introDuration}s)`);
+        } catch (e) { console.log(`  ⚠️ Intro image failed:`, e.message?.substring(0, 80)); }
+      }
+
+      // Re-encode main video to .ts for concat
+      const mainTsPath = path.join(tmpDir, 'main-for-concat.ts');
+      try {
+        execSync(
+          `ffmpeg -y -i "${finalVideoPath}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -f mpegts "${mainTsPath}"`,
+          { stdio: 'ignore', timeout: 300000 }
+        );
+        parts.push(mainTsPath);
+      } catch {
+        parts.push(null); // will skip concat
+      }
+
+      // Build outro clip from image
+      if (outroImageUrl) {
+        const outroImgPath = path.join(tmpDir, 'outro-img.jpg');
+        const outroClipPath = path.join(tmpDir, 'outro-clip.ts');
+        try {
+          const oResp = await axios({ url: outroImageUrl, responseType: 'arraybuffer', timeout: 30000 });
+          fs.writeFileSync(outroImgPath, oResp.data);
+          execSync(
+            `ffmpeg -y -loop 1 -i "${outroImgPath}" -f lavfi -i anullsrc=r=44100:cl=stereo -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -t ${outroDuration} -shortest -f mpegts "${outroClipPath}"`,
+            { stdio: 'ignore', timeout: 60000 }
+          );
+          parts.push(outroClipPath);
+          console.log(`  🎬 Outro image slide added (${outroDuration}s)`);
+        } catch (e) { console.log(`  ⚠️ Outro image failed:`, e.message?.substring(0, 80)); }
+      }
+
+      // Concat intro + main + outro
+      const validParts = parts.filter(Boolean);
+      if (validParts.length > 1) {
+        const withIntroOutroPath = path.join(tmpDir, 'with-intro-outro.mp4');
+        try {
+          execSync(
+            `ffmpeg -y -i "concat:${validParts.join('|')}" -c:v libx264 -preset fast -crf 23 -c:a aac -movflags +faststart "${withIntroOutroPath}"`,
+            { stdio: 'ignore', timeout: 300000 }
+          );
+          finalVideoPath = withIntroOutroPath;
+        } catch {}
+      }
+    }
+
     // 6. Generate thumbnails at multiple timestamps
     const thumbnails = [];
     try {
@@ -1269,6 +1361,16 @@ const VOICE_CONFIG = {
   'fable-child':    { provider: 'openai', voice: 'fable',   label: 'Oliver',   accent: 'Child British', gender: 'Boy',    accentHint: 'Speak in a polite, curious young British boy voice. Like a child narrator in a storybook. ', speed: 1.1 },
   'nova-child-ng':  { provider: 'openai', voice: 'nova',    label: 'Amaka',    accent: 'Child Nigerian', gender: 'Girl',  accentHint: 'Speak in a cheerful young Nigerian girl voice with natural warmth and excitement. ', speed: 1.1 },
   'echo-child-gh':  { provider: 'openai', voice: 'echo',    label: 'Kofi',     accent: 'Child Ghanaian', gender: 'Boy',   accentHint: 'Speak in a bright, happy young Ghanaian boy voice full of curiosity. ', speed: 1.1 },
+  // Enthusiastic & Happy voices
+  'nova-happy':     { provider: 'openai', voice: 'nova',    label: 'Joy',      accent: 'Happy',         gender: 'Female', accentHint: 'Speak with infectious enthusiasm, bright energy, and a big smile in your voice! Upbeat and exciting! ', speed: 1.05 },
+  'shimmer-happy':  { provider: 'openai', voice: 'shimmer', label: 'Sunny',    accent: 'Cheerful',      gender: 'Female', accentHint: 'Speak with warm cheerful energy, like sharing the best news ever! Light and joyful! ', speed: 1.05 },
+  'echo-happy':     { provider: 'openai', voice: 'echo',    label: 'Blaze',    accent: 'Energetic',     gender: 'Male',   accentHint: 'Speak with high energy and enthusiasm like a sports commentator celebrating a goal! Pumped up! ', speed: 1.08 },
+  'alloy-happy':    { provider: 'openai', voice: 'alloy',   label: 'Spark',    accent: 'Upbeat',        gender: 'Neutral', accentHint: 'Speak with bright positive energy, like a motivational speaker at their peak! Inspiring! ', speed: 1.05 },
+  'fable-happy':    { provider: 'openai', voice: 'fable',   label: 'Winston',  accent: 'British Happy', gender: 'Male',   accentHint: 'Speak with charming British enthusiasm, witty and delightfully energetic! ', speed: 1.05 },
+  'nova-hype':      { provider: 'openai', voice: 'nova',    label: 'Hype',     accent: 'Hype',          gender: 'Female', accentHint: 'Speak like an excited product launch host! Maximum energy, every word matters! ', speed: 1.1 },
+  'echo-motivate':  { provider: 'openai', voice: 'echo',    label: 'Coach',    accent: 'Motivational',  gender: 'Male',   accentHint: 'Speak like a passionate life coach delivering a breakthrough moment! Powerful and uplifting! ', speed: 1.03 },
+  'nova-ng-happy':  { provider: 'openai', voice: 'nova',    label: 'Chioma',   accent: 'Nigerian Happy', gender: 'Female', accentHint: 'Speak with joyful Nigerian energy and warm Igbo-influenced excitement! ', speed: 1.05 },
+  'echo-gh-happy':  { provider: 'openai', voice: 'echo',    label: 'Yaw',      accent: 'Ghanaian Happy', gender: 'Male',   accentHint: 'Speak with enthusiastic Ghanaian energy and vibrant Akan-influenced warmth! ', speed: 1.05 },
 };
 
 // Preview cache (in-memory, cleared on restart)
