@@ -12,6 +12,7 @@ const characterSchema = new mongoose.Schema({
   description: { type: String, default: '' },
   faceImageUrl: { type: String, default: '' }, // User-uploaded face photo
   voiceId: { type: String, default: 'nova' },  // TTS voice for this character
+  voiceRecordingUrl: { type: String, default: '' }, // Uploaded voice recording (used instead of TTS)
   referenceImages: [String], // Additional reference images
   referenceVideoUrl: { type: String, default: '' }, // Short video reference
 }, { _id: true });
