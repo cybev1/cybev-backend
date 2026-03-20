@@ -296,8 +296,8 @@ Generate exactly ${sceneCount} scenes (${ep.duration}s total). Make it compellin
       throw new Error('Invalid script structure');
     }
 
-    // Map script scenes to episode scenes
-    ep.scenes = script.scenes.map((s, i) => ({
+    // Map script scenes to episode scenes — use atomic update to avoid version conflicts
+    const newScenes = script.scenes.map((s, i) => ({
       sceneNumber: i + 1,
       duration: s.duration || sceneDuration,
       visual: s.visual || '',
@@ -309,14 +309,25 @@ Generate exactly ${sceneCount} scenes (${ep.duration}s total). Make it compellin
       transition: s.transition || 'Cut',
       status: 'draft'
     }));
-    ep.synopsis = script.synopsis || ep.synopsis;
-    ep.musicSuggestion = script.musicSuggestion || '';
-    ep.status = 'scripted';
-    ep.updatedAt = new Date();
-    await project.save();
 
-    console.log(`  ✅ Script written: ${ep.scenes.length} scenes`);
-    res.json({ ok: true, episode: ep, script });
+    // Use findOneAndUpdate for atomic episode update
+    const updated = await MovieProject.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id, 'episodes._id': req.params.epId },
+      {
+        $set: {
+          'episodes.$.scenes': newScenes,
+          'episodes.$.synopsis': script.synopsis || ep.synopsis,
+          'episodes.$.musicSuggestion': script.musicSuggestion || '',
+          'episodes.$.status': 'scripted',
+          'episodes.$.updatedAt': new Date()
+        }
+      },
+      { new: true }
+    );
+
+    const updatedEp = updated?.episodes?.id(req.params.epId);
+    console.log(`  ✅ Script written: ${newScenes.length} scenes`);
+    res.json({ ok: true, episode: updatedEp, script });
   } catch (e) {
     console.error('Script write error:', e.message);
     res.status(500).json({ error: 'Failed to write script', details: e.message });
@@ -513,22 +524,27 @@ Plan exactly ${count} episodes. Each should be ~${episodeDuration} seconds. Buil
 
     if (!plan.episodes || !Array.isArray(plan.episodes)) throw new Error('Invalid season plan');
 
-    // Create episodes from plan
+    // Create episodes from plan — use atomic $push to avoid version conflicts
     const newEpisodes = plan.episodes.map((ep, i) => ({
-      episodeNumber: project.episodes.length + i + 1,
+      episodeNumber: i + 1,
       title: ep.title || `Episode ${i + 1}`,
       synopsis: ep.synopsis || '',
       duration: episodeDuration,
       status: 'draft'
     }));
 
-    project.episodes.push(...newEpisodes);
-    project.totalEpisodes = project.episodes.length;
-    project.status = 'in-production';
-    await project.save();
+    const updated = await MovieProject.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id },
+      {
+        $push: { episodes: { $each: newEpisodes } },
+        $set: { status: 'in-production', updatedAt: new Date() },
+        $inc: { totalEpisodes: newEpisodes.length }
+      },
+      { new: true }
+    );
 
     console.log(`  ✅ Season planned: ${newEpisodes.length} episodes`);
-    res.json({ ok: true, plan, episodesCreated: newEpisodes.length, project });
+    res.json({ ok: true, plan, episodesCreated: newEpisodes.length, project: updated });
   } catch (e) {
     console.error('Season plan error:', e.message);
     res.status(500).json({ error: e.message });
