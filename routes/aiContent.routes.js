@@ -418,8 +418,11 @@ router.post('/video/generate', auth, async (req, res) => {
         const scene = script.scenes[i];
         const scenePrompt = `${style ? `${style} style. ` : ''}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}${scene.textOverlay ? `. Text on screen: "${scene.textOverlay}"` : ''}`;
 
-        // Delay between predictions to avoid Replicate rate limits (1.5s gap)
-        if (i > 0) await new Promise(r => setTimeout(r, 1500));
+        // Wait 11s between predictions (Replicate: 6 requests/min, burst of 1)
+        if (i > 0) {
+          console.log(`  ⏳ Waiting 11s before scene ${i + 1} (rate limit: 6/min)...`);
+          await new Promise(r => setTimeout(r, 11000));
+        }
 
         try {
           const modelId = MODELS.video;
@@ -427,7 +430,7 @@ router.post('/video/generate', auth, async (req, res) => {
             model: sourceImage ? MODELS.video_i2v : modelId,
             input: {
               prompt: scenePrompt.substring(0, 2000),
-              num_frames: 81, // 5s per scene at 16fps
+              num_frames: 81,
               ...(sourceImage && i === 0 ? { image: sourceImage } : {})
             }
           });
@@ -441,10 +444,15 @@ router.post('/video/generate', auth, async (req, res) => {
           console.log(`  📹 Scene ${i + 1}/${script.scenes.length}: prediction ${prediction.id} created`);
         } catch (sceneErr) {
           console.error(`  ❌ Scene ${i + 1} failed:`, sceneErr.message);
-          // On rate limit, wait longer and retry once
-          if (sceneErr.message?.includes('rate') || sceneErr.message?.includes('429') || sceneErr.message?.includes('Too Many')) {
-            console.log(`  ⏳ Rate limited, waiting 5s then retrying scene ${i + 1}...`);
-            await new Promise(r => setTimeout(r, 5000));
+
+          // Parse retry_after from Replicate's 429 response
+          let retryWait = 12000; // default 12s
+          const retryMatch = sceneErr.message?.match(/resets in ~(\d+)s/);
+          if (retryMatch) retryWait = (parseInt(retryMatch[1]) + 2) * 1000; // add 2s buffer
+
+          if (sceneErr.message?.includes('429') || sceneErr.message?.includes('rate') || sceneErr.message?.includes('throttled')) {
+            console.log(`  ⏳ Rate limited, waiting ${retryWait / 1000}s then retrying scene ${i + 1}...`);
+            await new Promise(r => setTimeout(r, retryWait));
             try {
               const retryPred = await replicate.predictions.create({
                 model: MODELS.video,
