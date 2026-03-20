@@ -868,23 +868,49 @@ router.post('/graphics/generate', auth, async (req, res) => {
 
 
 // ═══════════════════════════════════════════
-//  VIDEO MERGE — Concatenate scene clips into one video
-//  Uses ffmpeg to concat + Cloudinary for hosting
+//  VIDEO MERGE + VOICEOVER
+//  Concatenate scene clips + optional TTS narration
+//  Uses ffmpeg + OpenAI TTS + Cloudinary
 // ═══════════════════════════════════════════
+
+// Generate TTS audio from text using OpenAI
+async function generateTTS(text, voice = 'nova', tmpDir) {
+  if (!OPENAI_API_KEY || !text?.trim()) return null;
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const resp = await axios.post('https://api.openai.com/v1/audio/speech', {
+      model: 'tts-1',
+      voice,
+      input: text.trim(),
+      response_format: 'mp3',
+      speed: 1.0
+    }, {
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      responseType: 'arraybuffer',
+      timeout: 30000
+    });
+    const audioPath = path.join(tmpDir, `tts-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.mp3`);
+    fs.writeFileSync(audioPath, resp.data);
+    return audioPath;
+  } catch (e) {
+    console.error('  ❌ TTS failed:', e.response?.data ? Buffer.from(e.response.data).toString() : e.message);
+    return null;
+  }
+}
 
 router.post('/video/merge', auth, async (req, res) => {
   try {
-    const { videoUrls, title = 'CYBEV-video' } = req.body;
+    const { videoUrls, title = 'CYBEV-video', narrations, voice = 'nova', addVoiceover = false } = req.body;
     if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length < 2) {
       return res.status(400).json({ error: 'At least 2 video URLs required' });
     }
 
-    console.log(`🎬 Merging ${videoUrls.length} clips for "${title}"`);
+    console.log(`🎬 Merging ${videoUrls.length} clips for "${title}"${addVoiceover ? ` with ${voice} voiceover` : ''}`);
     const fs = require('fs');
     const path = require('path');
     const { execSync } = require('child_process');
 
-    // Check ffmpeg is available
     try { execSync('ffmpeg -version', { stdio: 'ignore' }); } catch {
       return res.status(500).json({ error: 'ffmpeg not available on server. Contact admin.' });
     }
@@ -913,18 +939,59 @@ router.post('/video/merge', auth, async (req, res) => {
       return res.status(400).json({ error: 'No clips could be downloaded' });
     }
 
-    // 2. Re-encode clips to uniform format (same resolution, codec, fps)
+    // 2. Generate TTS for each scene's narration (if voiceover enabled)
+    let ttsAudioPaths = [];
+    if (addVoiceover && narrations && Array.isArray(narrations)) {
+      console.log(`  🎤 Generating ${voice} voiceover for ${narrations.filter(n => n?.trim()).length} narrations...`);
+      for (let i = 0; i < narrations.length; i++) {
+        const narrationText = narrations[i];
+        if (narrationText?.trim()) {
+          const audioPath = await generateTTS(narrationText, voice, tmpDir);
+          ttsAudioPaths.push(audioPath);
+          if (audioPath) console.log(`  🎤 TTS scene ${i + 1}: generated`);
+        } else {
+          ttsAudioPaths.push(null); // no narration for this scene
+        }
+      }
+    }
+
+    // 3. Re-encode clips to uniform format + overlay TTS per-scene
     const normalizedPaths = [];
     for (let i = 0; i < clipPaths.length; i++) {
       const outPath = path.join(tmpDir, `norm-${i}.ts`);
+      const ttsPath = ttsAudioPaths[i];
+
       try {
-        execSync(
-          `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
-          { stdio: 'ignore', timeout: 120000 }
-        );
+        if (ttsPath && fs.existsSync(ttsPath)) {
+          // Video + TTS audio: mix narration with (possible) original audio
+          execSync(
+            `ffmpeg -y -i "${clipPaths[i]}" -i "${ttsPath}" -filter_complex "[0:a]volume=0.15[bg];[1:a]volume=1.0[vo];[bg][vo]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+            { stdio: 'ignore', timeout: 120000 }
+          );
+        } else if (ttsPath === undefined && addVoiceover) {
+          // Voiceover enabled but no narration for this scene — keep silent/original
+          execSync(
+            `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+            { stdio: 'ignore', timeout: 120000 }
+          );
+        } else {
+          // No voiceover — standard normalize
+          execSync(
+            `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+            { stdio: 'ignore', timeout: 120000 }
+          );
+        }
         normalizedPaths.push(outPath);
       } catch (e) {
-        console.error(`  ❌ Failed to normalize clip ${i + 1}:`, e.message);
+        console.error(`  ❌ Failed to process clip ${i + 1}:`, e.message);
+        // Fallback: try without audio mixing
+        try {
+          execSync(
+            `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+            { stdio: 'ignore', timeout: 120000 }
+          );
+          normalizedPaths.push(outPath);
+        } catch {}
       }
     }
 
@@ -933,9 +1000,9 @@ router.post('/video/merge', auth, async (req, res) => {
       return res.status(500).json({ error: 'Failed to process video clips' });
     }
 
-    // 3. Concatenate using concat protocol
+    // 4. Concatenate
     const mergedPath = path.join(tmpDir, 'merged.mp4');
-    const concatInput = normalizedPaths.map(p => p).join('|');
+    const concatInput = normalizedPaths.join('|');
     try {
       execSync(
         `ffmpeg -y -i "concat:${concatInput}" -c:v libx264 -preset fast -crf 23 -c:a aac -movflags +faststart "${mergedPath}"`,
@@ -947,9 +1014,9 @@ router.post('/video/merge', auth, async (req, res) => {
     }
 
     const mergedStats = fs.statSync(mergedPath);
-    console.log(`  ✅ Merged video: ${(mergedStats.size / 1024 / 1024).toFixed(1)}MB`);
+    console.log(`  ✅ Merged video: ${(mergedStats.size / 1024 / 1024).toFixed(1)}MB${addVoiceover ? ' (with voiceover)' : ''}`);
 
-    // 4. Upload to Cloudinary
+    // 5. Upload to Cloudinary
     let cloudinaryUrl = null;
     try {
       const cloudinary = require('cloudinary').v2;
@@ -968,11 +1035,9 @@ router.post('/video/merge', auth, async (req, res) => {
       console.log(`  ☁️ Uploaded to Cloudinary: ${cloudinaryUrl}`);
     } catch (uploadErr) {
       console.error('  ❌ Cloudinary upload failed:', uploadErr.message);
-      // Fallback: serve file directly (temporary, expires when container recycles)
-      // In production, this would need a proper storage solution
     }
 
-    // 5. Cleanup
+    // 6. Cleanup
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     if (!cloudinaryUrl) {
@@ -983,11 +1048,12 @@ router.post('/video/merge', auth, async (req, res) => {
       ok: true,
       mergedUrl: cloudinaryUrl,
       clipCount: normalizedPaths.length,
+      hasVoiceover: addVoiceover && ttsAudioPaths.some(p => p),
+      voice: addVoiceover ? voice : null,
       title
     });
   } catch (err) {
     console.error('Video merge error:', err.message);
-    // Cleanup on error
     try { require('fs').rmSync(`/tmp/merge-${Date.now()}`, { recursive: true, force: true }); } catch {}
     res.status(500).json({ error: 'Video merge failed', details: err.message });
   }
