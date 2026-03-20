@@ -528,23 +528,23 @@ router.post('/:id/plan-season', auth, async (req, res) => {
 
     const { episodeCount = 6, episodeDuration = 60 } = req.body;
     const totalCount = Math.min(episodeCount, 200);
-    const batchSize = 10; // Smaller batches = more reliable AI JSON output
+    const batchSize = 10;
 
     const charDescs = project.characters.map(c => `- ${c.name} (${c.role}): ${c.description || ''}`).join('\n');
     const existingCount = project.episodes?.length || 0;
 
     console.log(`🎬 Planning season for "${project.title}" (${totalCount} episodes in batches of ${batchSize})...`);
 
-    let allNewEpisodes = [];
+    let totalCreated = 0;
     let batchNum = 0;
+    let lastFiveEpisodes = []; // context for continuity
 
     for (let planned = 0; planned < totalCount; planned += batchSize) {
       batchNum++;
       const thisBatch = Math.min(batchSize, totalCount - planned);
       const startNum = existingCount + planned + 1;
 
-      // Give AI context of what's been planned so far
-      const previousPlanned = allNewEpisodes.slice(-5).map(e => `Ep ${e.episodeNumber}: "${e.title}" — ${e.synopsis}`).join('\n');
+      const previousPlanned = lastFiveEpisodes.slice(-5).map(e => `Ep ${e.episodeNumber}: "${e.title}" — ${e.synopsis}`).join('\n');
 
       const systemPrompt = `You are a professional TV series showrunner for CYBEV Studio.
 
@@ -560,16 +560,16 @@ Respond with ONLY valid JSON:
     {
       "episodeNumber": ${startNum},
       "title": "string — creative episode title",
-      "synopsis": "string — 2-3 sentence plot summary",
-      "endHook": "string — cliffhanger or hook"
+      "synopsis": "string — 1-2 sentence plot summary",
+      "endHook": "string — cliffhanger"
     }
   ]
 }
 
-Plan exactly ${thisBatch} episodes starting from episode ${startNum}. Keep synopses concise (1-2 sentences max).`;
+Plan exactly ${thisBatch} episodes starting from episode ${startNum}. Keep synopses to 1 sentence.`;
 
       try {
-        const plan = await aiGenerate(systemPrompt, `Plan episodes ${startNum} to ${startNum + thisBatch - 1} of "${project.title}".`);
+        const plan = await aiGenerate(systemPrompt, `Plan episodes ${startNum}-${startNum + thisBatch - 1} of "${project.title}".`);
         if (plan.episodes && Array.isArray(plan.episodes)) {
           const batchEpisodes = plan.episodes.map((ep, i) => ({
             episodeNumber: startNum + i,
@@ -578,32 +578,54 @@ Plan exactly ${thisBatch} episodes starting from episode ${startNum}. Keep synop
             duration: episodeDuration,
             status: 'draft'
           }));
-          allNewEpisodes.push(...batchEpisodes);
-          console.log(`  ✅ Batch ${batchNum}: ${batchEpisodes.length} episodes planned (${startNum}-${startNum + batchEpisodes.length - 1})`);
+
+          // SAVE IMMEDIATELY after each batch — so episodes persist even if later batches fail
+          await MovieProject.findOneAndUpdate(
+            { _id: req.params.id, user: req.user.id },
+            {
+              $push: { episodes: { $each: batchEpisodes } },
+              $set: { status: 'in-production', updatedAt: new Date() },
+              $inc: { totalEpisodes: batchEpisodes.length }
+            }
+          );
+
+          totalCreated += batchEpisodes.length;
+          lastFiveEpisodes.push(...batchEpisodes);
+          console.log(`  ✅ Batch ${batchNum}: ${batchEpisodes.length} episodes saved (${startNum}-${startNum + batchEpisodes.length - 1}) [total: ${totalCreated}]`);
         }
       } catch (e) {
         console.error(`  ❌ Batch ${batchNum} failed:`, e.message?.substring(0, 100));
-        // Continue with remaining batches
+        // Retry once with simpler prompt
+        try {
+          const retryPlan = await aiGenerate(
+            `You are a TV showrunner. Respond ONLY with valid JSON: {"episodes":[{"episodeNumber":${startNum},"title":"string","synopsis":"string"}]}. Plan ${thisBatch} episodes starting at ${startNum} for "${project.title}". 1 sentence synopses only.`,
+            `Plan episodes ${startNum}-${startNum + thisBatch - 1}.`
+          );
+          if (retryPlan.episodes?.length) {
+            const retryEps = retryPlan.episodes.map((ep, i) => ({
+              episodeNumber: startNum + i, title: ep.title || `Episode ${startNum + i}`,
+              synopsis: ep.synopsis || '', duration: episodeDuration, status: 'draft'
+            }));
+            await MovieProject.findOneAndUpdate(
+              { _id: req.params.id, user: req.user.id },
+              { $push: { episodes: { $each: retryEps } }, $inc: { totalEpisodes: retryEps.length } }
+            );
+            totalCreated += retryEps.length;
+            lastFiveEpisodes.push(...retryEps);
+            console.log(`  🔄 Batch ${batchNum} retry: ${retryEps.length} episodes saved`);
+          }
+        } catch { console.error(`  ❌ Batch ${batchNum} retry also failed, skipping`); }
       }
     }
 
-    if (allNewEpisodes.length === 0) {
-      return res.status(500).json({ error: 'Failed to plan any episodes. Try fewer episodes or check AI provider.' });
+    if (totalCreated === 0) {
+      return res.status(500).json({ error: 'Failed to plan any episodes. Try again or use fewer episodes.' });
     }
 
-    // Atomic save all planned episodes
-    const updated = await MovieProject.findOneAndUpdate(
-      { _id: req.params.id, user: req.user.id },
-      {
-        $push: { episodes: { $each: allNewEpisodes } },
-        $set: { status: 'in-production', updatedAt: new Date() },
-        $inc: { totalEpisodes: allNewEpisodes.length }
-      },
-      { new: true }
-    );
-
-    console.log(`  ✅ Total planned: ${allNewEpisodes.length}/${totalCount} episodes`);
-    res.json({ ok: true, episodesCreated: allNewEpisodes.length, requested: totalCount, project: updated });
+    // Fetch final state
+    const final = await MovieProject.findById(req.params.id).select('-episodes.scenes').lean();
+    console.log(`  ✅ Total planned: ${totalCreated}/${totalCount} episodes`);
+    res.json({ ok: true, episodesCreated: totalCreated, requested: totalCount, project: final });
   } catch (e) {
     console.error('Season plan error:', e.message);
     res.status(500).json({ error: e.message });
