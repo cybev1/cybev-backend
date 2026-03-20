@@ -911,7 +911,11 @@ async function generateTTS(text, voiceId = 'nova', tmpDir) {
 
 router.post('/video/merge', auth, async (req, res) => {
   try {
-    const { videoUrls, title = 'CYBEV-video', narrations, textOverlays, voice = 'nova', addVoiceover = false } = req.body;
+    const {
+      videoUrls, title = 'CYBEV-video', narrations, textOverlays,
+      voice = 'nova', addVoiceover = false,
+      autoCaptions = false, textStyle = 'dynamic'  // textStyle: 'dynamic' | 'minimal' | 'bold' | 'cinematic'
+    } = req.body;
     if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length < 2) {
       return res.status(400).json({ error: 'At least 2 video URLs required' });
     }
@@ -1045,31 +1049,89 @@ router.post('/video/merge', auth, async (req, res) => {
     const mergedStats = fs.statSync(mergedPath);
     console.log(`  ✅ Merged video: ${(mergedStats.size / 1024 / 1024).toFixed(1)}MB${addVoiceover ? ' (with voiceover)' : ''}`);
 
-    // 5. Burn text overlays via ffmpeg drawtext (clean text, no AI typos)
+    // 5. Dynamic text overlays + auto-captions via ffmpeg drawtext
     let finalVideoPath = mergedPath;
+    const sceneDuration = 5;
+    const allFilters = [];
+
+    // ─── DYNAMIC TEXT OVERLAYS (titles/highlights per scene) ───
     if (textOverlays && Array.isArray(textOverlays) && textOverlays.some(t => t?.trim())) {
-      const overlaidPath = path.join(tmpDir, 'overlaid.mp4');
-      // Build drawtext filter chain: each overlay shows for its scene duration
-      const sceneDuration = 5; // seconds per scene
-      const drawtextParts = textOverlays.map((text, i) => {
-        if (!text?.trim()) return null;
-        const escaped = text.trim().replace(/'/g, "'\\''").replace(/:/g, '\\:');
+      // Cycle through different visual styles per scene for variety
+      const styles = [
+        // Style 0: Center bold with dark background box — impact title
+        (text, start, end) => `drawtext=text='${text}':fontsize=52:fontcolor=white:box=1:boxcolor=black@0.75:boxborderw=20:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t,${start + 0.3},${end - 0.3})'`,
+        // Style 1: Top-left accent bar — news-style lower third
+        (text, start, end) => `drawtext=text='${text}':fontsize=40:fontcolor=white:box=1:boxcolor=0x7C3AED@0.85:boxborderw=15:x=40:y=h-120:enable='between(t,${start + 0.2},${end - 0.2})'`,
+        // Style 2: Bottom center with gradient-like double box
+        (text, start, end) => `drawtext=text='${text}':fontsize=44:fontcolor=white:box=1:boxcolor=0xE11D48@0.80:boxborderw=18:x=(w-text_w)/2:y=h-100:enable='between(t,${start + 0.3},${end - 0.3})'`,
+        // Style 3: Top banner — full width feel
+        (text, start, end) => `drawtext=text='${text}':fontsize=38:fontcolor=white:box=1:boxcolor=0x1E40AF@0.85:boxborderw=16:x=(w-text_w)/2:y=30:enable='between(t,${start + 0.2},${end - 0.3})'`,
+        // Style 4: Center large — cinematic
+        (text, start, end) => `drawtext=text='${text}':fontsize=56:fontcolor=white:borderw=3:bordercolor=black:x=(w-text_w)/2:y=(h-text_h)/2-20:enable='between(t,${start + 0.5},${end - 0.5})'`,
+        // Style 5: Bottom-left with orange accent
+        (text, start, end) => `drawtext=text='${text}':fontsize=42:fontcolor=white:box=1:boxcolor=0xEA580C@0.80:boxborderw=16:x=30:y=h-90:enable='between(t,${start + 0.3},${end - 0.2})'`,
+      ];
+
+      textOverlays.forEach((text, i) => {
+        if (!text?.trim()) return;
+        const escaped = text.trim().replace(/'/g, "\u2019").replace(/:/g, '\\:').replace(/\\/g, '\\\\');
         const startT = i * sceneDuration;
         const endT = startT + sceneDuration;
-        return `drawtext=text='${escaped}':fontsize=28:fontcolor=white:borderw=2:bordercolor=black:x=(w-text_w)/2:y=h-60:enable='between(t,${startT},${endT})'`;
-      }).filter(Boolean);
+        const styleFn = styles[i % styles.length];
+        allFilters.push(styleFn(escaped, startT, endT));
+      });
+    }
 
-      if (drawtextParts.length > 0) {
-        try {
-          const filterStr = drawtextParts.join(',');
-          execSync(
-            `ffmpeg -y -i "${mergedPath}" -vf "${filterStr}" -c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart "${overlaidPath}"`,
-            { stdio: 'ignore', timeout: 300000 }
+    // ─── AUTO-CAPTIONS (narration text as synced subtitles) ───
+    if (autoCaptions && narrations && Array.isArray(narrations)) {
+      narrations.forEach((narration, i) => {
+        if (!narration?.trim()) return;
+        const startT = i * sceneDuration;
+        // Split narration into chunks of ~6-8 words for readable captions
+        const words = narration.trim().split(/\s+/);
+        const chunks = [];
+        for (let w = 0; w < words.length; w += 7) {
+          chunks.push(words.slice(w, w + 7).join(' '));
+        }
+        // Distribute chunks evenly across scene duration
+        const chunkDuration = sceneDuration / chunks.length;
+        chunks.forEach((chunk, ci) => {
+          const escaped = chunk.replace(/'/g, "\u2019").replace(/:/g, '\\:').replace(/\\/g, '\\\\');
+          const cStart = startT + (ci * chunkDuration);
+          const cEnd = cStart + chunkDuration;
+          // Caption style: bottom center, white text on dark semi-transparent bar
+          allFilters.push(
+            `drawtext=text='${escaped}':fontsize=30:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=12:x=(w-text_w)/2:y=h-70:enable='between(t,${cStart.toFixed(2)},${cEnd.toFixed(2)})'`
           );
-          finalVideoPath = overlaidPath;
-          console.log(`  📝 Text overlays burned on ${drawtextParts.length} scenes`);
-        } catch (e) {
-          console.log(`  ⚠️ Text overlay burn failed, using video without overlays:`, e.message?.substring(0, 100));
+        });
+      });
+      console.log(`  💬 Auto-captions added for ${narrations.filter(n => n?.trim()).length} scenes`);
+    }
+
+    // Apply all text filters in one pass
+    if (allFilters.length > 0) {
+      const overlaidPath = path.join(tmpDir, 'overlaid.mp4');
+      try {
+        const filterStr = allFilters.join(',');
+        execSync(
+          `ffmpeg -y -i "${mergedPath}" -vf "${filterStr}" -c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart "${overlaidPath}"`,
+          { stdio: 'ignore', timeout: 300000 }
+        );
+        finalVideoPath = overlaidPath;
+        console.log(`  📝 Text effects applied: ${allFilters.length} layers`);
+      } catch (e) {
+        console.log(`  ⚠️ Text overlay burn failed:`, e.message?.substring(0, 150));
+        // Try with fewer filters (sometimes too many causes issues)
+        if (allFilters.length > 10) {
+          try {
+            const simpleFilters = allFilters.slice(0, 10).join(',');
+            execSync(
+              `ffmpeg -y -i "${mergedPath}" -vf "${simpleFilters}" -c:v libx264 -preset fast -crf 23 -c:a copy -movflags +faststart "${overlaidPath}"`,
+              { stdio: 'ignore', timeout: 300000 }
+            );
+            finalVideoPath = overlaidPath;
+            console.log(`  📝 Reduced text effects applied (${10} layers)`);
+          } catch {}
         }
       }
     }
