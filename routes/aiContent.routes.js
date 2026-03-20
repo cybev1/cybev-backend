@@ -418,6 +418,9 @@ router.post('/video/generate', auth, async (req, res) => {
         const scene = script.scenes[i];
         const scenePrompt = `${style ? `${style} style. ` : ''}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}${scene.textOverlay ? `. Text on screen: "${scene.textOverlay}"` : ''}`;
 
+        // Delay between predictions to avoid Replicate rate limits (1.5s gap)
+        if (i > 0) await new Promise(r => setTimeout(r, 1500));
+
         try {
           const modelId = MODELS.video;
           const prediction = await replicate.predictions.create({
@@ -438,6 +441,28 @@ router.post('/video/generate', auth, async (req, res) => {
           console.log(`  📹 Scene ${i + 1}/${script.scenes.length}: prediction ${prediction.id} created`);
         } catch (sceneErr) {
           console.error(`  ❌ Scene ${i + 1} failed:`, sceneErr.message);
+          // On rate limit, wait longer and retry once
+          if (sceneErr.message?.includes('rate') || sceneErr.message?.includes('429') || sceneErr.message?.includes('Too Many')) {
+            console.log(`  ⏳ Rate limited, waiting 5s then retrying scene ${i + 1}...`);
+            await new Promise(r => setTimeout(r, 5000));
+            try {
+              const retryPred = await replicate.predictions.create({
+                model: MODELS.video,
+                input: { prompt: scenePrompt.substring(0, 2000), num_frames: 81 }
+              });
+              tasks.push({
+                taskId: retryPred.id,
+                sceneNumber: i + 1,
+                status: 'processing',
+                videoUrl: null,
+                prompt: scenePrompt.substring(0, 200)
+              });
+              console.log(`  📹 Scene ${i + 1} retry succeeded: ${retryPred.id}`);
+              continue;
+            } catch (retryErr) {
+              console.error(`  ❌ Scene ${i + 1} retry also failed:`, retryErr.message);
+            }
+          }
           tasks.push({
             taskId: null,
             sceneNumber: i + 1,
