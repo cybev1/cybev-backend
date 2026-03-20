@@ -873,16 +873,18 @@ router.post('/graphics/generate', auth, async (req, res) => {
 //  Uses ffmpeg + OpenAI TTS + Cloudinary
 // ═══════════════════════════════════════════
 
-// Generate TTS audio from text using OpenAI
-async function generateTTS(text, voice = 'nova', tmpDir) {
+// Generate TTS audio from text using OpenAI + accent hints
+async function generateTTS(text, voiceId = 'nova', tmpDir) {
   if (!OPENAI_API_KEY || !text?.trim()) return null;
   const fs = require('fs');
   const path = require('path');
+  const config = VOICE_CONFIG[voiceId] || VOICE_CONFIG['nova'];
   try {
+    const inputText = config.accentHint ? `${config.accentHint}${text.trim()}` : text.trim();
     const resp = await axios.post('https://api.openai.com/v1/audio/speech', {
       model: 'tts-1',
-      voice,
-      input: text.trim(),
+      voice: config.voice,
+      input: inputText,
       response_format: 'mp3',
       speed: 1.0
     }, {
@@ -1056,6 +1058,99 @@ router.post('/video/merge', auth, async (req, res) => {
     console.error('Video merge error:', err.message);
     try { require('fs').rmSync(`/tmp/merge-${Date.now()}`, { recursive: true, force: true }); } catch {}
     res.status(500).json({ error: 'Video merge failed', details: err.message });
+  }
+});
+
+
+// ═══════════════════════════════════════════
+//  VOICE PREVIEW & AVAILABLE VOICES
+// ═══════════════════════════════════════════
+
+// Voice configs — OpenAI voices + accent simulation via text wrapping
+const VOICE_CONFIG = {
+  // OpenAI native voices
+  'nova':     { provider: 'openai', voice: 'nova',    label: 'Nova',    accent: 'American',     gender: 'Female' },
+  'shimmer':  { provider: 'openai', voice: 'shimmer', label: 'Shimmer', accent: 'American',     gender: 'Female' },
+  'alloy':    { provider: 'openai', voice: 'alloy',   label: 'Alloy',   accent: 'Neutral',      gender: 'Neutral' },
+  'echo':     { provider: 'openai', voice: 'echo',    label: 'Echo',    accent: 'American',     gender: 'Male' },
+  'onyx':     { provider: 'openai', voice: 'onyx',    label: 'Onyx',    accent: 'Deep',         gender: 'Male' },
+  'fable':    { provider: 'openai', voice: 'fable',   label: 'Fable',   accent: 'British',      gender: 'Male' },
+  // Accent-simulated voices (wraps text with dialect context for subtle accent shift)
+  'nova-ng':      { provider: 'openai', voice: 'nova',    label: 'Amara',    accent: 'Nigerian',      gender: 'Female', accentHint: 'Speak with a warm Nigerian English accent and natural Nigerian intonation patterns. ' },
+  'echo-ng':      { provider: 'openai', voice: 'echo',    label: 'Emeka',    accent: 'Nigerian',      gender: 'Male',   accentHint: 'Speak with a confident Nigerian English accent and Igbo-influenced intonation. ' },
+  'onyx-ng':      { provider: 'openai', voice: 'onyx',    label: 'Tunde',    accent: 'Nigerian',      gender: 'Male',   accentHint: 'Speak with a deep Nigerian English accent and Yoruba-influenced rhythm. ' },
+  'nova-gh':      { provider: 'openai', voice: 'nova',    label: 'Ama',      accent: 'Ghanaian',      gender: 'Female', accentHint: 'Speak with a warm Ghanaian English accent and Akan-influenced intonation. ' },
+  'echo-gh':      { provider: 'openai', voice: 'echo',    label: 'Kwame',    accent: 'Ghanaian',      gender: 'Male',   accentHint: 'Speak with a friendly Ghanaian English accent and natural Ghanaian rhythm. ' },
+  'nova-za':      { provider: 'openai', voice: 'nova',    label: 'Naledi',   accent: 'South African',  gender: 'Female', accentHint: 'Speak with a South African English accent and natural Johannesburg intonation. ' },
+  'onyx-za':      { provider: 'openai', voice: 'onyx',    label: 'Sipho',    accent: 'South African',  gender: 'Male',   accentHint: 'Speak with a deep South African English accent and Zulu-influenced resonance. ' },
+  'shimmer-ke':   { provider: 'openai', voice: 'shimmer', label: 'Wanjiku',  accent: 'Kenyan',        gender: 'Female', accentHint: 'Speak with a warm Kenyan English accent and Swahili-influenced rhythm. ' },
+  'echo-ke':      { provider: 'openai', voice: 'echo',    label: 'Otieno',   accent: 'Kenyan',        gender: 'Male',   accentHint: 'Speak with a Kenyan English accent and East African intonation. ' },
+  'nova-tz':      { provider: 'openai', voice: 'nova',    label: 'Amina',    accent: 'Tanzanian',     gender: 'Female', accentHint: 'Speak with a Tanzanian English accent and Swahili-influenced warmth. ' },
+  'echo-et':      { provider: 'openai', voice: 'echo',    label: 'Dawit',    accent: 'Ethiopian',     gender: 'Male',   accentHint: 'Speak with an Ethiopian English accent and Amharic-influenced intonation. ' },
+  'shimmer-cm':   { provider: 'openai', voice: 'shimmer', label: 'Ngozi',    accent: 'Cameroonian',   gender: 'Female', accentHint: 'Speak with a Cameroonian English accent and French-influenced cadence. ' },
+  'onyx-eg':      { provider: 'openai', voice: 'onyx',    label: 'Ahmed',    accent: 'Egyptian',      gender: 'Male',   accentHint: 'Speak with an Egyptian English accent and Arabic-influenced intonation. ' },
+  // Other international accents
+  'fable-uk':     { provider: 'openai', voice: 'fable',   label: 'James',    accent: 'British',       gender: 'Male',   accentHint: 'Speak with a refined British RP accent. ' },
+  'shimmer-uk':   { provider: 'openai', voice: 'shimmer', label: 'Charlotte',accent: 'British',       gender: 'Female', accentHint: 'Speak with a warm British accent. ' },
+  'nova-in':      { provider: 'openai', voice: 'nova',    label: 'Priya',    accent: 'Indian',        gender: 'Female', accentHint: 'Speak with an Indian English accent and Hindi-influenced intonation. ' },
+  'echo-fr':      { provider: 'openai', voice: 'echo',    label: 'Pierre',   accent: 'French',        gender: 'Male',   accentHint: 'Speak with a French English accent. ' },
+  'shimmer-br':   { provider: 'openai', voice: 'shimmer', label: 'Ana',      accent: 'Brazilian',     gender: 'Female', accentHint: 'Speak with a Brazilian English accent and Portuguese-influenced warmth. ' },
+  'echo-jm':      { provider: 'openai', voice: 'echo',    label: 'Marcus',   accent: 'Jamaican',      gender: 'Male',   accentHint: 'Speak with a Jamaican English accent and Caribbean rhythm. ' },
+  'nova-au':      { provider: 'openai', voice: 'nova',    label: 'Sophie',   accent: 'Australian',    gender: 'Female', accentHint: 'Speak with an Australian English accent. ' },
+};
+
+// Preview cache (in-memory, cleared on restart)
+const previewCache = {};
+
+// Get list of all available voices
+router.get('/voices', auth, async (req, res) => {
+  const voices = Object.entries(VOICE_CONFIG).map(([id, cfg]) => ({
+    id,
+    label: cfg.label,
+    accent: cfg.accent,
+    gender: cfg.gender,
+    provider: cfg.provider
+  }));
+  res.json({ voices });
+});
+
+// Generate a short voice preview
+router.post('/voice/preview', auth, async (req, res) => {
+  try {
+    const { voiceId = 'nova' } = req.body;
+    const config = VOICE_CONFIG[voiceId];
+    if (!config) return res.status(400).json({ error: 'Unknown voice ID' });
+    if (!OPENAI_API_KEY) return res.status(400).json({ error: 'OpenAI API key not configured' });
+
+    // Check cache
+    if (previewCache[voiceId]) {
+      return res.json({ audioBase64: previewCache[voiceId], voiceId, cached: true });
+    }
+
+    const sampleText = config.accentHint
+      ? `${config.accentHint}Hello! I'm ${config.label}. Welcome to CYBEV Studio, where your ideas become reality. Let's create something amazing together.`
+      : `Hello! I'm ${config.label}. Welcome to CYBEV Studio, where your ideas become reality. Let's create something amazing together.`;
+
+    const resp = await axios.post('https://api.openai.com/v1/audio/speech', {
+      model: 'tts-1',
+      voice: config.voice,
+      input: sampleText,
+      response_format: 'mp3',
+      speed: 1.0
+    }, {
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      responseType: 'arraybuffer',
+      timeout: 15000
+    });
+
+    const base64 = Buffer.from(resp.data).toString('base64');
+    previewCache[voiceId] = base64; // Cache it
+    console.log(`🎤 Voice preview generated: ${voiceId} (${config.label}, ${config.accent})`);
+
+    res.json({ audioBase64: base64, voiceId, cached: false });
+  } catch (err) {
+    console.error('Voice preview error:', err.response?.data ? Buffer.from(err.response.data).toString() : err.message);
+    res.status(500).json({ error: 'Failed to generate voice preview' });
   }
 });
 
