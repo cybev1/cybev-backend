@@ -873,18 +873,19 @@ router.post('/graphics/generate', auth, async (req, res) => {
 //  Uses ffmpeg + OpenAI TTS + Cloudinary
 // ═══════════════════════════════════════════
 
-// Generate TTS audio from text using OpenAI + accent hints
+// Generate TTS audio from text using OpenAI
+// NOTE: accentHint is ONLY used in voice previews, NOT here.
+// OpenAI TTS literally reads all input text — it doesn't interpret instructions.
 async function generateTTS(text, voiceId = 'nova', tmpDir) {
   if (!OPENAI_API_KEY || !text?.trim()) return null;
   const fs = require('fs');
   const path = require('path');
   const config = VOICE_CONFIG[voiceId] || VOICE_CONFIG['nova'];
   try {
-    const inputText = config.accentHint ? `${config.accentHint}${text.trim()}` : text.trim();
     const resp = await axios.post('https://api.openai.com/v1/audio/speech', {
-      model: 'tts-1',
-      voice: config.voice,
-      input: inputText,
+      model: 'tts-1-hd',
+      voice: config.voice,  // Use the base OpenAI voice (onyx, nova, etc.) — no accent text
+      input: text.trim(),   // ONLY the actual narration text
       response_format: 'mp3',
       speed: 1.0
     }, {
@@ -950,7 +951,7 @@ router.post('/video/merge', auth, async (req, res) => {
         if (narrationText?.trim()) {
           const audioPath = await generateTTS(narrationText, voice, tmpDir);
           ttsAudioPaths.push(audioPath);
-          if (audioPath) console.log(`  🎤 TTS scene ${i + 1}: generated`);
+          if (audioPath) console.log(`  🎤 TTS scene ${i + 1}: "${narrationText.substring(0, 60)}..."`);
         } else {
           ttsAudioPaths.push(null); // no narration for this scene
         }
