@@ -1443,6 +1443,9 @@ const routes = [
   // AI Content Studio
   ['ai-content', '/api/ai-content', './routes/aiContent.routes'],
 
+  // AI Movie/Series Production
+  ['movie-projects', '/api/movie-projects', './routes/movieProject.routes'],
+
   // AI Campaign Planner + Social Publisher (v1.0)
   ['ai-campaigns', '/api/ai-campaigns', './routes/aiCampaign.routes'],
   ['social-publisher', '/api/social-publisher', './routes/socialPublisher.routes'],
