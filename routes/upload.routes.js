@@ -150,6 +150,8 @@ router.post('/', verifyToken, upload.single('file'), async (req, res) => {
     let resourceType = 'image';
     if (req.file.mimetype.startsWith('video/')) {
       resourceType = 'video';
+    } else if (req.file.mimetype.startsWith('audio/')) {
+      resourceType = 'video'; // Cloudinary handles audio under 'video' resource_type
     } else if (req.file.mimetype === 'application/pdf') {
       resourceType = 'raw';
     }
