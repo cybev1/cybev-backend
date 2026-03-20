@@ -496,7 +496,6 @@ router.delete('/:id/episodes', auth, async (req, res) => {
 // Re-script an episode (rewrite script from scratch)
 router.post('/:id/episodes/:epId/re-script', auth, async (req, res) => {
   try {
-    // Reset episode scenes and status so write-script can run again
     const updated = await MovieProject.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id, 'episodes._id': req.params.epId },
       {
@@ -513,6 +512,54 @@ router.post('/:id/episodes/:epId/re-script', auth, async (req, res) => {
     const ep = updated.episodes.id(req.params.epId);
     console.log(`🔄 Episode "${ep?.title}" reset to draft for re-scripting`);
     res.json({ ok: true, episode: ep });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update a single scene within an episode
+router.put('/:id/episodes/:epId/scenes/:sceneIdx', auth, async (req, res) => {
+  try {
+    const project = await MovieProject.findOne({ _id: req.params.id, user: req.user.id });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const ep = project.episodes.id(req.params.epId);
+    if (!ep) return res.status(404).json({ error: 'Episode not found' });
+    const idx = parseInt(req.params.sceneIdx);
+    if (isNaN(idx) || idx < 0 || idx >= ep.scenes.length) return res.status(404).json({ error: 'Scene not found' });
+
+    const allowed = ['visual', 'camera', 'textOverlay', 'narration', 'mood', 'transition', 'dialogue', 'duration'];
+    for (const k of allowed) { if (req.body[k] !== undefined) ep.scenes[idx][k] = req.body[k]; }
+    await project.save();
+    res.json({ ok: true, scene: ep.scenes[idx] });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete a single scene from an episode
+router.delete('/:id/episodes/:epId/scenes/:sceneIdx', auth, async (req, res) => {
+  try {
+    const project = await MovieProject.findOne({ _id: req.params.id, user: req.user.id });
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    const ep = project.episodes.id(req.params.epId);
+    if (!ep) return res.status(404).json({ error: 'Episode not found' });
+    const idx = parseInt(req.params.sceneIdx);
+    if (isNaN(idx) || idx < 0 || idx >= ep.scenes.length) return res.status(404).json({ error: 'Scene not found' });
+
+    ep.scenes.splice(idx, 1);
+    // Renumber remaining scenes
+    ep.scenes.forEach((s, i) => { s.sceneNumber = i + 1; });
+    await project.save();
+    res.json({ ok: true, scenesRemaining: ep.scenes.length });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete all scenes from an episode (reset to scripted-empty)
+router.delete('/:id/episodes/:epId/scenes', auth, async (req, res) => {
+  try {
+    const updated = await MovieProject.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id, 'episodes._id': req.params.epId },
+      { $set: { 'episodes.$.scenes': [], 'episodes.$.status': 'draft', 'episodes.$.mergedVideoUrl': '' } },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
