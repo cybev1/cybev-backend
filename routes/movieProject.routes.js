@@ -232,7 +232,7 @@ router.post('/:id/episodes/:epId/write-script', auth, async (req, res) => {
 
     // Build character descriptions for AI
     const charDescs = project.characters.map(c =>
-      `- ${c.name} (${c.role}): ${c.description || 'No description'}`
+      `- ${c.name} (${c.role})${c.faceImageUrl ? ' [HAS FACE PHOTO — MUST appear in scenes]' : ''}: ${c.description || 'No description'}`
     ).join('\n');
 
     // Build context from previous episodes
@@ -244,40 +244,40 @@ router.post('/:id/episodes/:epId/write-script', auth, async (req, res) => {
     const systemPrompt = `You are a professional screenwriter for CYBEV Movie Studio. You write scene-by-scene scripts for AI-generated ${project.type === 'series' ? 'TV series episodes' : project.type === 'movie' ? 'movies' : 'short films'}.
 
 PROJECT: "${project.title}"
-GENRE: ${project.genre}
+GENRE: ${Array.isArray(project.genre) ? project.genre.join(', ') : project.genre}
 STYLE: ${project.style || 'Cinematic'}
 LOGLINE: ${project.logline || 'Not specified'}
 TARGET AUDIENCE: ${project.targetAudience || 'General'}
 
-CHARACTERS:
-${charDescs || '(No characters defined — create generic characters)'}
+CHARACTERS (use EXACTLY these names):
+${charDescs || '(No characters defined)'}
 
 ${prevEps ? `PREVIOUS EPISODES:\n${prevEps}\n\nContinue the story arc naturally.` : ''}
 
 ${customInstructions ? `DIRECTOR'S NOTES: ${customInstructions}` : ''}
 
-CRITICAL RULES FOR VISUAL DESCRIPTIONS:
-- "visual" fields are sent to an AI video generator that CANNOT render text.
-- NEVER include text, words, letters, logos, titles in visual descriptions.
-- Describe ONLY imagery: people, settings, lighting, actions, expressions, costumes.
-- Reference characters BY NAME in the dialogue/narration fields, not in visuals.
-- For character scenes: describe the person's appearance, actions, and emotions.
+CRITICAL RULES — THIS IS A MOVIE, NOT A DOCUMENTARY:
+1. "visual" MUST start with the character name(s) who appear in the scene, e.g. "Prince stands at a wooden pulpit..." or "Emerald sits across from Prince at the kitchen table..."
+2. For scenes with characters who have uploaded face photos, the visual description drives the AI to generate them — so ALWAYS name the character first in the visual.
+3. "dialogue" is the PRIMARY audio for character scenes. Characters SPEAK — write real movie dialogue, not narration.
+4. "narration" is ONLY for establishing shots, time skips, or scenes WITHOUT characters. Most scenes should have EMPTY narration and FULL dialogue instead.
+5. NEVER describe text, words, letters, logos, UI in visuals — only what the camera sees.
 
 Respond with ONLY valid JSON:
 {
   "title": "${ep.title}",
-  "synopsis": "string — 2-3 sentence summary of this episode's plot",
+  "synopsis": "string — 2-3 sentence summary",
   "scenes": [
     {
       "sceneNumber": 1,
       "duration": ${sceneDuration},
-      "visual": "PURE VISUAL description — people, setting, lighting, actions. NO TEXT.",
+      "visual": "CHARACTER_NAME does action in setting. Detailed visual: lighting, colors, expressions, costume. NO text/words.",
       "camera": "camera movement/angle",
-      "characters": ["character names appearing in this scene"],
-      "dialogue": [{"character": "Name", "line": "What they say"}],
-      "narration": "Narrator voiceover for this scene (1-2 natural sentences)",
-      "textOverlay": "Short on-screen text if needed (max 6 words)",
-      "mood": "emotional tone of the scene",
+      "characters": ["EXACT character names from the cast list above"],
+      "dialogue": [{"character": "Prince", "line": "What they actually say in the scene"}],
+      "narration": "ONLY for scenes without dialogue — establishing shots, montages, time skips. Leave EMPTY string for dialogue scenes.",
+      "textOverlay": "",
+      "mood": "emotional tone",
       "transition": "Cut/Fade/Dissolve"
     }
   ],
@@ -285,7 +285,7 @@ Respond with ONLY valid JSON:
   "cliffhanger": "string — teaser for next episode (for series only)"
 }
 
-Generate exactly ${sceneCount} scenes (${ep.duration}s total). Make it compelling with character development, conflict, and resolution.`;
+Generate exactly ${sceneCount} scenes (${ep.duration}s total). This is a MOVIE — characters TALK to each other, they don't get narrated over. Use dialogue for 80%+ of scenes.`;
 
     const userPrompt = `Write Episode ${ep.episodeNumber}: "${ep.title}"${ep.synopsis ? `\nSynopsis hint: ${ep.synopsis}` : ''}\n${sceneCount} scenes, ${ep.duration} seconds total.`;
 
@@ -297,18 +297,27 @@ Generate exactly ${sceneCount} scenes (${ep.duration}s total). Make it compellin
     }
 
     // Map script scenes to episode scenes — use atomic update to avoid version conflicts
-    const newScenes = script.scenes.map((s, i) => ({
-      sceneNumber: i + 1,
-      duration: s.duration || sceneDuration,
-      visual: s.visual || '',
-      camera: s.camera || '',
-      textOverlay: s.textOverlay || '',
-      narration: s.narration || '',
-      dialogue: s.dialogue || [],
-      mood: s.mood || '',
-      transition: s.transition || 'Cut',
-      status: 'draft'
-    }));
+    const newScenes = script.scenes.map((s, i) => {
+      // Map character names to ObjectIds
+      const charIds = (s.characters || []).map(name => {
+        const match = project.characters.find(c => c.name.toLowerCase() === (name || '').toLowerCase());
+        return match?._id;
+      }).filter(Boolean);
+
+      return {
+        sceneNumber: i + 1,
+        duration: s.duration || sceneDuration,
+        visual: s.visual || '',
+        camera: s.camera || '',
+        textOverlay: s.textOverlay || '',
+        narration: s.narration || '',
+        dialogue: s.dialogue || [],
+        characterIds: charIds,
+        mood: s.mood || '',
+        transition: s.transition || 'Cut',
+        status: 'draft'
+      };
+    });
 
     // Use findOneAndUpdate for atomic episode update
     const updated = await MovieProject.findOneAndUpdate(
@@ -360,13 +369,37 @@ router.post('/:id/episodes/:epId/generate', auth, async (req, res) => {
         await new Promise(r => setTimeout(r, 11000));
       }
 
-      // Build prompt — check if character has face image for i2v
-      const charNames = scene.dialogue?.map(d => d.character) || [];
-      const sceneChars = project.characters.filter(c => charNames.includes(c.name) || (scene.visual && scene.visual.toLowerCase().includes(c.name.toLowerCase())));
-      const charWithFace = sceneChars.find(c => c.faceImageUrl);
+      // Build prompt — aggressively match characters to use their face images
+      // Priority: scene.characters array → dialogue names → visual text mentions
+      const sceneCharNames = [
+        ...(scene.characters || []),
+        ...(scene.dialogue?.map(d => d.character) || []),
+      ];
+      // Find first character with a face image
+      let charWithFace = null;
+      for (const name of sceneCharNames) {
+        if (!name) continue;
+        const match = project.characters.find(c =>
+          c.faceImageUrl && (
+            c.name.toLowerCase() === name.toLowerCase() ||
+            c.name.toLowerCase().includes(name.toLowerCase()) ||
+            name.toLowerCase().includes(c.name.toLowerCase())
+          )
+        );
+        if (match) { charWithFace = match; break; }
+      }
+      // Fallback: check if visual text mentions any character with a face
+      if (!charWithFace && scene.visual) {
+        const vizLower = scene.visual.toLowerCase();
+        charWithFace = project.characters.find(c => c.faceImageUrl && vizLower.includes(c.name.toLowerCase()));
+      }
+      // Last resort: if scene has characters listed but no face found, use the main character's face if available
+      if (!charWithFace && sceneCharNames.length > 0) {
+        charWithFace = project.characters.find(c => c.faceImageUrl && (c.role === 'main' || c.role === 'Main'));
+      }
 
       const stylePrefix = project.style ? `${project.style} style. ` : '';
-      const scenePrompt = `${stylePrefix}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}. Photorealistic quality. IMPORTANT: Do not render any text, words, letters, titles, captions, watermarks, logos in the frame.`;
+      const scenePrompt = `${stylePrefix}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}${scene.mood ? `. Mood: ${scene.mood}` : ''}. Photorealistic cinematic quality. Do not render any text, words, letters, titles in the frame.`;
 
       try {
         let prediction;
