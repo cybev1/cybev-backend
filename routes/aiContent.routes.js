@@ -395,7 +395,8 @@ Make the prompt extremely detailed — this goes directly to an AI image generat
 
 
 // ═══════════════════════════════════════════
-//  AI VIDEO GENERATION
+//  AI VIDEO GENERATION — Scene-by-scene
+//  Each scene = separate 5s Replicate prediction
 // ═══════════════════════════════════════════
 
 router.post('/video/generate', auth, async (req, res) => {
@@ -407,39 +408,75 @@ router.post('/video/generate', auth, async (req, res) => {
     const cost = TOKEN_COSTS[costKey] || TOKEN_COSTS.video_short;
     const newBalance = await checkAndDeductTokens(req.user.id, cost);
 
-    // If a script was provided, compile scenes into a single rich prompt
-    let fullPrompt;
-    if (script && script.scenes && Array.isArray(script.scenes)) {
-      const sceneDescs = script.scenes.map((s, i) =>
-        `Scene ${i + 1}: ${s.visual}. Camera: ${s.camera || 'Standard'}.${s.textOverlay ? ` Text overlay: "${s.textOverlay}"` : ''}`
-      ).join(' | ');
-      fullPrompt = `${style ? `${style} style. ` : ''}${script.title || ''}: ${sceneDescs}`;
-      // Truncate to 2000 chars for model limits
-      if (fullPrompt.length > 2000) fullPrompt = fullPrompt.substring(0, 1997) + '...';
-    } else {
-      fullPrompt = style ? `${style} style. ${prompt}` : prompt;
+    // ─── MULTI-SCENE: Generate each scene separately ───
+    if (script && script.scenes && Array.isArray(script.scenes) && script.scenes.length > 1) {
+      console.log(`🎬 Multi-scene generation: ${script.scenes.length} scenes for "${script.title || prompt}"`);
+      const tasks = [];
+      let provider = 'replicate';
+
+      for (let i = 0; i < script.scenes.length; i++) {
+        const scene = script.scenes[i];
+        const scenePrompt = `${style ? `${style} style. ` : ''}${scene.visual}${scene.camera ? `. Camera: ${scene.camera}` : ''}${scene.textOverlay ? `. Text on screen: "${scene.textOverlay}"` : ''}`;
+
+        try {
+          const modelId = MODELS.video;
+          const prediction = await replicate.predictions.create({
+            model: sourceImage ? MODELS.video_i2v : modelId,
+            input: {
+              prompt: scenePrompt.substring(0, 2000),
+              num_frames: 81, // 5s per scene at 16fps
+              ...(sourceImage && i === 0 ? { image: sourceImage } : {})
+            }
+          });
+          tasks.push({
+            taskId: prediction.id,
+            sceneNumber: i + 1,
+            status: prediction.status === 'succeeded' ? 'completed' : 'processing',
+            videoUrl: extractUrl(prediction.output),
+            prompt: scenePrompt.substring(0, 200)
+          });
+          console.log(`  📹 Scene ${i + 1}/${script.scenes.length}: prediction ${prediction.id} created`);
+        } catch (sceneErr) {
+          console.error(`  ❌ Scene ${i + 1} failed:`, sceneErr.message);
+          tasks.push({
+            taskId: null,
+            sceneNumber: i + 1,
+            status: 'failed',
+            videoUrl: null,
+            error: sceneErr.message
+          });
+        }
+      }
+
+      return res.json({
+        mode: 'multi',
+        tasks,
+        totalScenes: script.scenes.length,
+        title: script.title || prompt,
+        provider,
+        tokensUsed: cost,
+        remainingBalance: newBalance
+      });
     }
 
+    // ─── SINGLE SCENE: Standard generation ───
+    let fullPrompt = style ? `${style} style. ${prompt}` : prompt;
     let prediction;
     let provider = 'replicate';
 
     try {
-      // ─── PRIMARY: Replicate Wan video ───
       const modelId = duration === 'long' ? MODELS.video_hq : MODELS.video;
       const targetModel = sourceImage ? MODELS.video_i2v : modelId;
       const input = { prompt: fullPrompt };
       if (sourceImage) input.image = sourceImage;
-      // ~81 frames = 5s at 16fps, ~161 frames = 10s
       input.num_frames = duration === 'short' ? 81 : 161;
 
       prediction = await replicate.predictions.create({ model: targetModel, input });
-
     } catch (primaryErr) {
       console.error('Replicate video failed, trying Runway:', primaryErr.message);
       if (!RUNWAY_API_KEY) throw primaryErr;
       provider = 'runway';
 
-      // ─── FALLBACK: Runway ML ───
       const runwayRes = await axios.post('https://api.dev.runwayml.com/v1/image_to_video', {
         model: 'gen3a_turbo',
         promptText: fullPrompt,
@@ -458,6 +495,7 @@ router.post('/video/generate', auth, async (req, res) => {
     }
 
     res.json({
+      mode: 'single',
       taskId: prediction.id,
       status: prediction.status === 'succeeded' ? 'completed' : 'processing',
       videoUrl: extractUrl(prediction.output),
@@ -472,6 +510,56 @@ router.post('/video/generate', auth, async (req, res) => {
     if (err.message.includes('Insufficient tokens')) return res.status(402).json({ error: err.message });
     try { await refundTokens(req.user.id, TOKEN_COSTS[`video_${req.body.duration || 'short'}`] || 100); } catch {}
     res.status(500).json({ error: 'Video generation failed', details: err.message });
+  }
+});
+
+// ─── BATCH STATUS: Check multiple scene predictions at once ───
+router.post('/video/status/batch', auth, async (req, res) => {
+  try {
+    const { taskIds, provider = 'replicate' } = req.body;
+    if (!taskIds || !Array.isArray(taskIds)) return res.status(400).json({ error: 'taskIds array required' });
+
+    const results = [];
+    for (const taskId of taskIds) {
+      if (!taskId) { results.push({ taskId, status: 'failed' }); continue; }
+      try {
+        if (provider === 'runway' && RUNWAY_API_KEY) {
+          const r = await axios.get(`https://api.dev.runwayml.com/v1/tasks/${taskId}`, {
+            headers: { 'Authorization': `Bearer ${RUNWAY_API_KEY}`, 'X-Runway-Version': '2024-11-06' }
+          });
+          results.push({
+            taskId,
+            status: r.data.status === 'SUCCEEDED' ? 'completed' : r.data.status === 'FAILED' ? 'failed' : 'processing',
+            videoUrl: r.data.output?.[0] || null
+          });
+        } else {
+          const prediction = await replicate.predictions.get(taskId);
+          results.push({
+            taskId,
+            status: prediction.status === 'succeeded' ? 'completed'
+              : (prediction.status === 'failed' || prediction.status === 'canceled') ? 'failed'
+              : 'processing',
+            videoUrl: prediction.status === 'succeeded' ? extractUrl(prediction.output) : null
+          });
+        }
+      } catch (e) {
+        results.push({ taskId, status: 'failed', error: e.message });
+      }
+    }
+
+    const completed = results.filter(r => r.status === 'completed').length;
+    const failed = results.filter(r => r.status === 'failed').length;
+    const total = results.length;
+
+    res.json({
+      results,
+      summary: { total, completed, failed, processing: total - completed - failed },
+      allDone: completed + failed === total,
+      progress: Math.round((completed / total) * 100)
+    });
+  } catch (err) {
+    console.error('Batch status error:', err.message);
+    res.status(500).json({ error: 'Failed to check batch status' });
   }
 });
 
@@ -742,6 +830,133 @@ router.post('/graphics/generate', auth, async (req, res) => {
       await refundTokens(req.user.id, TOKEN_COSTS[costKey]);
     } catch {}
     res.status(500).json({ error: 'Image generation failed', details: err.message });
+  }
+});
+
+
+// ═══════════════════════════════════════════
+//  VIDEO MERGE — Concatenate scene clips into one video
+//  Uses ffmpeg to concat + Cloudinary for hosting
+// ═══════════════════════════════════════════
+
+router.post('/video/merge', auth, async (req, res) => {
+  try {
+    const { videoUrls, title = 'CYBEV-video' } = req.body;
+    if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length < 2) {
+      return res.status(400).json({ error: 'At least 2 video URLs required' });
+    }
+
+    console.log(`🎬 Merging ${videoUrls.length} clips for "${title}"`);
+    const fs = require('fs');
+    const path = require('path');
+    const { execSync } = require('child_process');
+
+    // Check ffmpeg is available
+    try { execSync('ffmpeg -version', { stdio: 'ignore' }); } catch {
+      return res.status(500).json({ error: 'ffmpeg not available on server. Contact admin.' });
+    }
+
+    const tmpDir = path.join('/tmp', `merge-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    // 1. Download all clips
+    const clipPaths = [];
+    for (let i = 0; i < videoUrls.length; i++) {
+      const url = videoUrls[i];
+      if (!url) continue;
+      const clipPath = path.join(tmpDir, `clip-${i}.mp4`);
+      try {
+        const resp = await axios({ url, responseType: 'arraybuffer', timeout: 60000 });
+        fs.writeFileSync(clipPath, resp.data);
+        clipPaths.push(clipPath);
+        console.log(`  📥 Downloaded clip ${i + 1}/${videoUrls.length}`);
+      } catch (e) {
+        console.error(`  ❌ Failed to download clip ${i + 1}:`, e.message);
+      }
+    }
+
+    if (clipPaths.length < 1) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.status(400).json({ error: 'No clips could be downloaded' });
+    }
+
+    // 2. Re-encode clips to uniform format (same resolution, codec, fps)
+    const normalizedPaths = [];
+    for (let i = 0; i < clipPaths.length; i++) {
+      const outPath = path.join(tmpDir, `norm-${i}.ts`);
+      try {
+        execSync(
+          `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+          { stdio: 'ignore', timeout: 120000 }
+        );
+        normalizedPaths.push(outPath);
+      } catch (e) {
+        console.error(`  ❌ Failed to normalize clip ${i + 1}:`, e.message);
+      }
+    }
+
+    if (normalizedPaths.length < 1) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'Failed to process video clips' });
+    }
+
+    // 3. Concatenate using concat protocol
+    const mergedPath = path.join(tmpDir, 'merged.mp4');
+    const concatInput = normalizedPaths.map(p => p).join('|');
+    try {
+      execSync(
+        `ffmpeg -y -i "concat:${concatInput}" -c:v libx264 -preset fast -crf 23 -c:a aac -movflags +faststart "${mergedPath}"`,
+        { stdio: 'ignore', timeout: 300000 }
+      );
+    } catch (e) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.status(500).json({ error: 'Failed to merge video clips', details: e.message });
+    }
+
+    const mergedStats = fs.statSync(mergedPath);
+    console.log(`  ✅ Merged video: ${(mergedStats.size / 1024 / 1024).toFixed(1)}MB`);
+
+    // 4. Upload to Cloudinary
+    let cloudinaryUrl = null;
+    try {
+      const cloudinary = require('cloudinary').v2;
+      const uploadResult = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload(mergedPath, {
+          resource_type: 'video',
+          folder: 'cybev/ai-studio/merged',
+          public_id: `${title.replace(/[^a-zA-Z0-9-]/g, '-').substring(0, 50)}-${Date.now()}`,
+          overwrite: true,
+        }, (err, result) => {
+          if (err) reject(err);
+          else resolve(result);
+        });
+      });
+      cloudinaryUrl = uploadResult.secure_url;
+      console.log(`  ☁️ Uploaded to Cloudinary: ${cloudinaryUrl}`);
+    } catch (uploadErr) {
+      console.error('  ❌ Cloudinary upload failed:', uploadErr.message);
+      // Fallback: serve file directly (temporary, expires when container recycles)
+      // In production, this would need a proper storage solution
+    }
+
+    // 5. Cleanup
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    if (!cloudinaryUrl) {
+      return res.status(500).json({ error: 'Failed to upload merged video. Check Cloudinary configuration.' });
+    }
+
+    res.json({
+      ok: true,
+      mergedUrl: cloudinaryUrl,
+      clipCount: normalizedPaths.length,
+      title
+    });
+  } catch (err) {
+    console.error('Video merge error:', err.message);
+    // Cleanup on error
+    try { require('fs').rmSync(`/tmp/merge-${Date.now()}`, { recursive: true, force: true }); } catch {}
+    res.status(500).json({ error: 'Video merge failed', details: err.message });
   }
 });
 
