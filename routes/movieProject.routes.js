@@ -479,6 +479,44 @@ router.get('/:id/episodes/:epId/status', auth, async (req, res) => {
 });
 
 
+// Delete ALL episodes from a project
+router.delete('/:id/episodes', auth, async (req, res) => {
+  try {
+    const updated = await MovieProject.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id },
+      { $set: { episodes: [], totalEpisodes: 0, updatedAt: new Date() } },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ error: 'Project not found' });
+    console.log(`🗑️ All episodes deleted from "${updated.title}"`);
+    res.json({ ok: true, message: 'All episodes deleted' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Re-script an episode (rewrite script from scratch)
+router.post('/:id/episodes/:epId/re-script', auth, async (req, res) => {
+  try {
+    // Reset episode scenes and status so write-script can run again
+    const updated = await MovieProject.findOneAndUpdate(
+      { _id: req.params.id, user: req.user.id, 'episodes._id': req.params.epId },
+      {
+        $set: {
+          'episodes.$.scenes': [],
+          'episodes.$.status': 'draft',
+          'episodes.$.mergedVideoUrl': '',
+          'episodes.$.updatedAt': new Date()
+        }
+      },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ error: 'Not found' });
+    const ep = updated.episodes.id(req.params.epId);
+    console.log(`🔄 Episode "${ep?.title}" reset to draft for re-scripting`);
+    res.json({ ok: true, episode: ep });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+
 // ═══════════════════════════════════════════
 //  AI SERIES PLANNER — Generate episode outlines for entire season
 // ═══════════════════════════════════════════
@@ -489,62 +527,83 @@ router.post('/:id/plan-season', auth, async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const { episodeCount = 6, episodeDuration = 60 } = req.body;
-    const count = Math.min(episodeCount, 24);
+    const totalCount = Math.min(episodeCount, 200);
+    const batchSize = 10; // Smaller batches = more reliable AI JSON output
 
     const charDescs = project.characters.map(c => `- ${c.name} (${c.role}): ${c.description || ''}`).join('\n');
+    const existingCount = project.episodes?.length || 0;
 
-    const systemPrompt = `You are a professional TV series showrunner for CYBEV Studio. Plan a complete season.
+    console.log(`🎬 Planning season for "${project.title}" (${totalCount} episodes in batches of ${batchSize})...`);
+
+    let allNewEpisodes = [];
+    let batchNum = 0;
+
+    for (let planned = 0; planned < totalCount; planned += batchSize) {
+      batchNum++;
+      const thisBatch = Math.min(batchSize, totalCount - planned);
+      const startNum = existingCount + planned + 1;
+
+      // Give AI context of what's been planned so far
+      const previousPlanned = allNewEpisodes.slice(-5).map(e => `Ep ${e.episodeNumber}: "${e.title}" — ${e.synopsis}`).join('\n');
+
+      const systemPrompt = `You are a professional TV series showrunner for CYBEV Studio.
 
 SHOW: "${project.title}"
-GENRE: ${project.genre}
+GENRE: ${Array.isArray(project.genre) ? project.genre.join(', ') : project.genre}
 LOGLINE: ${project.logline || 'Not specified'}
 CHARACTERS:\n${charDescs || '(Create compelling characters)'}
+${previousPlanned ? `\nPREVIOUS EPISODES PLANNED:\n${previousPlanned}\n\nContinue the story from here.` : ''}
 
 Respond with ONLY valid JSON:
 {
-  "seasonTitle": "string",
-  "seasonSynopsis": "string — overall season arc in 3-4 sentences",
   "episodes": [
     {
-      "episodeNumber": 1,
+      "episodeNumber": ${startNum},
       "title": "string — creative episode title",
-      "synopsis": "string — 2-3 sentence plot summary with character arcs",
-      "keyMoments": ["string — 3 pivotal moments"],
-      "endHook": "string — cliffhanger or hook for next episode"
+      "synopsis": "string — 2-3 sentence plot summary",
+      "endHook": "string — cliffhanger or hook"
     }
-  ],
-  "characterArcs": [{"character": "Name", "arc": "string — how this character evolves across the season"}],
-  "themes": ["string — major themes explored"]
+  ]
 }
 
-Plan exactly ${count} episodes. Each should be ~${episodeDuration} seconds. Build tension across the season with a satisfying but open finale.`;
+Plan exactly ${thisBatch} episodes starting from episode ${startNum}. Keep synopses concise (1-2 sentences max).`;
 
-    console.log(`🎬 Planning season for "${project.title}" (${count} episodes)...`);
-    const plan = await aiGenerate(systemPrompt, `Plan Season ${project.currentSeason} of "${project.title}". ${count} episodes.`);
+      try {
+        const plan = await aiGenerate(systemPrompt, `Plan episodes ${startNum} to ${startNum + thisBatch - 1} of "${project.title}".`);
+        if (plan.episodes && Array.isArray(plan.episodes)) {
+          const batchEpisodes = plan.episodes.map((ep, i) => ({
+            episodeNumber: startNum + i,
+            title: ep.title || `Episode ${startNum + i}`,
+            synopsis: ep.synopsis || '',
+            duration: episodeDuration,
+            status: 'draft'
+          }));
+          allNewEpisodes.push(...batchEpisodes);
+          console.log(`  ✅ Batch ${batchNum}: ${batchEpisodes.length} episodes planned (${startNum}-${startNum + batchEpisodes.length - 1})`);
+        }
+      } catch (e) {
+        console.error(`  ❌ Batch ${batchNum} failed:`, e.message?.substring(0, 100));
+        // Continue with remaining batches
+      }
+    }
 
-    if (!plan.episodes || !Array.isArray(plan.episodes)) throw new Error('Invalid season plan');
+    if (allNewEpisodes.length === 0) {
+      return res.status(500).json({ error: 'Failed to plan any episodes. Try fewer episodes or check AI provider.' });
+    }
 
-    // Create episodes from plan — use atomic $push to avoid version conflicts
-    const newEpisodes = plan.episodes.map((ep, i) => ({
-      episodeNumber: i + 1,
-      title: ep.title || `Episode ${i + 1}`,
-      synopsis: ep.synopsis || '',
-      duration: episodeDuration,
-      status: 'draft'
-    }));
-
+    // Atomic save all planned episodes
     const updated = await MovieProject.findOneAndUpdate(
       { _id: req.params.id, user: req.user.id },
       {
-        $push: { episodes: { $each: newEpisodes } },
+        $push: { episodes: { $each: allNewEpisodes } },
         $set: { status: 'in-production', updatedAt: new Date() },
-        $inc: { totalEpisodes: newEpisodes.length }
+        $inc: { totalEpisodes: allNewEpisodes.length }
       },
       { new: true }
     );
 
-    console.log(`  ✅ Season planned: ${newEpisodes.length} episodes`);
-    res.json({ ok: true, plan, episodesCreated: newEpisodes.length, project: updated });
+    console.log(`  ✅ Total planned: ${allNewEpisodes.length}/${totalCount} episodes`);
+    res.json({ ok: true, episodesCreated: allNewEpisodes.length, requested: totalCount, project: updated });
   } catch (e) {
     console.error('Season plan error:', e.message);
     res.status(500).json({ error: e.message });
