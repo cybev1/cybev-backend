@@ -957,43 +957,62 @@ router.post('/video/merge', auth, async (req, res) => {
       }
     }
 
-    // 3. Re-encode clips to uniform format + overlay TTS per-scene
+    // 3. Re-encode clips + overlay TTS per-scene
+    //    KEY FIX: AI-generated videos have NO audio track, so we can't amix — just add TTS as the audio
     const normalizedPaths = [];
     for (let i = 0; i < clipPaths.length; i++) {
       const outPath = path.join(tmpDir, `norm-${i}.ts`);
       const ttsPath = ttsAudioPaths[i];
+      const scaleFilter = 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2';
+
+      // Check if source video has an audio track
+      let hasAudioTrack = false;
+      try {
+        const probeResult = execSync(
+          `ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${clipPaths[i]}"`,
+          { timeout: 10000 }
+        ).toString().trim();
+        hasAudioTrack = probeResult.includes('audio');
+      } catch {}
 
       try {
         if (ttsPath && fs.existsSync(ttsPath)) {
-          // Video + TTS audio: mix narration with (possible) original audio
-          execSync(
-            `ffmpeg -y -i "${clipPaths[i]}" -i "${ttsPath}" -filter_complex "[0:a]volume=0.15[bg];[1:a]volume=1.0[vo];[bg][vo]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
-            { stdio: 'ignore', timeout: 120000 }
-          );
-        } else if (ttsPath === undefined && addVoiceover) {
-          // Voiceover enabled but no narration for this scene — keep silent/original
-          execSync(
-            `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
-            { stdio: 'ignore', timeout: 120000 }
-          );
+          if (hasAudioTrack) {
+            // Source has audio — mix TTS with original (original at 15% volume)
+            execSync(
+              `ffmpeg -y -i "${clipPaths[i]}" -i "${ttsPath}" -filter_complex "[0:a]volume=0.15[bg];[1:a]volume=1.0[vo];[bg][vo]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v libx264 -preset fast -crf 23 -r 16 -vf "${scaleFilter}" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+              { stdio: 'ignore', timeout: 120000 }
+            );
+          } else {
+            // Source has NO audio — use TTS as sole audio track (most common for AI video)
+            execSync(
+              `ffmpeg -y -i "${clipPaths[i]}" -i "${ttsPath}" -map 0:v -map 1:a -c:v libx264 -preset fast -crf 23 -r 16 -vf "${scaleFilter}" -c:a aac -ar 44100 -ac 2 -b:a 128k -shortest -f mpegts "${outPath}"`,
+              { stdio: 'ignore', timeout: 120000 }
+            );
+          }
+          console.log(`  ✅ Clip ${i + 1}: video + voiceover`);
         } else {
-          // No voiceover — standard normalize
+          // No TTS for this scene — add silent audio track so concat works
           execSync(
-            `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+            `ffmpeg -y -i "${clipPaths[i]}" -f lavfi -i anullsrc=r=44100:cl=stereo -map 0:v -map 1:a -c:v libx264 -preset fast -crf 23 -r 16 -vf "${scaleFilter}" -c:a aac -ar 44100 -ac 2 -b:a 128k -shortest -f mpegts "${outPath}"`,
             { stdio: 'ignore', timeout: 120000 }
           );
+          console.log(`  ✅ Clip ${i + 1}: video + silence`);
         }
         normalizedPaths.push(outPath);
       } catch (e) {
-        console.error(`  ❌ Failed to process clip ${i + 1}:`, e.message);
-        // Fallback: try without audio mixing
+        console.error(`  ❌ Failed to process clip ${i + 1}:`, e.message?.substring(0, 200));
+        // Last resort fallback — just encode video with silent audio
         try {
           execSync(
-            `ffmpeg -y -i "${clipPaths[i]}" -c:v libx264 -preset fast -crf 23 -r 16 -vf "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2" -c:a aac -ar 44100 -ac 2 -b:a 128k -f mpegts "${outPath}"`,
+            `ffmpeg -y -i "${clipPaths[i]}" -f lavfi -i anullsrc=r=44100:cl=stereo -map 0:v -map 1:a -c:v libx264 -preset fast -crf 23 -r 16 -vf "${scaleFilter}" -c:a aac -shortest -f mpegts "${outPath}"`,
             { stdio: 'ignore', timeout: 120000 }
           );
           normalizedPaths.push(outPath);
-        } catch {}
+          console.log(`  ⚠️ Clip ${i + 1}: fallback (video + silence)`);
+        } catch (e2) {
+          console.error(`  ❌ Clip ${i + 1} total failure:`, e2.message?.substring(0, 100));
+        }
       }
     }
 
