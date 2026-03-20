@@ -1097,6 +1097,16 @@ const VOICE_CONFIG = {
   'shimmer-br':   { provider: 'openai', voice: 'shimmer', label: 'Ana',      accent: 'Brazilian',     gender: 'Female', accentHint: 'Speak with a Brazilian English accent and Portuguese-influenced warmth. ' },
   'echo-jm':      { provider: 'openai', voice: 'echo',    label: 'Marcus',   accent: 'Jamaican',      gender: 'Male',   accentHint: 'Speak with a Jamaican English accent and Caribbean rhythm. ' },
   'nova-au':      { provider: 'openai', voice: 'nova',    label: 'Sophie',   accent: 'Australian',    gender: 'Female', accentHint: 'Speak with an Australian English accent. ' },
+  // Deep narrator & documentary voices
+  'onyx-narrator':  { provider: 'openai', voice: 'onyx',    label: 'Morgan',   accent: 'Cinematic',     gender: 'Male',   accentHint: 'Speak in a slow, deep, authoritative cinematic narrator voice like a documentary film. Pause between phrases for dramatic effect. ' },
+  'onyx-doc':       { provider: 'openai', voice: 'onyx',    label: 'Atlas',    accent: 'Documentary',   gender: 'Male',   accentHint: 'Speak in a measured, deep, resonant documentary narrator voice. Calm, wise, and authoritative like a nature documentary. ' },
+  'echo-narrator':  { provider: 'openai', voice: 'echo',    label: 'David',    accent: 'Narrator',      gender: 'Male',   accentHint: 'Speak in a warm, rich baritone narrator voice suitable for storytelling and documentaries. Clear enunciation, steady pace. ' },
+  'fable-narrator': { provider: 'openai', voice: 'fable',   label: 'Benedict',  accent: 'British Deep',  gender: 'Male',   accentHint: 'Speak in a deep, elegant British narrator voice like a BBC documentary presenter. Authoritative and captivating. ' },
+  'nova-narrator':  { provider: 'openai', voice: 'nova',    label: 'Maya',     accent: 'Narrator',      gender: 'Female', accentHint: 'Speak in a calm, clear, authoritative female narrator voice suitable for documentaries. Measured pace, warm but professional. ' },
+  'shimmer-narrator':{ provider: 'openai', voice: 'shimmer', label: 'Elena',   accent: 'Narrator',      gender: 'Female', accentHint: 'Speak in a soft, intimate, reflective female narrator voice. Like a meditation or introspective documentary. Gentle pace. ' },
+  'onyx-epic':      { provider: 'openai', voice: 'onyx',    label: 'Titan',    accent: 'Epic',          gender: 'Male',   accentHint: 'Speak in a thunderous, epic, dramatic movie trailer narrator voice. Deep, powerful, commanding attention. Short punchy phrases. ' },
+  'onyx-ng-deep':   { provider: 'openai', voice: 'onyx',    label: 'Obinna',   accent: 'Nigerian Deep', gender: 'Male',   accentHint: 'Speak in a deep, authoritative Nigerian English narrator voice with Igbo-influenced gravitas. Documentary style, commanding. ' },
+  'onyx-za-deep':   { provider: 'openai', voice: 'onyx',    label: 'Mandla',   accent: 'SA Deep',       gender: 'Male',   accentHint: 'Speak in a deep, resonant South African English narrator voice with Zulu-influenced depth. Like a wildlife documentary. ' },
 };
 
 // Preview cache (in-memory, cleared on restart)
@@ -1151,6 +1161,242 @@ router.post('/voice/preview', auth, async (req, res) => {
   } catch (err) {
     console.error('Voice preview error:', err.response?.data ? Buffer.from(err.response.data).toString() : err.message);
     res.status(500).json({ error: 'Failed to generate voice preview' });
+  }
+});
+
+
+// ═══════════════════════════════════════════
+//  AI DUB — Upload video → Transcribe → Re-voice
+//  Whisper (transcribe) → DeepSeek (translate) → TTS (re-voice) → ffmpeg (replace audio)
+// ═══════════════════════════════════════════
+
+router.post('/dub/process', auth, async (req, res) => {
+  try {
+    const { videoUrl, voiceId = 'nova', targetLang = 'en', customScript, useRecordedVoice, recordedAudioUrl } = req.body;
+    if (!videoUrl) return res.status(400).json({ error: 'videoUrl required' });
+
+    const fs = require('fs');
+    const path = require('path');
+    const { execSync } = require('child_process');
+
+    const tmpDir = path.join('/tmp', `dub-${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    console.log(`🎙️ DUB: Starting dub process. Voice: ${voiceId}, Lang: ${targetLang}`);
+
+    // 1. Download source video
+    const videoPath = path.join(tmpDir, 'source.mp4');
+    const resp = await axios({ url: videoUrl, responseType: 'arraybuffer', timeout: 120000 });
+    fs.writeFileSync(videoPath, resp.data);
+    console.log(`  📥 Downloaded source video (${(resp.data.length / 1024 / 1024).toFixed(1)}MB)`);
+
+    // 2. Extract audio from video
+    const audioPath = path.join(tmpDir, 'audio.mp3');
+    try {
+      execSync(`ffmpeg -y -i "${videoPath}" -vn -acodec mp3 -ar 16000 -ac 1 "${audioPath}"`, { stdio: 'ignore', timeout: 60000 });
+    } catch {
+      // Video might not have audio — that's OK
+      console.log('  ℹ️ No audio track found in video');
+    }
+
+    let transcript = '';
+    // 3. If user provided custom script, use that. Otherwise transcribe.
+    if (customScript?.trim()) {
+      transcript = customScript.trim();
+      console.log(`  📝 Using custom script (${transcript.length} chars)`);
+    } else if (useRecordedVoice && recordedAudioUrl) {
+      // Download recorded audio and transcribe it
+      const recPath = path.join(tmpDir, 'recorded.mp3');
+      const recResp = await axios({ url: recordedAudioUrl, responseType: 'arraybuffer', timeout: 60000 });
+      fs.writeFileSync(recPath, recResp.data);
+      transcript = await transcribeAudio(recPath);
+      console.log(`  🎤 Transcribed recorded voice: "${transcript.substring(0, 100)}..."`);
+    } else if (fs.existsSync(audioPath) && fs.statSync(audioPath).size > 1000) {
+      // Transcribe original audio with Whisper
+      transcript = await transcribeAudio(audioPath);
+      console.log(`  📝 Transcribed original audio: "${transcript.substring(0, 100)}..."`);
+    }
+
+    if (!transcript) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.status(400).json({ error: 'No audio to transcribe. Provide a custom script or upload a video with audio.' });
+    }
+
+    // 4. Translate if target language is different (optional)
+    let finalText = transcript;
+    if (targetLang && targetLang !== 'en' && targetLang !== 'original') {
+      const langNames = { es: 'Spanish', fr: 'French', pt: 'Portuguese', de: 'German', zh: 'Chinese', ar: 'Arabic', hi: 'Hindi', sw: 'Swahili', yo: 'Yoruba', ig: 'Igbo', ha: 'Hausa', zu: 'Zulu', am: 'Amharic', tw: 'Twi', ja: 'Japanese', ko: 'Korean', it: 'Italian', ru: 'Russian', tr: 'Turkish' };
+      const langName = langNames[targetLang] || targetLang;
+      try {
+        const translated = await generateScript(
+          `You are a professional translator. Translate the following text to ${langName}. Keep it natural, conversational, and roughly the same length. Respond with ONLY JSON: {"translated": "the translated text"}`,
+          `Translate this: "${finalText}"`
+        );
+        if (translated?.translated) {
+          finalText = translated.translated;
+          console.log(`  🌐 Translated to ${langName}: "${finalText.substring(0, 100)}..."`);
+        }
+      } catch (e) {
+        console.log(`  ⚠️ Translation failed, using original: ${e.message}`);
+      }
+    }
+
+    // 5. Generate TTS with chosen voice
+    const ttsPath = await generateTTS(finalText, voiceId, tmpDir);
+    if (!ttsPath) {
+      // If TTS fails but we have recorded audio, use that instead
+      if (useRecordedVoice && recordedAudioUrl) {
+        console.log('  ℹ️ TTS failed, using recorded audio directly');
+      } else {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        return res.status(500).json({ error: 'Failed to generate voiceover audio' });
+      }
+    }
+
+    // 6. Replace audio in video with TTS (or recorded voice)
+    const dubAudioPath = ttsPath || path.join(tmpDir, 'recorded.mp3');
+    const outputPath = path.join(tmpDir, 'dubbed.mp4');
+    try {
+      execSync(
+        `ffmpeg -y -i "${videoPath}" -i "${dubAudioPath}" -c:v copy -map 0:v:0 -map 1:a:0 -shortest "${outputPath}"`,
+        { stdio: 'ignore', timeout: 120000 }
+      );
+    } catch {
+      // If that fails, try re-encoding
+      execSync(
+        `ffmpeg -y -i "${videoPath}" -i "${dubAudioPath}" -c:v libx264 -preset fast -crf 23 -map 0:v:0 -map 1:a:0 -c:a aac -shortest "${outputPath}"`,
+        { stdio: 'ignore', timeout: 180000 }
+      );
+    }
+    console.log(`  ✅ Dubbed video created`);
+
+    // 7. Upload to Cloudinary
+    let cloudinaryUrl = null;
+    try {
+      const cloudinary = require('cloudinary').v2;
+      const uploadResult = await new Promise((resolve, reject) => {
+        cloudinary.uploader.upload(outputPath, {
+          resource_type: 'video',
+          folder: 'cybev/ai-studio/dubbed',
+          public_id: `dub-${voiceId}-${Date.now()}`,
+          overwrite: true,
+        }, (err, result) => err ? reject(err) : resolve(result));
+      });
+      cloudinaryUrl = uploadResult.secure_url;
+      console.log(`  ☁️ Uploaded dubbed video: ${cloudinaryUrl}`);
+    } catch (e) {
+      console.error('  ❌ Cloudinary upload failed:', e.message);
+    }
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    if (!cloudinaryUrl) return res.status(500).json({ error: 'Failed to upload dubbed video' });
+
+    res.json({
+      ok: true,
+      dubbedUrl: cloudinaryUrl,
+      voiceId,
+      targetLang,
+      transcript: finalText.substring(0, 500),
+    });
+  } catch (err) {
+    console.error('DUB error:', err.message);
+    try { require('fs').rmSync(`/tmp/dub-${Date.now()}`, { recursive: true, force: true }); } catch {}
+    res.status(500).json({ error: 'Dubbing failed', details: err.message });
+  }
+});
+
+// Whisper transcription helper
+async function transcribeAudio(audioPath) {
+  if (!OPENAI_API_KEY) return '';
+  const fs = require('fs');
+  const FormData = require('form-data') || (() => { const f = new (require('stream').Readable)(); return f; });
+  try {
+    // Use axios with multipart
+    const fileData = fs.readFileSync(audioPath);
+    const boundary = `----FormBoundary${Date.now()}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="audio.mp3"\r\nContent-Type: audio/mpeg\r\n\r\n`),
+      fileData,
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\nwhisper-1\r\n--${boundary}--\r\n`)
+    ]);
+    const resp = await axios.post('https://api.openai.com/v1/audio/transcriptions', body, {
+      headers: {
+        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`
+      },
+      timeout: 60000
+    });
+    return resp.data.text || '';
+  } catch (e) {
+    console.error('  ❌ Whisper transcription failed:', e.response?.data || e.message);
+    return '';
+  }
+}
+
+
+// ═══════════════════════════════════════════
+//  AI CHARACTER — Generate video from face image
+//  Uses Replicate image-to-video with face reference
+// ═══════════════════════════════════════════
+
+router.post('/character/generate', auth, async (req, res) => {
+  try {
+    const { imageUrl, prompt, style, duration = 'short' } = req.body;
+    if (!imageUrl) return res.status(400).json({ error: 'Image URL required (upload a face photo first)' });
+    if (!prompt) return res.status(400).json({ error: 'Prompt required — describe what the character should do' });
+
+    const costKey = `video_${duration}`;
+    const cost = TOKEN_COSTS[costKey] || TOKEN_COSTS.video_short;
+    const newBalance = await checkAndDeductTokens(req.user.id, cost);
+
+    console.log(`🎭 Character generation: "${prompt.substring(0, 80)}..." with face image`);
+
+    const fullPrompt = `${style ? `${style} style. ` : ''}${prompt}`;
+
+    // Use image-to-video model with the face as source
+    let prediction;
+    let provider = 'replicate';
+    try {
+      prediction = await replicate.predictions.create({
+        model: MODELS.video_i2v,
+        input: {
+          image: imageUrl,
+          prompt: fullPrompt.substring(0, 2000),
+          num_frames: duration === 'short' ? 81 : 161,
+        }
+      });
+    } catch (primaryErr) {
+      console.error('Character generation failed:', primaryErr.message);
+      if (RUNWAY_API_KEY) {
+        provider = 'runway';
+        const runwayRes = await axios.post('https://api.dev.runwayml.com/v1/image_to_video', {
+          model: 'gen3a_turbo', promptText: fullPrompt, promptImage: imageUrl,
+          watermark: false, duration: duration === 'short' ? 5 : 10, ratio: '1280:768'
+        }, {
+          headers: { 'Authorization': `Bearer ${RUNWAY_API_KEY}`, 'Content-Type': 'application/json', 'X-Runway-Version': '2024-11-06' }
+        });
+        prediction = { id: runwayRes.data.id, status: 'processing' };
+      } else {
+        throw primaryErr;
+      }
+    }
+
+    res.json({
+      mode: 'single',
+      taskId: prediction.id,
+      status: prediction.status === 'succeeded' ? 'completed' : 'processing',
+      videoUrl: extractUrl(prediction.output),
+      provider,
+      tokensUsed: cost,
+      remainingBalance: newBalance,
+      prompt: fullPrompt
+    });
+  } catch (err) {
+    console.error('Character error:', err.message);
+    if (err.message.includes('Insufficient')) return res.status(402).json({ error: err.message });
+    try { await refundTokens(req.user.id, TOKEN_COSTS[`video_${req.body.duration || 'short'}`] || 100); } catch {}
+    res.status(500).json({ error: 'Character generation failed', details: err.message });
   }
 });
 
