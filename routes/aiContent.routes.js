@@ -956,33 +956,23 @@ router.post('/video/merge', auth, async (req, res) => {
       return res.status(400).json({ error: 'No clips could be downloaded' });
     }
 
-    // 2. Generate audio for each scene — voice recordings take priority over TTS
+    // 2. Generate audio for each scene
+    //    Voice recordings = reference samples (for future voice cloning). For now, use character's TTS voice.
     let ttsAudioPaths = [];
     if (addVoiceover && narrations && Array.isArray(narrations)) {
+      // Build per-scene voice map from voiceRecordingUrls (character voices)
+      const perSceneVoice = voiceRecordingUrls || [];
+
       console.log(`  🎤 Generating audio for ${narrations.filter(n => n?.trim()).length} scenes...`);
       for (let i = 0; i < narrations.length; i++) {
         const narrationText = narrations[i];
-        const recordingUrl = voiceRecordingUrls?.[i];
+        // Use per-scene character voice if provided, otherwise default project voice
+        const sceneVoice = perSceneVoice[i] || voice;
 
-        // Priority 1: Use uploaded voice recording
-        if (recordingUrl) {
-          try {
-            const recResp = await axios({ url: recordingUrl, responseType: 'arraybuffer', timeout: 30000 });
-            const recPath = path.join(tmpDir, `voice-rec-${i}-${Date.now()}.ogg`);
-            fs.writeFileSync(recPath, recResp.data);
-            ttsAudioPaths.push(recPath);
-            console.log(`  🎙️ Scene ${i + 1}: using recorded voice (${(recResp.data.length / 1024).toFixed(0)}KB)`);
-            continue;
-          } catch (e) {
-            console.log(`  ⚠️ Scene ${i + 1}: recording download failed, falling back to TTS`);
-          }
-        }
-
-        // Priority 2: Generate TTS from text
         if (narrationText?.trim()) {
-          const audioPath = await generateTTS(narrationText, voice, tmpDir);
+          const audioPath = await generateTTS(narrationText, sceneVoice, tmpDir);
           ttsAudioPaths.push(audioPath);
-          if (audioPath) console.log(`  🎤 Scene ${i + 1}: TTS "${narrationText.substring(0, 60)}..."`);
+          if (audioPath) console.log(`  🎤 Scene ${i + 1} [${sceneVoice}]: "${narrationText.substring(0, 60)}..."`);
         } else {
           ttsAudioPaths.push(null);
         }
