@@ -916,27 +916,41 @@ async function generateVoiceClone(text, speakerAudioUrl, language = 'en', tmpDir
   const fs = require('fs');
   const path = require('path');
   try {
-    console.log(`  🎭 Voice cloning: "${text.substring(0, 50)}..." with sample ${speakerAudioUrl.substring(speakerAudioUrl.lastIndexOf('/') + 1)}`);
-    const output = await replicate.run(MODELS.voice_clone.split(':')[0], {
+    const shortSample = speakerAudioUrl.substring(speakerAudioUrl.lastIndexOf('/') + 1);
+    console.log(`  🎭 Voice cloning: "${text.substring(0, 50)}..." with sample ${shortSample}`);
+    
+    // Use predictions.create with version hash (replicate.run with model:version 404s)
+    const prediction = await replicate.predictions.create({
+      version: MODELS.voice_clone.split(':')[1],
       input: {
-        text: text.trim().substring(0, 500), // XTTS has a text length limit
+        text: text.trim().substring(0, 500),
         speaker_wav: speakerAudioUrl,
         language: language || 'en',
       }
     });
 
-    // Output is a URL to the generated audio
-    const audioUrl = extractUrl(output);
-    if (!audioUrl) throw new Error('No audio URL returned from voice clone');
+    // Wait for completion (voice clone is fast, ~5-10s)
+    let result = prediction;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      if (result.status === 'succeeded') break;
+      if (result.status === 'failed' || result.status === 'canceled') throw new Error(`Clone ${result.status}`);
+      await new Promise(r => setTimeout(r, 2000));
+      result = await replicate.predictions.get(prediction.id);
+    }
 
-    // Download the cloned audio
+    if (result.status !== 'succeeded') throw new Error('Clone timed out');
+
+    const audioUrl = extractUrl(result.output);
+    if (!audioUrl) throw new Error('No audio URL returned');
+
     const resp = await axios({ url: audioUrl, responseType: 'arraybuffer', timeout: 30000 });
     const audioPath = path.join(tmpDir, `clone-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.wav`);
     fs.writeFileSync(audioPath, resp.data);
+    console.log(`  ✅ Voice cloned successfully (${(resp.data.length / 1024).toFixed(0)}KB)`);
     return audioPath;
   } catch (e) {
-    console.error(`  ❌ Voice clone failed: ${e.message?.substring(0, 100)}`);
-    return null; // Caller falls back to TTS
+    console.error(`  ❌ Voice clone failed: ${e.message?.substring(0, 150)}`);
+    return null;
   }
 }
 
