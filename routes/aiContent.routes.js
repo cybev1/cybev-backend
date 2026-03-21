@@ -960,8 +960,9 @@ router.post('/video/merge', auth, async (req, res) => {
     //    Voice recordings = reference samples (for future voice cloning). For now, use character's TTS voice.
     let ttsAudioPaths = [];
     if (addVoiceover && narrations && Array.isArray(narrations)) {
-      // Build per-scene voice map from voiceRecordingUrls (character voices)
+      // Build per-scene voice map from voiceRecordingUrls (character voice IDs)
       const perSceneVoice = voiceRecordingUrls || [];
+      console.log(`  🎭 Per-scene voices received: [${perSceneVoice.map(v => v || 'default').join(', ')}]`);
 
       console.log(`  🎤 Generating audio for ${narrations.filter(n => n?.trim()).length} scenes...`);
       for (let i = 0; i < narrations.length; i++) {
