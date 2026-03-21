@@ -55,7 +55,7 @@ const MODELS = {
   music: 'meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedbb',
   image_fast: 'black-forest-labs/flux-schnell',
   image_quality: 'black-forest-labs/flux-1.1-pro',
-  voice_clone: 'lucataco/xtts-v2:684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e',
+  voice_clone: 'bzikst/xtts-v2-fork:cc84875ba03935209e17a305dfae64e325577130555ba133134f33398df4d4dc',
 };
 
 // ─── Token costs ───
@@ -917,39 +917,30 @@ async function generateVoiceClone(text, speakerAudioUrl, language = 'en', tmpDir
   const path = require('path');
   try {
     const shortSample = speakerAudioUrl.substring(speakerAudioUrl.lastIndexOf('/') + 1);
-    console.log(`  🎭 Voice cloning: "${text.substring(0, 50)}..." with sample ${shortSample}`);
-    
-    // Use predictions.create with version hash (replicate.run with model:version 404s)
-    const prediction = await replicate.predictions.create({
-      version: MODELS.voice_clone.split(':')[1],
-      input: {
-        text: text.trim().substring(0, 500),
-        speaker_wav: speakerAudioUrl,
-        language: language || 'en',
+    console.log(`  🎭 Cloning voice for: "${text.substring(0, 50)}..."`);
+
+    // Use replicate.run with FULL model:version string
+    const output = await replicate.run(
+      MODELS.voice_clone,
+      {
+        input: {
+          text: text.trim().substring(0, 400),
+          speaker_wav: speakerAudioUrl,
+          language: language || 'en',
+        }
       }
-    });
+    );
 
-    // Wait for completion (voice clone is fast, ~5-10s)
-    let result = prediction;
-    for (let attempt = 0; attempt < 30; attempt++) {
-      if (result.status === 'succeeded') break;
-      if (result.status === 'failed' || result.status === 'canceled') throw new Error(`Clone ${result.status}`);
-      await new Promise(r => setTimeout(r, 2000));
-      result = await replicate.predictions.get(prediction.id);
-    }
-
-    if (result.status !== 'succeeded') throw new Error('Clone timed out');
-
-    const audioUrl = extractUrl(result.output);
+    const audioUrl = extractUrl(output);
     if (!audioUrl) throw new Error('No audio URL returned');
 
     const resp = await axios({ url: audioUrl, responseType: 'arraybuffer', timeout: 30000 });
     const audioPath = path.join(tmpDir, `clone-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.wav`);
     fs.writeFileSync(audioPath, resp.data);
-    console.log(`  ✅ Voice cloned successfully (${(resp.data.length / 1024).toFixed(0)}KB)`);
+    console.log(`  ✅ Voice cloned (${(resp.data.length / 1024).toFixed(0)}KB)`);
     return audioPath;
   } catch (e) {
-    console.error(`  ❌ Voice clone failed: ${e.message?.substring(0, 150)}`);
+    console.error(`  ❌ Voice clone failed: ${e.message?.substring(0, 200)}`);
     return null;
   }
 }
