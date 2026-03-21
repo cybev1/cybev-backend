@@ -55,6 +55,7 @@ const MODELS = {
   music: 'meta/musicgen:671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedbb',
   image_fast: 'black-forest-labs/flux-schnell',
   image_quality: 'black-forest-labs/flux-1.1-pro',
+  voice_clone: 'lucataco/xtts-v2:684bc3855b37866c0c65add2ff39c78f3dea3f4ff103a436465326e0f438d55e',
 };
 
 // ─── Token costs ───
@@ -909,6 +910,36 @@ async function generateTTS(text, voiceId = 'nova', tmpDir) {
   }
 }
 
+// Clone a voice using Replicate XTTS-v2 — reads text in the uploaded voice
+async function generateVoiceClone(text, speakerAudioUrl, language = 'en', tmpDir) {
+  if (!text?.trim() || !speakerAudioUrl) return null;
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    console.log(`  🎭 Voice cloning: "${text.substring(0, 50)}..." with sample ${speakerAudioUrl.substring(speakerAudioUrl.lastIndexOf('/') + 1)}`);
+    const output = await replicate.run(MODELS.voice_clone.split(':')[0], {
+      input: {
+        text: text.trim().substring(0, 500), // XTTS has a text length limit
+        speaker_wav: speakerAudioUrl,
+        language: language || 'en',
+      }
+    });
+
+    // Output is a URL to the generated audio
+    const audioUrl = extractUrl(output);
+    if (!audioUrl) throw new Error('No audio URL returned from voice clone');
+
+    // Download the cloned audio
+    const resp = await axios({ url: audioUrl, responseType: 'arraybuffer', timeout: 30000 });
+    const audioPath = path.join(tmpDir, `clone-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.wav`);
+    fs.writeFileSync(audioPath, resp.data);
+    return audioPath;
+  } catch (e) {
+    console.error(`  ❌ Voice clone failed: ${e.message?.substring(0, 100)}`);
+    return null; // Caller falls back to TTS
+  }
+}
+
 router.post('/video/merge', auth, async (req, res) => {
   try {
     const {
@@ -917,7 +948,9 @@ router.post('/video/merge', auth, async (req, res) => {
       autoCaptions = false, textStyle = 'dynamic',
       logoUrl, logoPosition = 'top-right', logoSize = 80, logoOpacity = 0.8,
       introImageUrl, outroImageUrl, introDuration = 3, outroDuration = 3,
-      voiceRecordingUrls  // Array of URLs — one per scene. If set, uses recorded voice instead of TTS
+      voiceRecordingUrls,   // Array: recording URLs for voice cloning (Cloudinary URLs of .ogg/.mp3)
+      perSceneVoiceIds,     // Array: TTS voice IDs per scene (fallback when no recording)
+      language = 'en'       // Language for voice cloning
     } = req.body;
     if (!videoUrls || !Array.isArray(videoUrls) || videoUrls.length < 2) {
       return res.status(400).json({ error: 'At least 2 video URLs required' });
@@ -957,26 +990,39 @@ router.post('/video/merge', auth, async (req, res) => {
     }
 
     // 2. Generate audio for each scene
-    //    Voice recordings = reference samples (for future voice cloning). For now, use character's TTS voice.
+    //    Priority: Voice clone (Replicate XTTS-v2 with uploaded recording) → TTS (OpenAI)
     let ttsAudioPaths = [];
     if (addVoiceover && narrations && Array.isArray(narrations)) {
-      // Build per-scene voice map from voiceRecordingUrls (character voice IDs)
-      const perSceneVoice = voiceRecordingUrls || [];
-      console.log(`  🎭 Per-scene voices received: [${perSceneVoice.map(v => v || 'default').join(', ')}]`);
-
+      const recordings = voiceRecordingUrls || [];
+      const voiceIds = perSceneVoiceIds || [];
       console.log(`  🎤 Generating audio for ${narrations.filter(n => n?.trim()).length} scenes...`);
+      if (recordings.some(r => r)) console.log(`  🎭 Voice cloning enabled for ${recordings.filter(r => r).length} scenes`);
+
       for (let i = 0; i < narrations.length; i++) {
         const narrationText = narrations[i];
-        // Use per-scene character voice if provided, otherwise default project voice
-        const sceneVoice = perSceneVoice[i] || voice;
+        const recordingUrl = recordings[i]; // Cloudinary URL of .ogg/.mp3 voice sample
+        const sceneVoiceId = voiceIds[i] || voice; // TTS voice fallback
 
-        if (narrationText?.trim()) {
-          const audioPath = await generateTTS(narrationText, sceneVoice, tmpDir);
-          ttsAudioPaths.push(audioPath);
-          if (audioPath) console.log(`  🎤 Scene ${i + 1} [${sceneVoice}]: "${narrationText.substring(0, 60)}..."`);
-        } else {
+        if (!narrationText?.trim()) {
           ttsAudioPaths.push(null);
+          continue;
         }
+
+        // Priority 1: Voice clone with uploaded recording via Replicate
+        if (recordingUrl && recordingUrl.startsWith('http')) {
+          const clonedPath = await generateVoiceClone(narrationText, recordingUrl, language, tmpDir);
+          if (clonedPath) {
+            ttsAudioPaths.push(clonedPath);
+            console.log(`  🎭 Scene ${i + 1}: CLONED voice → "${narrationText.substring(0, 50)}..."`);
+            continue;
+          }
+          console.log(`  ⚠️ Scene ${i + 1}: clone failed, falling back to TTS`);
+        }
+
+        // Priority 2: OpenAI TTS with character's voice
+        const audioPath = await generateTTS(narrationText, sceneVoiceId, tmpDir);
+        ttsAudioPaths.push(audioPath);
+        if (audioPath) console.log(`  🎤 Scene ${i + 1} [${sceneVoiceId}]: "${narrationText.substring(0, 50)}..."`);
       }
     }
 
